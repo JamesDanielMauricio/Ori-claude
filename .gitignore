@@ -17,6 +17,13 @@ out/
 # contains a live MCP bearer token — never commit
 .mcp.json
 
+# SECURITY: Claude Code's personal settings for one machine (for example,
+# which MCP servers that person approved). Allows each developer to keep
+# their own; protects against publishing them in this public repo from a
+# computer whose own git settings don't already ignore the file. The shared
+# rules live in .claude/settings.json, which IS committed.
+.claude/settings.local.json
+
 # Bubble data snapshots (packages/db/scripts/bubble-export.ts) — real
 # people's emails and phone numbers; never commit
 .bubble-export/

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "type": "http",
+      "url": "https://mcp.supabase.com/mcp?project_ref=zvzqfjrxknxigddkwlir&read_only=true",
+      "headers": { "Authorization": "Bearer <YOUR_READ_ONLY_SUPABASE_ACCESS_TOKEN>" }
+    },
+    "supabase-staging": {
+      "type": "http",
+      "url": "https://mcp.supabase.com/mcp?project_ref=owjgzyxuldmgvwxnhrom&read_only=true",
+      "headers": { "Authorization": "Bearer <YOUR_READ_ONLY_SUPABASE_ACCESS_TOKEN>" }
+    }
+  }
+}
