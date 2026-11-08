@@ -554,6 +554,13 @@
       "when": 1790888400000,
       "tag": "0078_whatsapp-dispatch-claims-retries-and-access",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1790974800000,
+      "tag": "0079_send-every-whatsapp-message-right-away",
+      "breakpoints": true
     }
   ]
 }

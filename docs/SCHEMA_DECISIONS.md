@@ -5,7 +5,50 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-08 (latest) — The WhatsApp queue: claims, waits between tries, a 12-hour window, staff can see and resend (`0078`)
+## 2026-11-09 (latest) — Every WhatsApp message goes out right after it is queued (`0079`)
+
+**Context.** James's rule (2026-11-09): every WhatsApp message is sent right after it is queued.
+Only the office's reminder bells and the delivery screen's "send again" started the dispatcher at
+once (from the browser). Everything else — orders, picking updates, closing-day messages, stock
+alerts, "the shop is open", "a new trading day is open" — waited for the 10-minute safety-net
+schedule (`0047`), up to ten minutes. And one run took one batch of 25 rows, so a day close that
+queued more left the rest for a later run.
+
+**What changed.** A statement-level `after insert` trigger on `notification_outbox` calls
+`request_whatsapp_dispatch_now()`, which runs the 10-minute schedule's own stored command — the same
+address, the same key from Vault — once per transaction (a transaction-local setting). pg_net sends
+it only after the transaction commits, so the dispatcher finds the rows waiting, and a save that
+rolls back asks for nothing. Any error inside is swallowed: a save never fails because of it, and
+the schedule still sends. Where the key is not in Vault (the CI stack, a fresh project) it does
+nothing. Execute is revoked from every API role, so nobody can set the dispatcher running over the
+API. The dispatcher (`handler.ts`) now takes batch after batch until the queue is empty, stopping
+early only at a WhatsApp-wide problem, its 100-second budget, or 20 batches (500 messages);
+`drain.ts` does the same for the domain tests. The schedule stays, for retries once their wait is
+over and as the safety net. No table changes.
+
+**Accepted knowingly.** A burst too big to send within one run's 100 seconds finishes at the next
+run — whichever comes first of the next message queued or the 10-minute schedule. Retries are not
+immediate: a failed try still waits 2/10/30/60 minutes (`0078`). The office's browser nudge stays:
+it is the only immediate trigger for "send again", which updates a row instead of inserting one; for
+the reminder bells it is now a second ask, harmless because two runs never send the same message.
+Order of rollout does not matter: `0079` works with the dispatcher deployed before it (which sends
+one batch per call), and the batch loop needs a new deploy of the function.
+
+**How it was checked.** On a copy built from every migration (PostgreSQL 17 in WASM, with pg_cron,
+Vault and pg_net stood in for): 19 checks — a customer's order, an office order, two messages in
+one transaction, a picking update and a reminder each ask for one run, with the schedule's exact
+address and key; customer, office, signed-out and dispatcher callers cannot call it over the API; a
+refused order asks for nothing; pg_net failing never stops a save; with no key, no schedule, or no
+pg_cron/Vault/pg_net at all nothing is called; running `0079` twice changes nothing. A whole trading
+day asks for 13 runs for 33 queued messages and leaves every table identical to the same day
+without `0079`. In Deno: 21 tests of the function, four of them new for the batches (each fails
+against the one-batch run). On a real PostgreSQL 17 with every migration through `0079`: the
+real-database test that CI also runs, now including a queue bigger than one batch sent in one run,
+each message once.
+
+---
+
+## 2026-11-08 — The WhatsApp queue: claims, waits between tries, a 12-hour window, staff can see and resend (`0078`)
 
 **Context.** Release workbook task 16 (ORI-007, ORI-019, ORI-020). Any caller who could pass the
 gateway — the public anon key included — could start a dispatch run. Two runs at once (the

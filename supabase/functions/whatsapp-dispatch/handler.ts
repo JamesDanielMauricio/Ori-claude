@@ -3,10 +3,12 @@
 // path against a fake database and a fake Green API.
 //
 // One run, in order:
-//   1. Who is calling? Only the service-role key (the 10-minute safety-net
-//      schedule, migration 0047) and a signed-in backoffice user (the
-//      office's instant "nudge", apps/web/src/lib/nudge-whatsapp-dispatch.ts)
-//      may start a run — checked before any setting or queue row is read.
+//   1. Who is calling? Only the service-role key (the database's call made
+//      right after a message is queued, migration 0079, and the 10-minute
+//      safety-net schedule, migration 0047 — the same call) and a signed-in
+//      backoffice user (the office's instant "nudge",
+//      apps/web/src/lib/nudge-whatsapp-dispatch.ts) may start a run —
+//      checked before any setting or queue row is read.
 //   2. Claim a batch (claim_outbox_rows, migration 0078): rows no other run
 //      holds, not sent, not skipped, not expired (12-hour rule), and past
 //      their retry wait.
@@ -14,7 +16,9 @@
 //      a try, waits before the next); released (a WhatsApp-wide problem —
 //      no try counted, and the run stops); skipped (its switch is off).
 //      Recipients already delivered to (sent_targets) are never sent again.
-//   4. Report the run (record_dispatch_run) for the staff screen.
+//   4. Claim the next batch, until the queue is empty (or the time budget
+//      or MAX_BATCHES is reached).
+//   5. Report the run (record_dispatch_run) for the staff screen.
 //
 // Which template, which recipients, and the message text all come from
 // Postgres (resolve_outbox_dispatch / resolve_outbox_preview), tested there.
@@ -80,11 +84,15 @@ export interface RunSummary {
   channelProblem: string | null;
 }
 
-// Rows per run, and how long a run keeps starting new rows. A Supabase Edge
-// run is cut off at ~150 s; stopping new work at 100 s leaves room for the
-// row in flight, and the unstarted ones are handed back for the next run.
+// Rows per batch (a run takes batch after batch until the queue is empty),
+// and how long a run keeps starting new rows. A Supabase Edge run is cut off
+// at ~150 s; stopping new work at 100 s leaves room for the row in flight,
+// and the unstarted ones are handed back for the next run.
 export const BATCH_SIZE = 25;
 export const RUN_BUDGET_MS = 100_000;
+// The most batches one run takes (25 x 20 = 500 messages) — a guard, so a
+// run can never go round for ever whatever the database answers.
+export const MAX_BATCHES = 20;
 
 // SECURITY (CORS): allows browser JavaScript on any origin to call this
 // function and read its response. The backoffice app's instant nudge is a
@@ -269,98 +277,121 @@ export function createDispatchHandler(deps: HandlerDeps): (req: Request) => Prom
     }
 
     const started = now();
-    let next = 0;
-    for (; next < rows.length; next++) {
-      if (summary.channelProblem || now() - started > RUN_BUDGET_MS) break;
-      const row = rows[next];
+    // A run takes batch after batch until the queue is empty (James,
+    // 2026-11-09: every message goes out right after it is queued, and a
+    // busy day close can queue more than one batch at once). It stops early
+    // only at a WhatsApp-wide problem, at the time budget or after
+    // MAX_BATCHES; whatever is left goes at the next run. A row settled in
+    // this run is never handed out again in it: sent and skipped are final, a
+    // failed try waits at least 2 minutes (0078), and a row whose settle
+    // failed keeps its claim for 10 minutes.
+    for (let batch = 1; ; batch++) {
+      let next = 0;
+      for (; next < rows.length; next++) {
+        if (summary.channelProblem || now() - started > RUN_BUDGET_MS) break;
+        const row = rows[next];
 
-      if (!isEligible(row.template_key, settings)) {
-        // Abandoned now, not just passed over (migration 0048): a switch
-        // that is off means this message never goes out, even if the switch
-        // is turned back on later.
-        await settle(row.id, "skipped", `Skipped: WhatsApp was disabled for template "${row.template_key}" when dispatch ran`);
-        continue;
-      }
-
-      if (whatsappEnv === "dev") {
-        if (!devPhone) {
-          summary.channelProblem = settings.whatsapp_dev_override_phone
-            ? "the dev test phone (notification_settings.whatsapp_dev_override_phone) is not a phone number WhatsApp can reach — refusing to send in dev"
-            : "the dev test phone (notification_settings.whatsapp_dev_override_phone) is not set — refusing to send in dev";
-          await settle(row.id, "released", summary.channelProblem);
+        if (!isEligible(row.template_key, settings)) {
+          // Abandoned now, not just passed over (migration 0048): a switch
+          // that is off means this message never goes out, even if the switch
+          // is turned back on later.
+          await settle(row.id, "skipped", `Skipped: WhatsApp was disabled for template "${row.template_key}" when dispatch ran`);
           continue;
         }
-        let preview: string;
+
+        if (whatsappEnv === "dev") {
+          if (!devPhone) {
+            summary.channelProblem = settings.whatsapp_dev_override_phone
+              ? "the dev test phone (notification_settings.whatsapp_dev_override_phone) is not a phone number WhatsApp can reach — refusing to send in dev"
+              : "the dev test phone (notification_settings.whatsapp_dev_override_phone) is not set — refusing to send in dev";
+            await settle(row.id, "released", summary.channelProblem);
+            continue;
+          }
+          let preview: string;
+          try {
+            preview = await deps.db.preview(row.id);
+          } catch (error) {
+            await settle(row.id, "failed", messageOf(error));
+            continue;
+          }
+          const result = await send(devPhone, false, preview);
+          if (result.ok) {
+            delivered = true;
+            await settle(row.id, "sent");
+          } else if (result.kind === "channel") {
+            summary.channelProblem = result.error;
+            await settle(row.id, "released", result.error);
+          } else {
+            await settle(row.id, "failed", result.error);
+          }
+          continue;
+        }
+
+        let targets: DispatchTarget[];
         try {
-          preview = await deps.db.preview(row.id);
+          targets = await deps.db.resolve(row.id);
         } catch (error) {
           await settle(row.id, "failed", messageOf(error));
           continue;
         }
-        const result = await send(devPhone, false, preview);
-        if (result.ok) {
-          delivered = true;
-          await settle(row.id, "sent");
-        } else if (result.kind === "channel") {
-          summary.channelProblem = result.error;
-          await settle(row.id, "released", result.error);
-        } else {
-          await settle(row.id, "failed", result.error);
-        }
-        continue;
-      }
 
-      let targets: DispatchTarget[];
-      try {
-        targets = await deps.db.resolve(row.id);
-      } catch (error) {
-        await settle(row.id, "failed", messageOf(error));
-        continue;
-      }
-
-      // Per-recipient delivery (migration 0038): each recipient is recorded
-      // the moment it is sent, so a later pass only sends to the ones still
-      // missing.
-      const alreadySent = new Set(row.sent_targets ?? []);
-      const errors: string[] = [];
-      for (const { target, is_group, message } of targets) {
-        if (alreadySent.has(target)) continue;
-        const result = await send(target, is_group, message);
-        if (!result.ok) {
-          if (result.kind === "channel") {
-            summary.channelProblem = result.error;
-            break;
+        // Per-recipient delivery (migration 0038): each recipient is recorded
+        // the moment it is sent, so a later pass only sends to the ones still
+        // missing.
+        const alreadySent = new Set(row.sent_targets ?? []);
+        const errors: string[] = [];
+        for (const { target, is_group, message } of targets) {
+          if (alreadySent.has(target)) continue;
+          const result = await send(target, is_group, message);
+          if (!result.ok) {
+            if (result.kind === "channel") {
+              summary.channelProblem = result.error;
+              break;
+            }
+            errors.push(result.error);
+            continue;
           }
-          errors.push(result.error);
-          continue;
+          delivered = true;
+          alreadySent.add(target);
+          try {
+            await deps.db.targetSent(row.id, target);
+          } catch (error) {
+            errors.push(clean(messageOf(error)));
+          }
         }
-        delivered = true;
-        alreadySent.add(target);
-        try {
-          await deps.db.targetSent(row.id, target);
-        } catch (error) {
-          errors.push(clean(messageOf(error)));
+
+        if (summary.channelProblem) {
+          // Recipients reached before the problem stay recorded; the row waits,
+          // with no try counted, and the run stops below.
+          await settle(row.id, "released", summary.channelProblem);
+        } else if (errors.length === 0) {
+          // Judged once, after the loop: "nothing failed" — also true for a row
+          // whose recipients were all reached earlier, and for one that resolved
+          // to nobody (no group id and no usable phone number on file).
+          await settle(row.id, "sent");
+        } else {
+          await settle(row.id, "failed", errors.join("; "));
         }
       }
 
-      if (summary.channelProblem) {
-        // Recipients reached before the problem stay recorded; the row waits,
-        // with no try counted, and the run stops below.
-        await settle(row.id, "released", summary.channelProblem);
-      } else if (errors.length === 0) {
-        // Judged once, after the loop: "nothing failed" — also true for a row
-        // whose recipients were all reached earlier, and for one that resolved
-        // to nobody (no group id and no usable phone number on file).
-        await settle(row.id, "sent");
-      } else {
-        await settle(row.id, "failed", errors.join("; "));
+      // Claimed but not started — because of a WhatsApp-wide problem or the time
+      // budget: handed back with no try counted, for the next run.
+      for (; next < rows.length; next++) {
+        await settle(rows[next].id, "released", summary.channelProblem);
       }
-    }
 
-    // Claimed but not started — because of a WhatsApp-wide problem or the time
-    // budget: handed back with no try counted, for the next run.
-    for (; next < rows.length; next++) {
-      await settle(rows[next].id, "released", summary.channelProblem);
+      // A batch that was not full means the queue was empty when it was
+      // taken; a message queued since asks for its own run (0079).
+      if (summary.channelProblem || rows.length < BATCH_SIZE || batch >= MAX_BATCHES || now() - started > RUN_BUDGET_MS) break;
+      try {
+        rows = await deps.db.claim(worker, BATCH_SIZE);
+      } catch (error) {
+        // What was sent stays sent; the rest waits for the next run.
+        log(`[whatsapp-dispatch] could not claim the next batch: ${clean(messageOf(error))}`);
+        break;
+      }
+      summary.processed += rows.length;
+      if (rows.length === 0) break;
     }
 
     try {

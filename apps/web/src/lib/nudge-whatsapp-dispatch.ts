@@ -11,6 +11,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // there unsent, exactly as it would be with no nudge at all, ready for the
 // next drain (scheduled or manual) to pick it up.
 //
+// Since migration 0079 the database itself also asks for a run the moment a
+// message is queued, so for the reminder bells this nudge is a second ask —
+// harmless, as two runs never send the same message (claims, 0078). It is
+// still the only immediate trigger for the delivery screen's "send again"
+// (runWhatsAppDispatchNow below), which changes an existing row instead of
+// queueing a new one.
+//
 // Deliberately never awaited by its caller and never throws: a slow or
 // unreachable WhatsApp provider must not make the button that triggered it
 // feel slow or show an error, since the thing the click actually promised —

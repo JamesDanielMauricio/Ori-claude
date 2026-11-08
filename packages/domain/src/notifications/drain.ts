@@ -3,20 +3,20 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { NotificationChannel } from "./channel";
 
 // The Node copy of the WhatsApp dispatcher's loop, for tests that drive the
-// real queue functions against the real database: claim a batch
-// (claim_outbox_rows), resolve each row into its recipients
-// (resolve_outbox_dispatch), hand each message to the injected
+// real queue functions against the real database: claim batch after batch
+// (claim_outbox_rows) until the queue is empty, resolve each row into its
+// recipients (resolve_outbox_dispatch), hand each message to the injected
 // NotificationChannel, record each recipient reached
 // (record_outbox_target_sent) and settle the row (settle_outbox_row) — the
 // same calls, in the same order, as supabase/functions/whatsapp-dispatch/
 // handler.ts. That file is the one that runs in production; Deno can't
 // import this package and this package can't import that file, so the
-// ~40-line loop exists twice. The rules themselves — who may take a row,
+// ~50-line loop exists twice. The rules themselves — who may take a row,
 // when it is due, what a failure costs, the 12-hour window — live once, in
 // the SQL functions of migration 0078, and are tested here.
 //
-// Not copied: the dev-environment preview and the caller check (both
-// Deno-only; index.test.ts covers them).
+// Not copied: the dev-environment preview, the caller check and the time
+// budget (Deno-only; index.test.ts covers them).
 export interface DrainDeps {
   client: SupabaseClient;
   channel: NotificationChannel;
@@ -88,12 +88,6 @@ export async function drainNotificationOutbox(deps: DrainDeps): Promise<DrainRes
   if (settingsError) throw settingsError;
   const settings = settingsRow as NotificationSettingsRow;
 
-  const { data: claimed, error: claimError } = await client.rpc("claim_outbox_rows", {
-    p_worker: worker,
-    p_limit: deps.batchSize ?? 25,
-  });
-  if (claimError) throw claimError;
-
   const result: DrainResult = { processed: 0, sent: 0, failed: 0, skippedTogglesOff: 0, released: 0, rows: [] };
   const settle = async (rowId: string, outcome: "sent" | "failed" | "skipped" | "released", detail: string | null = null) => {
     const { error } = await client.rpc("settle_outbox_row", {
@@ -105,58 +99,73 @@ export async function drainNotificationOutbox(deps: DrainDeps): Promise<DrainRes
     if (error) throw error;
   };
 
-  for (const row of (claimed ?? []) as ClaimedRow[]) {
-    result.processed += 1;
-
-    if (!isEligible(row.template_key, settings)) {
-      await settle(row.id, "skipped", `Skipped: WhatsApp was disabled for template "${row.template_key}" when dispatch ran`);
-      result.skippedTogglesOff += 1;
-      result.rows.push({ outboxId: row.id, status: "skipped_toggle_off" });
-      continue;
-    }
-
-    const { data: targets, error: resolveError } = await client.rpc("resolve_outbox_dispatch", {
-      p_outbox_id: row.id,
+  // Batch after batch until the queue is empty, as handler.ts does (0079:
+  // every message goes out right after it is queued). A batch that was not
+  // full emptied the queue; 20 batches is the same guard as MAX_BATCHES.
+  const batchSize = deps.batchSize ?? 25;
+  for (let batch = 1; batch <= 20; batch++) {
+    const { data: claimed, error: claimError } = await client.rpc("claim_outbox_rows", {
+      p_worker: worker,
+      p_limit: batchSize,
     });
-    if (resolveError) {
-      await settle(row.id, "failed", resolveError.message);
-      result.failed += 1;
-      result.rows.push({ outboxId: row.id, status: "failed", error: resolveError.message });
-      continue;
-    }
+    if (claimError) throw claimError;
+    const rows = (claimed ?? []) as ClaimedRow[];
 
-    // Per-recipient delivery (migration 0038): a recipient reached on an
-    // earlier pass is skipped, and each one reached now is recorded at once.
-    const alreadySent = new Set(row.sent_targets ?? []);
-    const errors: string[] = [];
-    for (const { target, is_group, message } of (targets ?? []) as DispatchTarget[]) {
-      if (alreadySent.has(target)) continue;
-      const sendResult = await channel.send({ to: target, isGroup: is_group, body: message });
-      if (!sendResult.success) {
-        errors.push(sendResult.error ?? `send to ${target} failed`);
+    for (const row of rows) {
+      result.processed += 1;
+
+      if (!isEligible(row.template_key, settings)) {
+        await settle(row.id, "skipped", `Skipped: WhatsApp was disabled for template "${row.template_key}" when dispatch ran`);
+        result.skippedTogglesOff += 1;
+        result.rows.push({ outboxId: row.id, status: "skipped_toggle_off" });
         continue;
       }
-      alreadySent.add(target);
-      const { error: recordError } = await client.rpc("record_outbox_target_sent", {
+
+      const { data: targets, error: resolveError } = await client.rpc("resolve_outbox_dispatch", {
         p_outbox_id: row.id,
-        p_target: target,
-        p_complete: false,
       });
-      if (recordError) errors.push(recordError.message);
+      if (resolveError) {
+        await settle(row.id, "failed", resolveError.message);
+        result.failed += 1;
+        result.rows.push({ outboxId: row.id, status: "failed", error: resolveError.message });
+        continue;
+      }
+
+      // Per-recipient delivery (migration 0038): a recipient reached on an
+      // earlier pass is skipped, and each one reached now is recorded at once.
+      const alreadySent = new Set(row.sent_targets ?? []);
+      const errors: string[] = [];
+      for (const { target, is_group, message } of (targets ?? []) as DispatchTarget[]) {
+        if (alreadySent.has(target)) continue;
+        const sendResult = await channel.send({ to: target, isGroup: is_group, body: message });
+        if (!sendResult.success) {
+          errors.push(sendResult.error ?? `send to ${target} failed`);
+          continue;
+        }
+        alreadySent.add(target);
+        const { error: recordError } = await client.rpc("record_outbox_target_sent", {
+          p_outbox_id: row.id,
+          p_target: target,
+          p_complete: false,
+        });
+        if (recordError) errors.push(recordError.message);
+      }
+
+      if (errors.length === 0) {
+        // Judged after the loop: also true for a row whose recipients were all
+        // reached earlier, and for one that resolved to nobody.
+        await settle(row.id, "sent");
+        result.sent += 1;
+        result.rows.push({ outboxId: row.id, status: "sent" });
+      } else {
+        const combined = errors.join("; ");
+        await settle(row.id, "failed", combined);
+        result.failed += 1;
+        result.rows.push({ outboxId: row.id, status: "failed", error: combined });
+      }
     }
 
-    if (errors.length === 0) {
-      // Judged after the loop: also true for a row whose recipients were all
-      // reached earlier, and for one that resolved to nobody.
-      await settle(row.id, "sent");
-      result.sent += 1;
-      result.rows.push({ outboxId: row.id, status: "sent" });
-    } else {
-      const combined = errors.join("; ");
-      await settle(row.id, "failed", combined);
-      result.failed += 1;
-      result.rows.push({ outboxId: row.id, status: "failed", error: combined });
-    }
+    if (rows.length < batchSize) break;
   }
 
   return result;

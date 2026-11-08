@@ -607,15 +607,19 @@ transaction has already committed. Three things were the explicit point of this 
   own documented operational risk): `notification_outbox.attempt_count`/`last_error`/
   `last_attempted_at` accumulate a visible history instead of silently vanishing into one
   unmonitored inbox.
-- **How the queue is worked (migrations 0077/0078, release workbook tasks 15–16 — supersedes the
+- **How the queue is worked (migrations 0077–0079, release workbook tasks 15–16 — supersedes the
   "fetch pending rows" loop described above).** The Edge Function is split into `handler.ts`
   (the run), `provider.ts` (the Green API call), `db.ts` (the database calls) and `phone.ts`, and
-  is tested in Deno (`index.test.ts`; CI also runs it against the job's real database). A run may
-  be started only by the service-role key (the 10-minute schedule) or a signed-in backoffice user
-  (the office's nudge) — checked before any setting or queue row is read. It claims a batch with
-  `claim_outbox_rows` (`for update skip locked` + `claimed_at`/`claimed_by`, so two runs never get
-  the same row; a claim older than 10 minutes is a dead run's and can be taken again) and settles
-  each row with `settle_outbox_row`: **sent**; **failed** (one try, then a wait of 2/10/30/60
+  is tested in Deno (`index.test.ts`; CI also runs it against the job's real database). Every
+  message is sent right after it is queued (James, 2026-11-09): a trigger on `notification_outbox`
+  makes the 10-minute schedule's own call once per transaction, sent by pg_net after commit
+  (`0079`); the schedule stays for retries and as the safety net. A run may be started only by the
+  service-role key (that call and the schedule) or a signed-in backoffice user (the office's
+  nudge) — checked before any setting or queue row is read. It claims batch after batch with
+  `claim_outbox_rows` until the queue is empty (stopping early at a WhatsApp-wide problem, its
+  100-second budget or 20 batches) — `for update skip locked` + `claimed_at`/`claimed_by`, so two
+  runs never get the same row; a claim older than 10 minutes is a dead run's and can be taken
+  again — and settles each row with `settle_outbox_row`: **sent**; **failed** (one try, then a wait of 2/10/30/60
   minutes, so quick nudges can't use up the five tries); **released** (a WhatsApp-wide problem —
   rejected credentials, no test phone — costs no try, stops the run, and is shown to staff via
   `notification_dispatch_status`); **skipped** (switch off — never sent, 0048's rule, now

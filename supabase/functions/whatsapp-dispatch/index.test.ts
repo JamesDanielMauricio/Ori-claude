@@ -10,7 +10,8 @@
 //   after the local Supabase stack is up and migrated). It refuses to run
 //   against anything but this machine. It runs the real handler and the real
 //   db.ts against the real queue functions: two overlapping runs, a rejected
-//   token, a provider error, a network error carrying the token.
+//   token, a provider error, a network error carrying the token, and a queue
+//   bigger than one batch.
 
 import { assert, assertEquals, assertFalse, assertMatch } from "jsr:@std/assert@1";
 
@@ -21,6 +22,7 @@ import {
   type DispatchDb,
   type DispatchTarget,
   type HandlerDeps,
+  MAX_BATCHES,
   type NotificationSettingsRow,
   type Outcome,
   RUN_BUDGET_MS,
@@ -368,6 +370,91 @@ Deno.test("the time budget: rows not started in time are handed back for the nex
   assertEquals(db.settled[1].detail, null, "a budget hand-back keeps the row's own last error");
 });
 
+// n queued messages, each to its own phone number.
+const queueOf = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `q${i}`,
+    template_key: "order_reminder",
+    sent_targets: [] as string[],
+    targets: [{ target: `9725${String(i).padStart(8, "0")}`, is_group: false, message: "x" }],
+  }));
+const claimsOf = (db: FakeDb) => db.calls.filter((c) => c.startsWith("claim")).length;
+
+Deno.test("a run takes batch after batch until the queue is empty (a busy day close queues more than one)", async () => {
+  // [messages queued, claims made]: a batch that is not full means the queue
+  // was empty, so the run stops there.
+  for (const [queued, claims] of [[0, 1], [1, 1], [BATCH_SIZE, 2], [BATCH_SIZE + 1, 2], [2 * BATCH_SIZE + 5, 3]]) {
+    const db = new FakeDb(queueOf(queued)).seedLookup();
+    const api = fakeGreenApi();
+    const summary = await (await handlerWith(db, LIVE, api.fetchImpl)(post(SERVICE_KEY))).json();
+    assertEquals(claimsOf(db), claims, `${queued} queued: claims`);
+    assertEquals(api.sent.length, queued, `${queued} queued: every one sent`);
+    assertEquals(db.settled.filter((s) => s.outcome === "sent").length, queued);
+    assertEquals(summary.processed, queued);
+    assertEquals(db.runs.length, 1, "one run, reported once");
+  }
+});
+
+Deno.test("a WhatsApp-wide problem, or the time budget running out, ends the run: no further batch is taken", async () => {
+  const rejected = new FakeDb(queueOf(BATCH_SIZE + 5)).seedLookup();
+  await (await handlerWith(rejected, LIVE, fakeGreenApi(() => new Response("Unauthorized", { status: 401 })).fetchImpl)(post(SERVICE_KEY))).body?.cancel();
+  assertEquals(claimsOf(rejected), 1);
+  assertEquals(rejected.settled.filter((s) => s.outcome === "released").length, BATCH_SIZE);
+  assertEquals(rejected.rows.length, 5, "the rest stay queued, unclaimed");
+
+  // Every send takes a 25th of the budget, so it runs out just as the first
+  // batch ends: the whole batch goes, the next one is not taken.
+  let t = 0;
+  const slow = new FakeDb(queueOf(BATCH_SIZE + 5)).seedLookup();
+  const api = fakeGreenApi(() => {
+    t += RUN_BUDGET_MS / BATCH_SIZE + 1;
+    return new Response("{}");
+  });
+  await (await handlerWith(slow, LIVE, api.fetchImpl, { now: () => t })(post(SERVICE_KEY))).body?.cancel();
+  assertEquals(api.sent.length, BATCH_SIZE);
+  assertEquals(claimsOf(slow), 1);
+  assertEquals(slow.rows.length, 5, "the rest wait for the next run");
+});
+
+Deno.test("MAX_BATCHES bounds a run, whatever the database answers", async () => {
+  // A queue that never empties: every claim hands out a full batch again.
+  class EndlessDb extends FakeDb {
+    private n = 0;
+    override claim(_worker: string, limit: number) {
+      this.calls.push(`claim:${limit}`);
+      return Promise.resolve(Array.from({ length: limit }, () => ({ id: `e${this.n++}`, template_key: "order_reminder", sent_targets: [] })));
+    }
+  }
+  // Switched off, so each row is settled as skipped without a send.
+  const db = new EndlessDb([], { ...ALL_ON, whatsapp_enabled: false });
+  const res = await handlerWith(db, LIVE, fakeGreenApi().fetchImpl)(post(SERVICE_KEY));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).processed, MAX_BATCHES * BATCH_SIZE);
+  assertEquals(claimsOf(db), MAX_BATCHES);
+});
+
+Deno.test("if taking a later batch fails, the run still ends normally: what was sent stays sent, and it is logged", async () => {
+  class FlakyDb extends FakeDb {
+    private claims = 0;
+    override claim(worker: string, limit: number) {
+      this.claims += 1;
+      if (this.claims === 1) return super.claim(worker, limit);
+      this.calls.push(`claim:${limit}`);
+      return Promise.reject(new Error("connection reset"));
+    }
+  }
+  const lines: string[] = [];
+  const db = new FlakyDb(queueOf(BATCH_SIZE + 5)).seedLookup();
+  const api = fakeGreenApi();
+  const res = await handlerWith(db, LIVE, api.fetchImpl, { log: (l) => lines.push(l) })(post(SERVICE_KEY));
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).processed, BATCH_SIZE);
+  assertEquals(api.sent.length, BATCH_SIZE);
+  assert(lines.some((l) => l.includes("could not claim the next batch: connection reset")));
+  assertEquals(db.runs, [{ ok: true, problem: null }]);
+  assertEquals(db.rows.length, 5, "the rest wait for the next run");
+});
+
 Deno.test("a database hiccup while settling is logged and the run goes on", async () => {
   const lines: string[] = [];
   const db = new FakeDb([
@@ -388,7 +475,7 @@ Deno.test("a database hiccup while settling is logged and the run goes on", asyn
 const IT = Deno.env.get("DISPATCH_IT") === "1";
 
 Deno.test({
-  name: "against the real database: overlapping runs, a rejected token, a provider error, a token-bearing network error",
+  name: "against the real database: overlapping runs, a rejected token, a provider error, a token-bearing network error, more than one batch",
   ignore: !IT,
   sanitizeOps: false,
   sanitizeResources: false,
@@ -494,6 +581,19 @@ Deno.test({
       assertEquals(afterLeak.attempt_count, 2);
       assertFalse((afterLeak.last_error ?? "").includes(LIVE.WHATSAPP_LIVE_API_TOKEN), afterLeak.last_error ?? "");
       assertMatch(afterLeak.last_error ?? "", /waInstance\*\*\*/);
+
+      // 5. More than one batch queued at once (a busy day close): one run
+      //    sends them all, each once.
+      const many = Array.from({ length: BATCH_SIZE + 5 }, (_, i) => `it-${tag}-many-${i}`);
+      const manyIds: string[] = [];
+      for (const g of many) manyIds.push(await queue(await company(g)));
+      const fast = fakeGreenApi();
+      const bigRun = await run(fast.fetchImpl);
+      assertEquals(bigRun.status, 200);
+      const bigSummary = await bigRun.json();
+      assert(bigSummary.processed >= many.length, `one run took ${bigSummary.processed} rows`);
+      for (const g of many) assertEquals(fast.sent.filter((s) => s.chatId === `${g}@g.us`).length, 1, `${g} sent once`);
+      for (const id of manyIds) assert((await row(id)).sent_at !== null, `${id} marked sent`);
     } finally {
       if (companyIds.length) {
         await sql`delete from public.notification_outbox where recipient_company_id = any(${companyIds}::uuid[])`;
