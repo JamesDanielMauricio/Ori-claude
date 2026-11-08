@@ -395,48 +395,55 @@ Deno.test({
   async fn() {
     const url = Deno.env.get("SUPABASE_URL") ?? "";
     const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const dbUrl = Deno.env.get("DATABASE_URL") ?? "";
     // SECURITY: this test writes to the database it is given, so it ALLOWS
     // only a stack on this machine and PROTECTS AGAINST it ever running
     // against the hosted project (real business data) — the same rule as
     // packages/shared/src/test-targets.ts.
-    const host = new URL(url).hostname;
-    if (!["127.0.0.1", "localhost"].includes(host)) throw new Error(`DISPATCH_IT refuses ${host} — only a local stack`);
+    for (const target of [url, dbUrl]) {
+      const host = new URL(target).hostname;
+      if (!["127.0.0.1", "localhost"].includes(host)) throw new Error(`DISPATCH_IT refuses ${host} — only a local stack`);
+    }
 
     const { createClient } = await import("npm:@supabase/supabase-js@2");
+    const { default: postgres } = await import("npm:postgres@3");
     const { supabaseDispatchDb } = await import("./db.ts");
-    const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-    const must = <T>(r: { data: T; error: { message: string } | null }): T => {
-      if (r.error) throw new Error(r.error.message);
-      return r.data;
-    };
+    // The dispatcher's own way in: the service-role key, which has only the
+    // grants migration 0078 gives it — it can read the settings and work the
+    // queue, but not write the settings or add rows. Fixtures and read-backs
+    // therefore go through a direct database connection (the stack's owner),
+    // as packages/domain's tests do; nothing the dispatcher does uses it.
+    const dispatcherClient = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+    const sql = postgres(dbUrl, { max: 2, prepare: false, onnotice: () => {} });
+
+    type Row = { sent_at: Date | null; attempt_count: number; last_error: string | null; next_attempt_at: Date | null; claimed_at: Date | null };
     const tag = crypto.randomUUID().slice(0, 8);
-    const settingsBefore = must(await admin.from("notification_settings").select("*").single()) as Record<string, unknown>;
+    const [{ whatsapp_enabled: wasEnabled }] = await sql<{ whatsapp_enabled: boolean }[]>`select whatsapp_enabled from public.notification_settings`;
     const companyIds: string[] = [];
     let dayId: string | null = null;
     try {
-      must(await admin.from("notification_settings").update({ whatsapp_enabled: true }).eq("id", true));
+      await sql`update public.notification_settings set whatsapp_enabled = true`;
       const date = new Date(Date.UTC(2100, 0, 1) + Math.floor(Math.random() * 3650) * 86400000).toISOString().slice(0, 10);
-      dayId = (must(await admin.from("trading_days").insert({ trade_date: date, phase: "closed" }).select("id").single()) as { id: string }).id;
+      [{ id: dayId }] = await sql<{ id: string }[]>`insert into public.trading_days (trade_date, phase) values (${date}, 'closed') returning id`;
       const company = async (group: string) => {
-        const c = must(await admin.from("companies").insert({ name: `IT ${tag} ${group}`, type: "customer", whatsapp_group_id: group }).select("id").single()) as { id: string };
+        const [c] = await sql<{ id: string }[]>`
+          insert into public.companies (name, type, whatsapp_group_id) values (${`IT ${tag} ${group}`}, 'customer', ${group}) returning id`;
         companyIds.push(c.id);
         return c.id;
       };
+      // Queued 11 hours ago — still inside the 12-hour window, and older than
+      // anything earlier tests may have left in the queue, so these rows are
+      // first in every batch (the claim takes the oldest first).
       const queue = async (companyId: string) =>
-        (must(await admin.from("notification_outbox").insert({
-          trading_day_id: dayId,
-          recipient_type: "customer",
-          recipient_company_id: companyId,
-          template_key: "order_reminder",
-          payload: { tradeDate: date, lines: [] },
-        }).select("id").single()) as { id: string }).id;
+        (await sql<{ id: string }[]>`
+          insert into public.notification_outbox (trading_day_id, recipient_type, recipient_company_id, template_key, payload, created_at)
+          values (${dayId}, 'customer', ${companyId}, 'order_reminder', ${JSON.stringify({ tradeDate: date, lines: [] })}::jsonb, now() - interval '11 hours')
+          returning id`)[0].id;
       const row = async (id: string) =>
-        must(await admin.from("notification_outbox").select("sent_at, attempt_count, last_error, next_attempt_at, claimed_at").eq("id", id).single()) as {
-          sent_at: string | null; attempt_count: number; last_error: string | null; next_attempt_at: string | null; claimed_at: string | null;
-        };
+        (await sql<Row[]>`select sent_at, attempt_count, last_error, next_attempt_at, claimed_at from public.notification_outbox where id = ${id}`)[0];
       const env = { SUPABASE_SERVICE_ROLE_KEY: key, ...LIVE };
       const run = (fetchImpl: typeof fetch) =>
-        createDispatchHandler({ env: (n) => (env as Record<string, string>)[n], db: supabaseDispatchDb(admin), fetch: fetchImpl, log: () => {} })(
+        createDispatchHandler({ env: (n) => (env as Record<string, string>)[n], db: supabaseDispatchDb(dispatcherClient), fetch: fetchImpl, log: () => {} })(
           new Request("http://localhost/x", { method: "POST", headers: { authorization: `Bearer ${key}` } }),
         );
 
@@ -449,6 +456,7 @@ Deno.test({
         return new Response("{}");
       });
       const [a, b] = await Promise.all([run(slow.fetchImpl), run(slow.fetchImpl)]);
+      assertEquals([a.status, b.status], [200, 200]);
       await a.body?.cancel();
       await b.body?.cancel();
       for (const g of groups) assertEquals(slow.sent.filter((s) => s.chatId === `${g}@g.us`).length, 1, `${g} sent once`);
@@ -462,7 +470,7 @@ Deno.test({
       assertEquals(afterReject.attempt_count, 0);
       assertEquals(afterReject.claimed_at, null);
       assertMatch(afterReject.last_error ?? "", /401/);
-      const status = must(await admin.from("notification_dispatch_status").select("channel_problem").single()) as { channel_problem: string | null };
+      const [status] = await sql<{ channel_problem: string | null }[]>`select channel_problem from public.notification_dispatch_status`;
       assertMatch(status.channel_problem ?? "", /401/);
 
       // 3. A provider error: one try, a wait, and a quick second run leaves it alone.
@@ -470,13 +478,13 @@ Deno.test({
       await (await run(busy.fetchImpl)).body?.cancel();
       const afterBusy = await row(failId);
       assertEquals(afterBusy.attempt_count, 1);
-      assert(Date.parse(afterBusy.next_attempt_at!) > Date.now() + 60_000, "waits about 2 minutes");
+      assert(new Date(afterBusy.next_attempt_at!).getTime() > Date.now() + 60_000, "waits about 2 minutes");
       const quick = fakeGreenApi();
       await (await run(quick.fetchImpl)).body?.cancel();
       assertEquals(quick.sent.filter((s) => s.chatId.startsWith(`it-${tag}-fail`)).length, 0, "a quick nudge does not spend the next try");
 
       // 4. A network error that repeats the URL: the stored error has no token.
-      must(await admin.from("notification_outbox").update({ next_attempt_at: null }).eq("id", failId));
+      await sql`update public.notification_outbox set next_attempt_at = null where id = ${failId}`;
       const leaky = fakeGreenApi((chatId, u) => {
         if (chatId.startsWith(`it-${tag}-fail`)) throw new TypeError(`error sending request for url (${u}): connection refused`);
         return new Response("{}");
@@ -487,11 +495,14 @@ Deno.test({
       assertFalse((afterLeak.last_error ?? "").includes(LIVE.WHATSAPP_LIVE_API_TOKEN), afterLeak.last_error ?? "");
       assertMatch(afterLeak.last_error ?? "", /waInstance\*\*\*/);
     } finally {
-      for (const id of companyIds) await admin.from("notification_outbox").delete().eq("recipient_company_id", id);
-      for (const id of companyIds) await admin.from("companies").delete().eq("id", id);
-      if (dayId) await admin.from("trading_days").delete().eq("id", dayId);
-      await admin.from("notification_settings").update({ whatsapp_enabled: settingsBefore.whatsapp_enabled }).eq("id", true);
-      await admin.from("notification_dispatch_status").update({ channel_problem: null, channel_problem_since: null }).eq("id", true);
+      if (companyIds.length) {
+        await sql`delete from public.notification_outbox where recipient_company_id = any(${companyIds}::uuid[])`;
+        await sql`delete from public.companies where id = any(${companyIds}::uuid[])`;
+      }
+      if (dayId) await sql`delete from public.trading_days where id = ${dayId}`;
+      await sql`update public.notification_settings set whatsapp_enabled = ${wasEnabled}`;
+      await sql`update public.notification_dispatch_status set channel_problem = null, channel_problem_since = null`;
+      await sql.end();
     }
   },
 });
