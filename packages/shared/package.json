@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./env": "./src/env.ts",
     "./roles": "./src/roles.ts",
-    "./dates": "./src/dates.ts"
+    "./dates": "./src/dates.ts",
+    "./test-targets": "./src/test-targets.ts"
   },
   "scripts": {
     "lint": "eslint .",

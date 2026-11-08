@@ -1,3 +1,4 @@
+import { assertDisposableTestTargets } from "@ori/shared/test-targets";
 import { defineConfig } from "@playwright/test";
 
 // Forwards whatever Supabase project the environment is already configured
@@ -13,6 +14,21 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? "http://127.0.0.1:54321";
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 const API_URL = "http://localhost:4000";
+const BASE_URL = "http://localhost:3000";
+
+// SECURITY: ALLOWS the browser suite to run only when the database, the
+// Supabase API, the API server and the web app it drives are all on this
+// machine — the throwaway stack CI starts. PROTECTS AGAINST running it against
+// the hosted project the root .env points at: its fixtures create and delete
+// real Auth users and its global setup parks the open trading day. Checked
+// while this config loads, before the global setup or either web server starts
+// (release workbook task 01, ORI-022; same rule as packages/domain).
+assertDisposableTestTargets({
+  databaseUrl: DATABASE_URL,
+  supabaseUrl: SUPABASE_URL,
+  apiUrl: API_URL,
+  browserUrl: BASE_URL,
+});
 
 export default defineConfig({
   testDir: "./e2e",
@@ -42,7 +58,7 @@ export default defineConfig({
     timeout: 10000,
   },
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: BASE_URL,
     // CI keeps a full trace (every network request and response, console
     // output, DOM snapshots) for each failed test, since there is no retry
     // there to trigger "on-first-retry" and a CI-only failure is otherwise
@@ -50,12 +66,19 @@ export default defineConfig({
     // failure — see that step's comment for why publishing it is safe.
     trace: process.env.CI ? "retain-on-failure" : "on-first-retry",
   },
+  // SECURITY: ALLOWS only servers this run starts itself, with the checked
+  // values above (`reuseExistingServer: false` on both). PROTECTS AGAINST
+  // quietly reusing whatever is already listening on :4000 or :3000 — e.g.
+  // `pnpm dev`, which reads the root .env and so talks to the hosted project —
+  // which would put the browser on production data however safe the values
+  // checked above are. If a port is taken, Playwright stops with "already
+  // used" instead; stop the other server and run again.
   webServer: [
     {
       command: "pnpm --filter @ori/api dev",
       url: `${API_URL}/healthz`,
       cwd: "../..",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       env: {
         DATABASE_URL,
         SUPABASE_URL,
@@ -74,8 +97,8 @@ export default defineConfig({
       // Values passed in process.env take precedence over .env files, which
       // is what makes this override reliable.
       command: "pnpm build && pnpm preview",
-      url: "http://localhost:3000",
-      reuseExistingServer: !process.env.CI,
+      url: BASE_URL,
+      reuseExistingServer: false,
       // `vite preview` serves a static SPA, so it needs a generous startup
       // budget: this command builds first, and a cold Vite build of
       // seventeen lazily-split routes is the slow part, not the serving.

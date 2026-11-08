@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { db } from "@ori/db";
 import { tradingDays } from "@ori/db/schema";
+import { assertDisposableTestTargets } from "@ori/shared/test-targets";
 import { eq, ne } from "drizzle-orm";
 
 // Test-suite support for Lifecycle Invariant 1: at most ONE trading day may
@@ -67,6 +68,17 @@ interface ParkedDay {
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const PARK_FILE = join(REPO_ROOT, "node_modules", ".cache", "ori", "parked-trading-day.json");
 
+// SECURITY: ALLOWS parking and restoring only on a database on this machine —
+// the throwaway stack the suites run against. PROTECTS AGAINST closing (and
+// later rewriting) the REAL open trading day on the hosted project: both
+// functions below change trading_days.phase directly, and the suites' configs
+// are not the only way to reach them. Checked against DATABASE_URL — the very
+// value @ori/db's client was built from — before the first query, so nothing
+// is sent anywhere if it points elsewhere (release workbook task 01, ORI-022).
+function assertLocalDatabase(): void {
+  assertDisposableTestTargets({ databaseUrl: process.env.DATABASE_URL });
+}
+
 async function readParked(): Promise<ParkedDay | null> {
   try {
     return JSON.parse(await readFile(PARK_FILE, "utf8")) as ParkedDay;
@@ -78,6 +90,7 @@ async function readParked(): Promise<ParkedDay | null> {
 // Puts a previously parked day back into its original phase. Safe to call
 // when nothing is parked. Exported for the suites' global teardown.
 export async function restoreParkedTradingDay(): Promise<void> {
+  assertLocalDatabase();
   const parked = await readParked();
   if (!parked) return;
 
@@ -113,6 +126,7 @@ export async function restoreParkedTradingDay(): Promise<void> {
 // what it parked first, so the day survives a crash. Exported for the
 // suites' global setup.
 export async function parkOpenTradingDay(): Promise<void> {
+  assertLocalDatabase();
   // Heal a previous crashed run before taking a new reading, or the parked
   // day would be re-recorded as already-closed and never come back.
   await restoreParkedTradingDay();
