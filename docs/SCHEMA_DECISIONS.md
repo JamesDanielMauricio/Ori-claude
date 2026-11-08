@@ -5,7 +5,47 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-07 (latest) — Deleting a user keeps their history, without their name (`0073`)
+## 2026-11-07 (latest) — Privileged functions refuse a caller with no profile or no sign-in (`0076`)
+
+**Context.** Eight functions run as `SECURITY DEFINER` — with the database owner's rights, past
+every row-level security rule — and check the caller themselves: `create_alert`,
+`build_arrangement_alerts`, `revert_pick_to_draft`, `save_pick_lines`, `submit_pick`,
+`update_pick_product_details`, `update_pick_product_pallets` and `submit_order`. Each compared
+`public.current_role()` with `<>`. `current_role()` is NULL for a signed-in account with no
+profiles row and for a request with no sign-in at all (the anon key ships inside the app), and a
+comparison with NULL is never true — so none of those checks refused either caller. On a copy of
+the schema, the anon key and a record's id were enough to change a grower's pallets, send or
+reopen a pick, send an order on any customer's behalf and create alerts (release workbook task
+02, ORI-001).
+
+**What changed.** The checks use `is distinct from`, which counts NULL as "no"; the four grower
+checks also require the `grower` role, not just a matching company. Callers who are not signed
+in lose EXECUTE on the eight. The two stock helpers `max_orderable_for_customer` and
+`shop_variety_orderability`, which have no caller check of their own and answered anyone, can no
+longer be called through the API at all — only by the shop catalog and `submit_order`, which run
+as their owner. New rule for any future privileged function: compare roles with
+`is distinct from` / `is not distinct from`, never `<>` / `=`, and revoke EXECUTE from `public,
+anon` (the pattern `0059` and `0062` already used).
+
+**Accepted knowingly.** Nothing the app does changes, and no app deploy is tied to it. A grower can
+still read the shop catalog (`get_orderable_catalog_for_customer` with no company) — read-only,
+and outside this change.
+
+**How it was checked.** Databases built from every migration (PostgreSQL 17 in WASM, no contact
+with the hosted project), one through `0075` and one with `0076`: every privileged function called
+with valid input by seven identities (signed out, no profile, the owning grower, another grower,
+a customer, another customer, backoffice), each call's effect read back from every table. Before:
+15 calls by a signed-out or no-profile caller wrote data, and the two helpers answered every
+caller. After: every one of those is refused, and every allowed caller still succeeds. Seven
+deliberately broken versions of the migration are all caught; all 31 `SECURITY INVOKER`
+functions that can write, and direct table writes, were already closed to both callers (row-level
+security stops them); only the eight function bodies and ten grants changed; running `0076` twice
+ends in the same state; a whole trading day produces identical rows before and after.
+`auth/rpc-authorization.test.ts` checks the same in CI.
+
+---
+
+## 2026-11-07 — Deleting a user keeps their history, without their name (`0073`)
 
 **Context.** Four history tables name the person who did something:
 `order_submission_logs.submitted_by` (who sent an order), `trading_days.initiated_by` (who started
