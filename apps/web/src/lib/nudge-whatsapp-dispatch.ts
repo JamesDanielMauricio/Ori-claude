@@ -26,10 +26,22 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // scheduled trigger to the function — an empty body falls through to
 // whatever WHATSAPP_ENV is set to server-side, never forcing live sends.
 export function nudgeWhatsAppDispatch(client: SupabaseClient): void {
-  void client.functions.invoke("whatsapp-dispatch", { body: {} }).catch((error: unknown) => {
+  void runWhatsAppDispatchNow(client);
+}
+
+// The same nudge, for a screen that wants to know when the run is over (the
+// delivery screen's "send again", which then re-reads the queue). Never
+// throws either: if the run cannot be reached, the message simply waits for
+// the next scheduled one. Only a backoffice session may start a run
+// (whatsapp-dispatch's authorizeCaller) — which is who uses these screens.
+export async function runWhatsAppDispatchNow(client: SupabaseClient): Promise<void> {
+  try {
+    const { error } = await client.functions.invoke("whatsapp-dispatch", { body: {} });
+    if (error) throw error;
+  } catch (error: unknown) {
     console.warn(
       "[whatsapp-dispatch] nudge failed — the message stays queued for the next drain",
       error,
     );
-  });
+  }
 }

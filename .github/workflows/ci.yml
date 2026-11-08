@@ -49,8 +49,44 @@ jobs:
       - name: Run migrations
         run: pnpm db:migrate
 
+      # The WhatsApp dispatcher, served by the local stack's own Edge runtime
+      # behind its real gateway, so packages/domain's dispatch-edge.test.ts can
+      # call it over HTTP the way the schedule and the office's nudge do.
+      # Started in the background; the loop waits until it answers (a CORS
+      # preflight, which does no work) and prints its log if it never does.
+      - name: Serve Edge Functions
+        run: |
+          nohup pnpm supabase functions serve > "$RUNNER_TEMP/functions-serve.log" 2>&1 &
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X OPTIONS http://127.0.0.1:54321/functions/v1/whatsapp-dispatch || true)
+            if [ "$code" = "200" ]; then echo "whatsapp-dispatch is served"; exit 0; fi
+            sleep 2
+          done
+          echo "whatsapp-dispatch never answered:"
+          cat "$RUNNER_TEMP/functions-serve.log"
+          exit 1
+
       - name: Test
         run: pnpm test
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # The dispatcher's own tests, in Deno — the runtime it ships on: the
+      # fake-provider unit tests, plus (DISPATCH_IT=1) the real handler against
+      # this job's throwaway database — overlapping runs, a rejected token, a
+      # provider error, a network error that repeats the token. After `Test`,
+      # so it never overlaps the domain suite's use of the shared settings row.
+      # DENO_NO_PACKAGE_JSON keeps Deno from treating the pnpm workspace's
+      # package.json as its own configuration.
+      - name: Edge function tests
+        env:
+          DENO_NO_PACKAGE_JSON: "1"
+          DISPATCH_IT: "1"
+        run: |
+          deno check supabase/functions/whatsapp-dispatch/index.ts
+          deno test --allow-env --allow-read --allow-net supabase/functions/whatsapp-dispatch/
 
       - name: Build
         run: pnpm build

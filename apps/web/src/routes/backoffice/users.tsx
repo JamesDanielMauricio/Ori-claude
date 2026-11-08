@@ -17,6 +17,7 @@ import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
+import { phoneForDisplay, phoneToSave } from "@/lib/phone-to-save";
 import { referenceDataQueries, type ProfileRow } from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 import { formatVarietyName } from "@/lib/variety-label";
@@ -119,7 +120,7 @@ export default function UsersPage() {
               display_name: form.displayName,
               role: form.role,
               company_id: form.companyId,
-              phone_number: form.phoneNumber || null,
+              phone_number: phoneForDisplay(form.phoneNumber),
             }
           : row,
       ),
@@ -141,6 +142,11 @@ export default function UsersPage() {
   const saveMutation = useMutation({
     mutationFn: async (): Promise<{ user_id: string }> => {
       if (!editingId || !form) throw new Error("No user selected");
+      // One stored form per number — 0501234567, or +12125551234 for a
+      // foreign one (migration 0077). Checked before anything is saved, so a
+      // refused number leaves the role, company and blocked products
+      // untouched too.
+      const phone = phoneToSave(form.phoneNumber, selected?.phone_number ?? null);
       const input = saveUserInputSchema.parse({
         userId: editingId,
         displayName: form.displayName,
@@ -155,7 +161,7 @@ export default function UsersPage() {
       // that lets this screen edit another user's role/company at all.
       const { error: phoneError } = await supabase
         .from("profiles")
-        .update({ phone_number: form.phoneNumber || null })
+        .update({ phone_number: phone })
         .eq("user_id", editingId);
       if (phoneError) throw phoneError;
       return data;

@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
+import { phoneForDisplay, phoneToSave } from "@/lib/phone-to-save";
 import { profileQueries, type OwnProfile } from "@/lib/queries/profile";
 import { createClient } from "@/lib/supabase/client";
 
@@ -46,7 +47,7 @@ export default function UserProfilePage() {
 
   const saveOptimistic = optimisticUpdate<OwnProfile, void>(queryClient, profileQueryKey, (row) =>
     row
-      ? { displayName: displayName.trim(), phoneNumber: phoneNumber.trim() || null }
+      ? { displayName: displayName.trim(), phoneNumber: phoneForDisplay(phoneNumber) }
       : row,
   );
 
@@ -58,10 +59,14 @@ export default function UserProfilePage() {
 
       const trimmedName = displayName.trim();
       if (!trimmedName) throw new Error("שם התצוגה לא יכול להיות ריק");
+      // One stored form per number — 0501234567, or +12125551234 for a
+      // foreign one (migration 0077); anything else is refused here with the
+      // Hebrew message before anything is sent.
+      const phone = phoneToSave(phoneNumber, profileQuery.data?.phoneNumber ?? null);
 
       const { error } = await supabase
         .from("profiles")
-        .update({ display_name: trimmedName, phone_number: phoneNumber.trim() || null })
+        .update({ display_name: trimmedName, phone_number: phone })
         .eq("user_id", userData.user.id);
       if (error) throw error;
     },
@@ -150,6 +155,8 @@ export default function UserProfilePage() {
               <input
                 id="phoneNumber"
                 type="tel"
+                inputMode="tel"
+                placeholder="050-1234567"
                 className={`${inputClassName} w-full`}
                 value={phoneNumber}
                 onChange={(event) => setPhoneNumber(event.target.value)}

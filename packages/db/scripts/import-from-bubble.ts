@@ -41,6 +41,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { normalizePhoneNumber } from "@ori/shared/phone";
 import { createClient } from "@supabase/supabase-js";
 import postgres from "postgres";
 
@@ -692,12 +693,16 @@ function planReference(data: ExportData, report: Report): ReferencePlan {
       report.note("warning", "user", user._id, "user.role_company_mismatch", `${who} is a ${role} login on a ${companyTypeByBubbleId.get(companyBubbleId)} company — imported as-is.`);
     }
 
-    let phoneNumber = text(user, "Phone Number");
-    if (phoneNumber && !/^[0-9+\-\s()]+$/.test(phoneNumber)) {
-      // WhatsApp dispatch dials this number; a value with letters in it can
-      // never be dialled, so it is left empty rather than carried over.
-      report.note("warning", "user", user._id, "user.phone_not_a_number", `${who}'s phone number is not a number — left empty.`);
-      phoneNumber = null;
+    // One stored form per number (migration 0077 — whose check on profiles
+    // would otherwise refuse the whole import for one bad number): an Israeli
+    // number as 0501234567, a foreign one written with + and its country code
+    // as +12125551234. A number that is neither — letters in it, too short, a
+    // foreign number without its + — can never be messaged, so it is left
+    // empty and reported, rather than carried over.
+    const typedPhone = text(user, "Phone Number");
+    const phoneNumber = typedPhone ? normalizePhoneNumber(typedPhone) : null;
+    if (typedPhone && !phoneNumber) {
+      report.note("warning", "user", user._id, "user.phone_not_a_number", `${who}'s phone number is not one WhatsApp can reach (an Israeli number, or + and a country code) — left empty.`);
     }
 
     // Bubble blocks whole product FAMILIES per user; this schema blocks

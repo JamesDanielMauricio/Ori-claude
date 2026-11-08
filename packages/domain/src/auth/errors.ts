@@ -16,7 +16,8 @@ export type RecoveryLinkUndeliverableReason =
   | "self_reset"
   // No phone number on the target's profile, so WhatsApp has nowhere to go.
   | "no_phone"
-  // A phone number that doesn't normalize to an Israeli number.
+  // A phone number that isn't one WhatsApp can reach: not Israeli, and not
+  // written with + and a country code (@ori/shared/phone).
   | "invalid_phone"
   // notification_settings.whatsapp_enabled is off — the master switch that
   // blocks every WhatsApp send.

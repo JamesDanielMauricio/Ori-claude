@@ -1,5 +1,6 @@
 import { db } from "@ori/db";
 import {
+  alerts,
   arrangementRecords,
   companies,
   dailyArrangements,
@@ -1296,6 +1297,66 @@ describe("arrangement module", () => {
     expect(customerLines).toHaveLength(1);
     expect(customerLines[0]?.price).toBeNull();
   }, 30000);
+
+  // 0043 rebuilt close_arrangement without 0024's call to
+  // build_arrangement_alerts, so closing the day stopped creating the bell
+  // alerts; 0077 restores it, and makes a repeat add nothing.
+  it("close_arrangement writes one closing bell alert for every user of the customer and the grower, and building them again adds none", async () => {
+    const { day, grower, customer, pickProductId, orderProductId } = await setUpDayWithSupplyAndDemand(5, 5);
+    const customerUsers: Array<{ userId: string; email: string; password: string }> = [];
+    for (let i = 0; i < 2; i++) {
+      const user = await createTestProfile({ companyId: customer.id, role: "customer" });
+      cleanupFns.push(() => deleteTestUser(user.userId));
+      customerUsers.push(user);
+    }
+    const growerUser = await createTestProfile({ companyId: grower.companyId, role: "grower" });
+    cleanupFns.push(() => deleteTestUser(growerUser.userId));
+
+    const created = await admin.client.rpc(
+      "create_arrangement_record",
+      toCreateArrangementRecordRpcArgs({
+        dailyPickProductId: pickProductId,
+        dailyOrderProductId: orderProductId,
+        quantityPallets: 3,
+      }),
+    );
+    expect(created.error).toBeNull();
+    // Only a customer that SENT its order gets the customer alert.
+    await db
+      .update(dailyOrders)
+      .set({ status: "submitted" })
+      .where(and(eq(dailyOrders.tradingDayId, day.id), eq(dailyOrders.customerCompanyId, customer.id)));
+
+    expect((await admin.client.rpc("close_shop")).error).toBeNull();
+    expect((await admin.client.rpc("close_arrangement")).error).toBeNull();
+
+    const closingAlerts = async () =>
+      (
+        await db
+          .select({ userId: alerts.intendedForUserId, type: alerts.alertTypeId, pallets: alerts.numberForDisplay })
+          .from(alerts)
+          .where(eq(alerts.displayRecordId, day.id))
+      )
+        .filter((a) => [customerUsers[0]!.userId, customerUsers[1]!.userId, growerUser.userId].includes(a.userId))
+        .sort((a, b) => `${a.type}${a.userId}`.localeCompare(`${b.type}${b.userId}`));
+    const expected = [
+      ...customerUsers.map((u) => ({ userId: u.userId, type: "00000000-0000-0000-0000-000000000001", pallets: "3.00" })),
+      { userId: growerUser.userId, type: "00000000-0000-0000-0000-000000000002", pallets: "3.00" },
+    ].sort((a, b) => `${a.type}${a.userId}`.localeCompare(`${b.type}${b.userId}`));
+    expect(await closingAlerts()).toEqual(expected);
+
+    // Repeat: nobody gets the same day's alert twice.
+    const again = await admin.client.rpc("build_arrangement_alerts", { p_trading_day_id: day.id });
+    expect(again.error).toBeNull();
+    expect(again.data).toBe(0);
+    expect(await closingAlerts()).toEqual(expected);
+
+    // Each customer user sees their own alert in the bell.
+    const customerClient = await signInTestUser(customerUsers[0]!.email, customerUsers[0]!.password);
+    const own = await customerClient.from("alerts").select("alert_type_id, number_for_display").eq("display_record_id", day.id);
+    expect(own.error).toBeNull();
+    expect(own.data).toEqual([{ alert_type_id: "00000000-0000-0000-0000-000000000001", number_for_display: 3 }]);
+  }, 45000);
 
   it("close_arrangement populates a priced arrangement record's price from the variety's fixed price, and writes a notification_outbox row for the customer", async () => {
     const { day, grower, customer, pickProductId, orderProductId } =

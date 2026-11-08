@@ -5,7 +5,94 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-07 (latest) — Privileged functions refuse a caller with no profile or no sign-in (`0076`)
+## 2026-11-08 (latest) — The WhatsApp queue: claims, waits between tries, a 12-hour window, staff can see and resend (`0078`)
+
+**Context.** Release workbook task 16 (ORI-007, ORI-019, ORI-020). Any caller who could pass the
+gateway — the public anon key included — could start a dispatch run. Two runs at once (the
+10-minute schedule and an office nudge) could both send the same message, because rows were chosen
+by "not sent, under 5 tries" with nothing marking a row as taken. A failed message was due again at
+once, so a few quick nudges used up all five tries; a wrong WhatsApp token counted as a failure of
+every message. Staff had no screen for any of it, and a network error from the sending call stored
+the provider URL — Green API's token sits in that URL — in `last_error`. The dispatcher's own
+table access came only from the grants Supabase adds automatically.
+
+**What changed.** New columns on `notification_outbox` (`claimed_at`, `claimed_by`,
+`next_attempt_at`, `skipped_at`, `retry_requested_at`, `retry_requested_by`), the single-row
+`notification_dispatch_status`, the staff view `notification_deliveries`, and the functions
+`claim_outbox_rows`, `settle_outbox_row`, `retry_outbox_row`, `record_dispatch_run` and
+`outbox_delivery_status` (the one rule for a row's state). The whatsapp-dispatch function now
+refuses every caller but the service-role key and a backoffice session, claims before it sends,
+and sorts failures into WhatsApp-wide (no try counted, run stops, shown as a banner), temporary
+and this-message. Waits after tries 1–4: 2, 10, 30, 60 minutes; the fifth failure is final. James's
+rule (2026-11-08): a message not delivered within 12 hours of being queued is not sent on its
+own — "expired" — and staff can send it again, which starts a new 12-hour window and keeps the
+recipients already reached. A message skipped because its switch was off is never resent. The
+dispatcher gets explicit grants on exactly what it reads and writes; signed-out callers lose all
+access to the notification tables and EXECUTE on the queue functions. Stored errors are stripped of
+the token; the migration blanks it out of errors already stored. New screen: "הודעות WhatsApp"
+(`/backoffice/notification-deliveries`).
+
+**Accepted knowingly.** Not exactly-once: if a run dies after Green API accepted a message but before
+the row is recorded, that recipient can get it twice once the claim expires (10 minutes, longer than
+a run may last). Recording each recipient the moment it is sent keeps that to the one message in
+flight. Deploy order matters: run `0078`, then deploy the function (the function deployed today
+keeps working after `0078` runs), then the web app.
+
+**How it was checked.** On a copy built from every migration (PostgreSQL 17 in WASM): 42 checks —
+claims, a dead run's claim, the waits, WhatsApp-wide problems, the 12-hour rule, send again,
+skipped rows, the grants for signed-out / no-profile / customer / grower / backoffice / the
+dispatcher, a project WITHOUT Supabase's automatic grants (the dispatcher works after `0078`), the
+calls of the function deployed today, and a second run of `0078`. A whole trading day produces
+identical rows with and without it. In Deno: 17 tests of the function itself. In CI:
+`notifications/dispatch-queue.test.ts` (real overlapping claims and drains),
+`notifications/dispatch-edge.test.ts` (the real function behind the real gateway) and the Deno tests
+against the job's database.
+
+---
+
+## 2026-11-08 — Messages name what they are about, closing the day writes the bell alerts again, one form for phone numbers (`0077`)
+
+**Context.** Release workbook task 15 (ORI-017, ORI-018). `0053` rebuilt `resolve_outbox_dispatch`
+from `0024`'s text and dropped the three values `0031` had added, so the office's "%COMPANY% sent an
+order", "%COMPANY% updated the picking" and both stock alerts went out with the name blank; the dev
+preview never passed them. `0043` rebuilt `close_arrangement` without `0024`'s call to
+`build_arrangement_alerts`, so no closing-day bell alert has been created since. Phone numbers were
+saved exactly as typed and the dispatch built `972` + the text without its first zero, so
+"050-123 4567" became an address that cannot exist.
+
+**What changed.** Both resolve functions pass all seven template values. `close_arrangement` calls
+`build_arrangement_alerts` again, in the same transaction, and `build_arrangement_alerts` never
+gives the same person the same day's alert twice. Phone numbers (James, 2026-11-09 — first
+"Israeli only", changed the next day to "foreign numbers too"): an Israeli number is stored as
+local digits, `0501234567`, however it was typed; a foreign number must be written with + (or
+00) and its country code and is stored that way, `+12125551234` (7–15 digits, the international
+standard). A number written without a country code is read as Israeli — a bare foreign number
+can't be told from a mistyped Israeli one, so it is refused rather than guessed. Every save of
+`profiles.phone_number` and of the dev test phone is tidied into that form or refused with a
+Hebrew message (a trigger, so the direct table updates the profile and users screens make are
+covered); the screens check first; the importer tidies or leaves empty and reports; the dispatch
+addresses a person through `whatsapp_personal_number` (country code + number), which reads old
+untidied values the same way and skips one it cannot read. The rule exists three times
+(TypeScript, SQL `normalize_phone_number`, the Edge function), tested against one shared list of
+examples.
+
+**Accepted knowingly.** Numbers already stored are not rewritten by the migration: a valid untidy one
+still dispatches correctly and is tidied on its next save; an invalid one is left as it is so the
+user's other fields can still be saved — see the read-only check for how many there are. Prices in
+a customer's closing message still follow the day's switch only (D19, task 37), and transporters
+still get the grower's template (task 26) — both outside this change.
+
+**How it was checked.** On the WASM copy: 37 checks — the four office messages queued by the real
+flows (grower saves picks, customer orders, office orders past the picked stock) name their
+subject before-vs-after, the SQL phone rule matches all 58 shared examples (Israeli and foreign),
+saves are tidied, kept with their country code or refused, a close that fails at its last step
+leaves no alert and an open day, a repeat adds nothing,
+a second run of `0077` changes nothing; a whole trading day is identical apart from the restored
+alerts. In CI: `notifications/message-content.test.ts` and an `arrangement.test.ts` close.
+
+---
+
+## 2026-11-07 — Privileged functions refuse a caller with no profile or no sign-in (`0076`)
 
 **Context.** Eight functions run as `SECURITY DEFINER` — with the database owner's rights, past
 every row-level security rule — and check the caller themselves: `create_alert`,

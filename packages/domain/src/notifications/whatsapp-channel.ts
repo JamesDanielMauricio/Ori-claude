@@ -1,3 +1,5 @@
+import { toWhatsAppPersonalNumber } from "@ori/shared/phone";
+
 import type { NotificationChannel, OutboundMessage, SendResult } from "./channel";
 
 // The Node-side Green API adapter (https://green-api.com — the settled
@@ -39,18 +41,14 @@ export function readGreenApiCredentials(
   return idInstance && apiToken ? { idInstance, apiToken } : null;
 }
 
-// profiles.phone_number is free text typed by people ("050-123 4567",
-// "+972 50…"), so it is reduced to digits before the 972 country code is
-// applied — the same "972 + number without its leading 0" rule
-// resolve_outbox_dispatch uses (migration 0053), but tolerant of the
-// separators that rule would pass straight through to Green API. Returns null
-// for anything that can't be an Israeli number once normalized: 972 followed
-// by 8 or 9 digits.
+// A person's WhatsApp address from their phone number: the one phone rule in
+// @ori/shared/phone (Israeli numbers, and foreign ones written with + and a
+// country code), which the queued dispatch's SQL
+// (public.whatsapp_personal_number, migration 0077) mirrors exactly — so the
+// password-reset sender and the queue always reach the same person. Null for
+// anything that is not a phone number WhatsApp can reach.
 export function toWhatsAppNumber(phone: string | null | undefined): string | null {
-  const digits = (phone ?? "").replace(/\D/g, "");
-  if (!digits) return null;
-  const international = digits.startsWith("972") ? digits : `972${digits.replace(/^0/, "")}`;
-  return /^972\d{8,9}$/.test(international) ? international : null;
+  return toWhatsAppPersonalNumber(phone);
 }
 
 // How long a send may take before it counts as failed — the admin is waiting

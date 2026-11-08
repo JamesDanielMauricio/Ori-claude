@@ -2,31 +2,34 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { NotificationChannel } from "./channel";
 
-// The drain-loop orchestration behind the WhatsApp adapter — fetch
-// pending notification_outbox rows, resolve each into its real send
-// targets (packages/db/migrations/0024's resolve_outbox_dispatch), hand
-// each composed message to the injected NotificationChannel, and record
-// the outcome. Deliberately portable: only a type-only import of
-// SupabaseClient (erased at runtime, so it never needs to resolve under
-// Deno) plus the dependency-free NotificationChannel contract — no
-// `@ori/db`, no Node-specific API. supabase/functions/whatsapp-dispatch's
-// own Deno entrypoint reimplements this same loop inline (Deno can't
-// resolve this package's other workspace-aliased imports without a
-// bundler this project doesn't have set up) but calls the identical
-// Postgres functions, so the actual business logic — recipient
-// resolution and placeholder substitution — is tested exactly once, here,
-// against the real database, not reimplemented untested in Deno.
+// The Node copy of the WhatsApp dispatcher's loop, for tests that drive the
+// real queue functions against the real database: claim a batch
+// (claim_outbox_rows), resolve each row into its recipients
+// (resolve_outbox_dispatch), hand each message to the injected
+// NotificationChannel, record each recipient reached
+// (record_outbox_target_sent) and settle the row (settle_outbox_row) — the
+// same calls, in the same order, as supabase/functions/whatsapp-dispatch/
+// handler.ts. That file is the one that runs in production; Deno can't
+// import this package and this package can't import that file, so the
+// ~40-line loop exists twice. The rules themselves — who may take a row,
+// when it is due, what a failure costs, the 12-hour window — live once, in
+// the SQL functions of migration 0078, and are tested here.
+//
+// Not copied: the dev-environment preview and the caller check (both
+// Deno-only; index.test.ts covers them).
 export interface DrainDeps {
   client: SupabaseClient;
   channel: NotificationChannel;
-  // Injected so tests don't depend on wall-clock retry math; defaults to
-  // the real value in production.
-  maxAttempts?: number;
+  // How many rows to claim at once (the dispatcher uses 25).
+  batchSize?: number;
+  // A fixed run id for tests that want to look at claims; a fresh one per
+  // call otherwise.
+  workerId?: string;
 }
 
 export interface DrainRowResult {
   outboxId: string;
-  status: "sent" | "failed" | "skipped_toggle_off";
+  status: "sent" | "failed" | "skipped_toggle_off" | "released";
   error?: string;
 }
 
@@ -35,15 +38,13 @@ export interface DrainResult {
   sent: number;
   failed: number;
   skippedTogglesOff: number;
+  released: number;
   rows: DrainRowResult[];
 }
 
-interface PendingOutboxRow {
+interface ClaimedRow {
   id: string;
   template_key: string;
-  // Targets already delivered to on an earlier pass (migration 0038). A row
-  // only reaches this loop with a non-empty list when a previous attempt sent
-  // to some of its recipients and failed on others.
   sent_targets: string[] | null;
 }
 
@@ -61,18 +62,10 @@ interface DispatchTarget {
   message: string;
 }
 
-const DEFAULT_MAX_ATTEMPTS = 5;
-
-// Mirrors supabase/functions/whatsapp-dispatch's own isEligible exactly —
-// see that file's header comment for why this loop is duplicated rather
-// than imported. whatsapp_enabled is the global gate every template needs
-// regardless; the four more specific toggles below (migration 0049) match
-// by prefix rather than exact key, same as the original single
-// close_arrangement toggle did — this repo's own tests rely on that (a
-// randomized-suffix test template key like
-// `close_arrangement_customer_test_<uuid>` needs to match the same toggle
-// its real `close_arrangement_customer` counterpart would, without
-// colliding with that seeded row's unique template_key).
+// Same switches as handler.ts's isEligible: the master switch, plus the four
+// templates with their own (migration 0049). close_arrangement_customer/
+// grower match by prefix, so a test template named
+// close_arrangement_customer_test_<uuid> follows the real one's switch.
 function isEligible(templateKey: string, settings: NotificationSettingsRow): boolean {
   if (!settings.whatsapp_enabled) return false;
   if (templateKey.startsWith("close_arrangement_customer")) return settings.close_arrangement_customer_whatsapp_enabled;
@@ -84,7 +77,7 @@ function isEligible(templateKey: string, settings: NotificationSettingsRow): boo
 
 export async function drainNotificationOutbox(deps: DrainDeps): Promise<DrainResult> {
   const { client, channel } = deps;
-  const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const worker = deps.workerId ?? crypto.randomUUID();
 
   const { data: settingsRow, error: settingsError } = await client
     .from("notification_settings")
@@ -95,19 +88,28 @@ export async function drainNotificationOutbox(deps: DrainDeps): Promise<DrainRes
   if (settingsError) throw settingsError;
   const settings = settingsRow as NotificationSettingsRow;
 
-  const { data: pendingRows, error: pendingError } = await client
-    .from("notification_outbox")
-    .select("id, template_key, sent_targets")
-    .is("sent_at", null)
-    .lt("attempt_count", maxAttempts);
-  if (pendingError) throw pendingError;
+  const { data: claimed, error: claimError } = await client.rpc("claim_outbox_rows", {
+    p_worker: worker,
+    p_limit: deps.batchSize ?? 25,
+  });
+  if (claimError) throw claimError;
 
-  const result: DrainResult = { processed: 0, sent: 0, failed: 0, skippedTogglesOff: 0, rows: [] };
+  const result: DrainResult = { processed: 0, sent: 0, failed: 0, skippedTogglesOff: 0, released: 0, rows: [] };
+  const settle = async (rowId: string, outcome: "sent" | "failed" | "skipped" | "released", detail: string | null = null) => {
+    const { error } = await client.rpc("settle_outbox_row", {
+      p_outbox_id: rowId,
+      p_worker: worker,
+      p_outcome: outcome,
+      p_detail: detail,
+    });
+    if (error) throw error;
+  };
 
-  for (const row of (pendingRows ?? []) as PendingOutboxRow[]) {
+  for (const row of (claimed ?? []) as ClaimedRow[]) {
     result.processed += 1;
 
     if (!isEligible(row.template_key, settings)) {
+      await settle(row.id, "skipped", `Skipped: WhatsApp was disabled for template "${row.template_key}" when dispatch ran`);
       result.skippedTogglesOff += 1;
       result.rows.push({ outboxId: row.id, status: "skipped_toggle_off" });
       continue;
@@ -117,38 +119,24 @@ export async function drainNotificationOutbox(deps: DrainDeps): Promise<DrainRes
       p_outbox_id: row.id,
     });
     if (resolveError) {
-      await recordFailure(client, row.id, resolveError.message);
+      await settle(row.id, "failed", resolveError.message);
       result.failed += 1;
       result.rows.push({ outboxId: row.id, status: "failed", error: resolveError.message });
       continue;
     }
 
-    // Delivery is tracked per TARGET, not per row. One outbox row fans out to
-    // one message per recipient whenever the company has no WhatsApp group id
-    // (resolve_outbox_dispatch's per-user fallback), and the row is only
-    // finished when every one of them has landed. Judging the row as a whole
-    // meant a single unreachable number sent every other recipient a fresh
-    // copy on each retry — see migration 0038 for the full write-up.
+    // Per-recipient delivery (migration 0038): a recipient reached on an
+    // earlier pass is skipped, and each one reached now is recorded at once.
     const alreadySent = new Set(row.sent_targets ?? []);
-    const resolvedTargets = (targets ?? []) as DispatchTarget[];
     const errors: string[] = [];
-
-    for (const { target, is_group, message } of resolvedTargets) {
-      // Delivered on an earlier pass — skipping is the whole point of the fix.
+    for (const { target, is_group, message } of (targets ?? []) as DispatchTarget[]) {
       if (alreadySent.has(target)) continue;
-
       const sendResult = await channel.send({ to: target, isGroup: is_group, body: message });
       if (!sendResult.success) {
         errors.push(sendResult.error ?? `send to ${target} failed`);
         continue;
       }
-
       alreadySent.add(target);
-
-      // Recorded immediately, one target at a time, rather than batched at the
-      // end: if this process dies mid-fan-out, everything already delivered is
-      // durably marked and the next pass resumes from there instead of
-      // starting the whole row over.
       const { error: recordError } = await client.rpc("record_outbox_target_sent", {
         p_outbox_id: row.id,
         p_target: target,
@@ -158,49 +146,18 @@ export async function drainNotificationOutbox(deps: DrainDeps): Promise<DrainRes
     }
 
     if (errors.length === 0) {
-      // Completion is stamped once, after the loop, from "nothing failed" —
-      // deliberately NOT from "this was the last target". resolve_outbox_dispatch's
-      // per-user branch has no ORDER BY, so the target order can differ between
-      // passes; a completion flag hung off the final iteration would be missed
-      // whenever the last target was one already delivered and skipped, leaving
-      // the row pending forever with nothing left to send. Judging it after the
-      // whole loop is order-independent.
-      //
-      // The empty target carries only the flag — the function ignores a blank
-      // target for the sent_targets list, so this also covers the two cases
-      // where the loop sent nothing: every target already delivered, and a row
-      // that resolved to no targets at all (a company with no group id and no
-      // phone numbers on file), which otherwise would never stop being retried.
-      const { error: completeError } = await client.rpc("record_outbox_target_sent", {
-        p_outbox_id: row.id,
-        p_target: "",
-        p_complete: true,
-      });
-      if (completeError) {
-        await recordFailure(client, row.id, completeError.message);
-        result.failed += 1;
-        result.rows.push({ outboxId: row.id, status: "failed", error: completeError.message });
-        continue;
-      }
+      // Judged after the loop: also true for a row whose recipients were all
+      // reached earlier, and for one that resolved to nobody.
+      await settle(row.id, "sent");
       result.sent += 1;
       result.rows.push({ outboxId: row.id, status: "sent" });
     } else {
       const combined = errors.join("; ");
-      await recordFailure(client, row.id, combined);
+      await settle(row.id, "failed", combined);
       result.failed += 1;
       result.rows.push({ outboxId: row.id, status: "failed", error: combined });
     }
   }
 
   return result;
-}
-
-// Increments through a Postgres function rather than a select-then-update.
-// Reading attempt_count and writing back value + 1 loses an increment whenever
-// two drain passes overlap (a slow run still going when the schedule fires the
-// next one): both read N, both write N + 1, and a permanently failing row
-// never reaches maxAttempts. The function does the arithmetic from the
-// column's own value in one statement — R7, concurrency is the database's job.
-async function recordFailure(client: SupabaseClient, outboxId: string, error: string): Promise<void> {
-  await client.rpc("record_outbox_attempt", { p_outbox_id: outboxId, p_error: error });
 }

@@ -22,4 +22,5 @@ export * from "./lifecycle-session";
 export * from "./alert-type";
 export * from "./notification-template";
 export * from "./notification-settings";
+export * from "./notification-dispatch-status";
 export * from "./alert";

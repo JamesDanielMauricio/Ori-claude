@@ -102,10 +102,13 @@ export async function deleteTestNotificationTemplate(id: string): Promise<void> 
 
 export interface CreateTestOutboxRowOptions {
   tradingDayId: string;
-  recipientType: "grower" | "customer";
+  recipientType: "grower" | "customer" | "backoffice" | "transporter";
   recipientCompanyId: string;
   templateKey: string;
   payload: unknown;
+  // When the message was queued — set in the past to test the 12-hour
+  // automatic-sending window (migration 0078). Defaults to now.
+  createdAt?: Date;
 }
 
 export async function createTestOutboxRow(options: CreateTestOutboxRowOptions) {
@@ -117,6 +120,7 @@ export async function createTestOutboxRow(options: CreateTestOutboxRowOptions) {
       recipientCompanyId: options.recipientCompanyId,
       templateKey: options.templateKey,
       payload: options.payload,
+      ...(options.createdAt ? { createdAt: options.createdAt } : {}),
     })
     .returning();
   if (!row) throw new Error("failed to create test notification_outbox row");

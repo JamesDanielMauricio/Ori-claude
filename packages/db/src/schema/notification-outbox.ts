@@ -2,6 +2,7 @@ import { integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-c
 
 import { companies } from "./company";
 import { notificationRecipientTypeEnum } from "./enums";
+import { profiles } from "./profile";
 import { tradingDays } from "./trading-day";
 
 // The durable half of the notification pipeline (R4's external-system
@@ -57,4 +58,18 @@ export const notificationOutbox = pgTable("notification_outbox", {
   // everyone who had already received it. The drain skips any target listed
   // here and only sets sentAt once every target is accounted for.
   sentTargets: text("sent_targets").array().notNull().default([]),
+  // Migration 0078 — how the dispatcher works the queue safely:
+  // claimedAt/claimedBy mark a row a dispatch run has taken (a claim older
+  // than 10 minutes belongs to a run that died); nextAttemptAt is the wait
+  // after a failed try (2/10/30/60 minutes); skippedAt marks a row whose
+  // WhatsApp switch was off when its turn came (never sent); and
+  // retryRequestedAt/By record staff's last "send again", which also restarts
+  // the 12-hour automatic-sending window. A row's state is read with the SQL
+  // function outbox_delivery_status, not worked out from these here.
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  claimedBy: uuid("claimed_by"),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+  skippedAt: timestamp("skipped_at", { withTimezone: true }),
+  retryRequestedAt: timestamp("retry_requested_at", { withTimezone: true }),
+  retryRequestedBy: uuid("retry_requested_by").references(() => profiles.userId, { onDelete: "set null" }),
 });

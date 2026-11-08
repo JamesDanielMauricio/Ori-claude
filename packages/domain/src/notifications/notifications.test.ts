@@ -1,5 +1,5 @@
 import { db } from "@ori/db";
-import { companies, notificationSettings } from "@ori/db/schema";
+import { companies, notificationOutbox, notificationSettings } from "@ori/db/schema";
 import type { Database } from "@ori/db/supabase-types";
 import {
   createTestBackofficeAdmin,
@@ -36,6 +36,12 @@ import {
 // trading-day constraint. Sequential execution across the whole domain
 // package (vitest.config.ts's fileParallelism: false) is what keeps this
 // file's toggle flips from racing any other file's.
+// A failed try waits before the next one (migration 0078: 2, 10, 30, 60
+// minutes). Tests stand in for that time passing by making the row due again.
+async function makeDue(outboxId: string): Promise<void> {
+  await db.update(notificationOutbox).set({ nextAttemptAt: null }).where(eq(notificationOutbox.id, outboxId));
+}
+
 describe("notifications module", () => {
   const cleanupFns: Array<() => Promise<void>> = [];
   const adminCleanupFns: Array<() => Promise<void>> = [];
@@ -241,7 +247,10 @@ describe("notifications module", () => {
     expect(data![0]!.message).toContain("Dana hi");
   }, 30000);
 
-  it("drainNotificationOutbox skips rows when the global toggle is off, and skips only close_arrangement-templated rows when the flow-specific toggle is off", async () => {
+  // 0048's rule, now carried by skipped_at (0078): a message whose switch is
+  // off when its turn comes is abandoned for good — turning the switch back
+  // on later must not send it.
+  it("drainNotificationOutbox skips a message whose switch is off, for good — the master switch, then a template's own switch", async () => {
     const template = await createTestNotificationTemplate({ templateKey: `test_template_${crypto.randomUUID()}` });
     cleanupFns.push(() => deleteTestNotificationTemplate(template.id));
     // Prefixed like the real seeded 'close_arrangement_customer' key
@@ -261,54 +270,63 @@ describe("notifications module", () => {
     const day = await createTestTradingDay({ initiatedByUserId: admin2.userId });
     cleanupFns.push(() => deleteTestTradingDay(day.id));
 
-    const genericRow = await createTestOutboxRow({
-      tradingDayId: day.id,
-      recipientType: "customer",
-      recipientCompanyId: company.id,
-      templateKey: template.templateKey,
-      payload: { lines: [] },
-    });
-    const closeArrangementRow = await createTestOutboxRow({
-      tradingDayId: day.id,
-      recipientType: "customer",
-      recipientCompanyId: company.id,
-      templateKey: closeArrangementTemplate.templateKey,
-      payload: { lines: [] },
-    });
+    const queue = async (templateKey: string) =>
+      (
+        await createTestOutboxRow({
+          tradingDayId: day.id,
+          recipientType: "customer",
+          recipientCompanyId: company.id,
+          templateKey,
+          payload: { lines: [] },
+        })
+      ).id;
+    const statusOf = (result: Awaited<ReturnType<typeof drainNotificationOutbox>>, id: string) =>
+      result.rows.find((row) => row.outboxId === id)?.status;
 
-    // Both toggles off: nothing is sent at all.
+    // Master switch off: both are skipped, and nothing is sent.
+    const genericOff = await queue(template.templateKey);
+    const closeOff = await queue(closeArrangementTemplate.templateKey);
     const channel1 = new FakeNotificationChannel();
     const result1 = await drainNotificationOutbox({ client: admin.client, channel: channel1 });
-    expect(result1.skippedTogglesOff).toBe(2);
-    expect(channel1.sent).toHaveLength(0);
+    expect(statusOf(result1, genericOff)).toBe("skipped_toggle_off");
+    expect(statusOf(result1, closeOff)).toBe("skipped_toggle_off");
+    expect(channel1.sent.filter((m) => m.to === "grp-toggle-test")).toHaveLength(0);
 
-    // Global on, close-arrangement-specific toggle still off: the generic
-    // template sends, the close_arrangement one is still held back.
+    // Master on, close-arrangement switch still off: a new generic message
+    // sends, a new close-arrangement one is skipped, and the two skipped
+    // earlier stay skipped.
     await admin.client.from("notification_settings").update({ whatsapp_enabled: true }).eq("id", true);
+    const genericOn = await queue(template.templateKey);
+    const closeStillOff = await queue(closeArrangementTemplate.templateKey);
     const channel2 = new FakeNotificationChannel();
     const result2 = await drainNotificationOutbox({ client: admin.client, channel: channel2 });
-    expect(result2.sent).toBe(1);
-    expect(result2.skippedTogglesOff).toBe(1);
-    expect(channel2.sent).toHaveLength(1);
+    expect(statusOf(result2, genericOn)).toBe("sent");
+    expect(statusOf(result2, closeStillOff)).toBe("skipped_toggle_off");
+    expect(statusOf(result2, genericOff)).toBeUndefined();
+    expect(statusOf(result2, closeOff)).toBeUndefined();
 
-    const { data: genericAfter } = await admin.client.from("notification_outbox").select("sent_at").eq("id", genericRow.id).single();
-    expect(genericAfter?.sent_at).not.toBeNull();
-    const { data: closeArrangementAfter } = await admin.client
-      .from("notification_outbox")
-      .select("sent_at")
-      .eq("id", closeArrangementRow.id)
-      .single();
-    expect(closeArrangementAfter?.sent_at).toBeNull();
-
-    // Both toggles on: the previously-held-back row now sends too.
+    // Both on: a new close-arrangement message sends.
     await admin.client
       .from("notification_settings")
       .update({ close_arrangement_customer_whatsapp_enabled: true })
       .eq("id", true);
+    const closeOn = await queue(closeArrangementTemplate.templateKey);
     const channel3 = new FakeNotificationChannel();
     const result3 = await drainNotificationOutbox({ client: admin.client, channel: channel3 });
-    expect(result3.sent).toBe(1);
-    expect(result3.skippedTogglesOff).toBe(0);
+    expect(statusOf(result3, closeOn)).toBe("sent");
+    expect(result3.rows.map((row) => row.outboxId)).not.toContain(closeStillOff);
+
+    const { data: states } = await admin.client
+      .from("notification_deliveries")
+      .select("id, status")
+      .in("id", [genericOff, closeOff, genericOn, closeStillOff, closeOn]);
+    expect(Object.fromEntries((states ?? []).map((row) => [row.id, row.status]))).toEqual({
+      [genericOff]: "skipped",
+      [closeOff]: "skipped",
+      [genericOn]: "sent",
+      [closeStillOff]: "skipped",
+      [closeOn]: "sent",
+    });
   }, 30000);
 
   it("drainNotificationOutbox sends via the injected channel and records a failed send for retry (attempt_count/last_error), without touching sent_at", async () => {
@@ -340,26 +358,39 @@ describe("notifications module", () => {
     // First attempt: the fake channel fails every send to this group.
     const failingChannel = new FakeNotificationChannel(["grp-fail-test"]);
     const failResult = await drainNotificationOutbox({ client: admin.client, channel: failingChannel });
-    expect(failResult.failed).toBe(1);
-    expect(failResult.sent).toBe(0);
+    expect(failResult.rows.find((row) => row.outboxId === outboxRow.id)?.status).toBe("failed");
 
     const { data: afterFail } = await admin.client
       .from("notification_outbox")
-      .select("sent_at, attempt_count, last_error")
+      .select("sent_at, attempt_count, last_error, next_attempt_at")
       .eq("id", outboxRow.id)
       .single();
     expect(afterFail?.sent_at).toBeNull();
     expect(afterFail?.attempt_count).toBe(1);
     expect(afterFail?.last_error).toContain("grp-fail-test");
+    // 0078: the next try waits (2 minutes after the first failure)…
+    expect(Date.parse(afterFail!.next_attempt_at!)).toBeGreaterThan(Date.now() + 60_000);
 
-    // Second attempt: the channel now succeeds — the row was left
-    // eligible for retry (sent_at still null), so drain picks it up again.
+    // …so a drain straight away — a staff nudge, say — leaves it alone and
+    // does not use up its next try.
+    const tooSoonChannel = new FakeNotificationChannel();
+    await drainNotificationOutbox({ client: admin.client, channel: tooSoonChannel });
+    expect(tooSoonChannel.sent.filter((m) => m.to === "grp-fail-test")).toHaveLength(0);
+    const { data: afterTooSoon } = await admin.client
+      .from("notification_outbox")
+      .select("attempt_count")
+      .eq("id", outboxRow.id)
+      .single();
+    expect(afterTooSoon?.attempt_count).toBe(1);
+
+    // Once the wait is over the channel succeeds and the row is picked up.
+    await makeDue(outboxRow.id);
     const succeedingChannel = new FakeNotificationChannel();
     const retryResult = await drainNotificationOutbox({ client: admin.client, channel: succeedingChannel });
-    expect(retryResult.sent).toBe(1);
+    expect(retryResult.rows.find((row) => row.outboxId === outboxRow.id)?.status).toBe("sent");
     // The group id arrives bare and flagged as a group: a channel can't tell
     // a group id from a phone number by looking at it.
-    expect(succeedingChannel.sent).toEqual([
+    expect(succeedingChannel.sent.filter((m) => m.to === "grp-fail-test")).toEqual([
       expect.objectContaining({ to: "grp-fail-test", isGroup: true }),
     ]);
 
@@ -428,7 +459,7 @@ describe("notifications module", () => {
     // Pass 1: one number is permanently unreachable, the other takes delivery.
     const firstChannel = new FakeNotificationChannel(["972500000002"]);
     const firstPass = await drainNotificationOutbox({ client: admin.client, channel: firstChannel });
-    expect(firstPass.failed).toBe(1);
+    expect(firstPass.rows.find((row) => row.outboxId === outboxRow.id)?.status).toBe("failed");
     expect(firstChannel.sent.map((message) => message.to).sort()).toEqual([
       "972500000001",
       "972500000002",
@@ -447,14 +478,17 @@ describe("notifications module", () => {
 
     // Pass 2: the same number still fails. The reachable recipient must NOT be
     // contacted again — this assertion is the regression itself.
+    // (0078: a failed try waits before the next — stand in for the wait.)
+    await makeDue(outboxRow.id);
     const secondChannel = new FakeNotificationChannel(["972500000002"]);
     await drainNotificationOutbox({ client: admin.client, channel: secondChannel });
     expect(secondChannel.sent.map((message) => message.to)).toEqual(["972500000002"]);
 
     // Pass 3: the number recovers. The row finishes without a duplicate.
+    await makeDue(outboxRow.id);
     const thirdChannel = new FakeNotificationChannel();
     const thirdPass = await drainNotificationOutbox({ client: admin.client, channel: thirdChannel });
-    expect(thirdPass.sent).toBe(1);
+    expect(thirdPass.rows.find((row) => row.outboxId === outboxRow.id)?.status).toBe("sent");
     expect(thirdChannel.sent.map((message) => message.to)).toEqual(["972500000002"]);
 
     const { data: afterThird } = await admin.client

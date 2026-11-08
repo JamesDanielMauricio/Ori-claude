@@ -41,6 +41,7 @@ const Transporters = lazyRoute(() => import("@/routes/backoffice/transporters"))
 const Users = lazyRoute(() => import("@/routes/backoffice/users"));
 const UsersImport = lazyRoute(() => import("@/routes/backoffice/users-import"));
 const UsersReset = lazyRoute(() => import("@/routes/backoffice/users-reset"));
+const NotificationDeliveries = lazyRoute(() => import("@/routes/backoffice/notification-deliveries"));
 const DistributorGrower = lazyRoute(() => import("@/routes/backoffice/distributor-grower"));
 const DistributorCustomer = lazyRoute(() => import("@/routes/backoffice/distributor-customer"));
 
@@ -89,6 +90,7 @@ export function AppRoutes() {
             <Route path="users" element={<Users />} />
             <Route path="users/import" element={<UsersImport />} />
             <Route path="users/reset" element={<UsersReset />} />
+            <Route path="notification-deliveries" element={<NotificationDeliveries />} />
             <Route path="distributor-grower" element={<DistributorGrower />} />
             <Route path="distributor-customer" element={<DistributorCustomer />} />
           </Route>

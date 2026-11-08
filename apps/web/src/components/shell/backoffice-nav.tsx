@@ -57,6 +57,7 @@ const SYSTEM_NAV: Array<{ href: string; label: string; icon: IconName }> = [
   { href: "/backoffice/customers", label: "לקוחות", icon: "users" },
   { href: "/backoffice/transporters", label: "מובילים", icon: "truck" },
   { href: "/backoffice/users", label: "משתמשים", icon: "user" },
+  { href: "/backoffice/notification-deliveries", label: "הודעות WhatsApp", icon: "bell" },
 ];
 
 // The icon leads the row (inline-start, so the right in RTL) and the label

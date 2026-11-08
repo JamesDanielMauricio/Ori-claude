@@ -822,6 +822,12 @@ export type Database = {
           last_error: string | null;
           last_attempted_at: string | null;
           sent_targets: string[];
+          claimed_at: string | null;
+          claimed_by: string | null;
+          next_attempt_at: string | null;
+          skipped_at: string | null;
+          retry_requested_at: string | null;
+          retry_requested_by: string | null;
         };
         Insert: {
           id?: string;
@@ -836,6 +842,12 @@ export type Database = {
           last_error?: string | null;
           last_attempted_at?: string | null;
           sent_targets?: string[];
+          claimed_at?: string | null;
+          claimed_by?: string | null;
+          next_attempt_at?: string | null;
+          skipped_at?: string | null;
+          retry_requested_at?: string | null;
+          retry_requested_by?: string | null;
         };
         Update: {
           id?: string;
@@ -850,6 +862,12 @@ export type Database = {
           last_error?: string | null;
           last_attempted_at?: string | null;
           sent_targets?: string[];
+          claimed_at?: string | null;
+          claimed_by?: string | null;
+          next_attempt_at?: string | null;
+          skipped_at?: string | null;
+          retry_requested_at?: string | null;
+          retry_requested_by?: string | null;
         };
         Relationships: [
           {
@@ -967,6 +985,27 @@ export type Database = {
         };
         Relationships: [];
       };
+      notification_dispatch_status: {
+        Row: {
+          id: boolean;
+          last_run_at: string | null;
+          channel_problem: string | null;
+          channel_problem_since: string | null;
+        };
+        Insert: {
+          id?: boolean;
+          last_run_at?: string | null;
+          channel_problem?: string | null;
+          channel_problem_since?: string | null;
+        };
+        Update: {
+          id?: boolean;
+          last_run_at?: string | null;
+          channel_problem?: string | null;
+          channel_problem_since?: string | null;
+        };
+        Relationships: [];
+      };
       alerts: {
         Row: {
           id: string;
@@ -1065,9 +1104,70 @@ export type Database = {
       };
     };
     Views: {
-      [_ in never]: never;
+      notification_deliveries: {
+        Row: {
+          id: string;
+          trading_day_id: string;
+          trade_date: string | null;
+          template_key: string;
+          recipient_type: Database["public"]["Enums"]["notification_recipient_type"];
+          recipient_company_id: string;
+          recipient_name: string | null;
+          created_at: string;
+          sent_at: string | null;
+          attempt_count: number;
+          last_error: string | null;
+          last_attempted_at: string | null;
+          next_attempt_at: string | null;
+          retry_requested_at: string | null;
+          delivered_count: number;
+          status: "sent" | "skipped" | "failed" | "expired" | "sending" | "retrying" | "waiting";
+        };
+        Relationships: [];
+      };
     };
     Functions: {
+      claim_outbox_rows: {
+        Args: {
+          p_worker: string;
+          p_limit?: number;
+        };
+        Returns: Array<{ id: string; template_key: string; sent_targets: string[] }>;
+      };
+      settle_outbox_row: {
+        Args: {
+          p_outbox_id: string;
+          p_worker: string;
+          p_outcome: "sent" | "failed" | "released" | "skipped";
+          p_detail?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["notification_outbox"]["Row"];
+      };
+      retry_outbox_row: {
+        Args: {
+          p_outbox_id: string;
+        };
+        Returns: Database["public"]["Tables"]["notification_outbox"]["Row"];
+      };
+      record_dispatch_run: {
+        Args: {
+          p_channel_ok: boolean | null;
+          p_channel_problem?: string | null;
+        };
+        Returns: void;
+      };
+      normalize_phone_number: {
+        Args: {
+          p_input: string | null;
+        };
+        Returns: string | null;
+      };
+      whatsapp_personal_number: {
+        Args: {
+          p_phone: string | null;
+        };
+        Returns: string | null;
+      };
       current_role: {
         Args: never;
         Returns: Database["public"]["Enums"]["user_role"];

@@ -607,6 +607,29 @@ transaction has already committed. Three things were the explicit point of this 
   own documented operational risk): `notification_outbox.attempt_count`/`last_error`/
   `last_attempted_at` accumulate a visible history instead of silently vanishing into one
   unmonitored inbox.
+- **How the queue is worked (migrations 0077/0078, release workbook tasks 15–16 — supersedes the
+  "fetch pending rows" loop described above).** The Edge Function is split into `handler.ts`
+  (the run), `provider.ts` (the Green API call), `db.ts` (the database calls) and `phone.ts`, and
+  is tested in Deno (`index.test.ts`; CI also runs it against the job's real database). A run may
+  be started only by the service-role key (the 10-minute schedule) or a signed-in backoffice user
+  (the office's nudge) — checked before any setting or queue row is read. It claims a batch with
+  `claim_outbox_rows` (`for update skip locked` + `claimed_at`/`claimed_by`, so two runs never get
+  the same row; a claim older than 10 minutes is a dead run's and can be taken again) and settles
+  each row with `settle_outbox_row`: **sent**; **failed** (one try, then a wait of 2/10/30/60
+  minutes, so quick nudges can't use up the five tries); **released** (a WhatsApp-wide problem —
+  rejected credentials, no test phone — costs no try, stops the run, and is shown to staff via
+  `notification_dispatch_status`); **skipped** (switch off — never sent, 0048's rule, now
+  `skipped_at`). Nothing older than 12 hours goes out on its own (James, 2026-11-08); staff can
+  send it again from the "הודעות WhatsApp" screen (`retry_outbox_row`), which keeps the recipients
+  already reached (`sent_targets`). The one rule for a row's state is SQL
+  `outbox_delivery_status`. Errors are stripped of the Green API token before they are stored.
+  Exactly-once is not promised: a run that dies between the provider accepting a message and the
+  row being recorded can repeat that one message after its claim expires. `drain.ts` makes the
+  same calls in the same order, for the domain tests. Phone numbers follow one rule — Israeli
+  numbers stored as `0501234567`, foreign ones (written with + and a country code) as
+  `+12125551234` — in three copies (`packages/shared/src/phone.ts`, SQL
+  `normalize_phone_number`, the Edge `phone.ts`) tested against one shared list of examples
+  (`packages/shared/src/phone-cases.json`).
 - **Alerts' privacy gap is closed from the start, as an RLS policy — not an application filter.**
   The PRD flags Alerts' own privacy rule as likely defaulted to "everyone" in the source, never
   fixed. `packages/db/migrations/0023` gives `alerts` `intended_for_user_id = auth.uid()` on both
