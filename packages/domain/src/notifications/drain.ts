@@ -1,3 +1,4 @@
+import type { Database } from "@ori/db/supabase-types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { NotificationChannel } from "./channel";
@@ -18,7 +19,7 @@ import type { NotificationChannel } from "./channel";
 // Not copied: the dev-environment preview, the caller check and the time
 // budget (Deno-only; index.test.ts covers them).
 export interface DrainDeps {
-  client: SupabaseClient;
+  client: SupabaseClient<Database>;
   channel: NotificationChannel;
   // How many rows to claim at once (the dispatcher uses 25).
   batchSize?: number;
@@ -29,7 +30,7 @@ export interface DrainDeps {
 
 export interface DrainRowResult {
   outboxId: string;
-  status: "sent" | "failed" | "skipped_toggle_off" | "released";
+  status: "sent" | "failed" | "skipped_toggle_off";
   error?: string;
 }
 
@@ -38,29 +39,17 @@ export interface DrainResult {
   sent: number;
   failed: number;
   skippedTogglesOff: number;
-  released: number;
   rows: DrainRowResult[];
 }
 
-interface ClaimedRow {
-  id: string;
-  template_key: string;
-  sent_targets: string[] | null;
-}
-
-interface NotificationSettingsRow {
-  whatsapp_enabled: boolean;
-  notify_growers_on_business_day_open: boolean;
-  shop_open_whatsapp_enabled: boolean;
-  close_arrangement_customer_whatsapp_enabled: boolean;
-  close_arrangement_grower_whatsapp_enabled: boolean;
-}
-
-interface DispatchTarget {
-  target: string;
-  is_group: boolean;
-  message: string;
-}
+type NotificationSettingsRow = Pick<
+  Database["public"]["Tables"]["notification_settings"]["Row"],
+  | "whatsapp_enabled"
+  | "notify_growers_on_business_day_open"
+  | "shop_open_whatsapp_enabled"
+  | "close_arrangement_customer_whatsapp_enabled"
+  | "close_arrangement_grower_whatsapp_enabled"
+>;
 
 // Same switches as handler.ts's isEligible: the master switch, plus the four
 // templates with their own (migration 0049). close_arrangement_customer/
@@ -86,10 +75,10 @@ export async function drainNotificationOutbox(deps: DrainDeps): Promise<DrainRes
     )
     .single();
   if (settingsError) throw settingsError;
-  const settings = settingsRow as NotificationSettingsRow;
+  const settings: NotificationSettingsRow = settingsRow;
 
-  const result: DrainResult = { processed: 0, sent: 0, failed: 0, skippedTogglesOff: 0, released: 0, rows: [] };
-  const settle = async (rowId: string, outcome: "sent" | "failed" | "skipped" | "released", detail: string | null = null) => {
+  const result: DrainResult = { processed: 0, sent: 0, failed: 0, skippedTogglesOff: 0, rows: [] };
+  const settle = async (rowId: string, outcome: "sent" | "failed" | "skipped", detail: string | null = null) => {
     const { error } = await client.rpc("settle_outbox_row", {
       p_outbox_id: rowId,
       p_worker: worker,
@@ -109,7 +98,7 @@ export async function drainNotificationOutbox(deps: DrainDeps): Promise<DrainRes
       p_limit: batchSize,
     });
     if (claimError) throw claimError;
-    const rows = (claimed ?? []) as ClaimedRow[];
+    const rows = claimed ?? [];
 
     for (const row of rows) {
       result.processed += 1;
@@ -135,7 +124,7 @@ export async function drainNotificationOutbox(deps: DrainDeps): Promise<DrainRes
       // earlier pass is skipped, and each one reached now is recorded at once.
       const alreadySent = new Set(row.sent_targets ?? []);
       const errors: string[] = [];
-      for (const { target, is_group, message } of (targets ?? []) as DispatchTarget[]) {
+      for (const { target, is_group, message } of targets ?? []) {
         if (alreadySent.has(target)) continue;
         const sendResult = await channel.send({ to: target, isGroup: is_group, body: message });
         if (!sendResult.success) {

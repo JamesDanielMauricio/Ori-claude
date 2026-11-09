@@ -55,6 +55,17 @@ export function toWhatsAppNumber(phone: string | null | undefined): string | nul
 // on the screen, and apps/api runs as a Vercel function with its own limit.
 const SEND_TIMEOUT_MS = 15_000;
 
+// The token rides in the URL path, so any error that repeats the URL carries
+// it; this takes it out before an error leaves this file, exactly as the Edge
+// sender's redactSecrets does (whatsapp-dispatch/provider.ts).
+function redactSecrets(text: string, credentials: GreenApiCredentials): string {
+  let out = text.replace(/waInstance[0-9]*\/([A-Za-z]+)\/[^\s"')]+/g, "waInstance***/$1/***");
+  for (const secret of [credentials.apiToken, credentials.idInstance]) {
+    if (secret && secret.length >= 4) out = out.split(secret).join("***");
+  }
+  return out;
+}
+
 export function createGreenApiChannel(
   credentials: GreenApiCredentials,
   fetchImpl: typeof fetch = fetch,
@@ -87,7 +98,10 @@ export function createGreenApiChannel(
           signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
         });
         if (!response.ok) {
-          const detail = await response.text().catch(() => "");
+          // Redacted whole, then capped. Capped first, a secret straddling the
+          // cut would survive as a prefix the exact-match redaction cannot see.
+          const responseText = await response.text().catch(() => "");
+          const detail = redactSecrets(responseText, credentials).slice(0, 300);
           return {
             success: false,
             error: `Green API responded ${response.status}${detail ? `: ${detail}` : ""}`,
@@ -95,7 +109,10 @@ export function createGreenApiChannel(
         }
         return { success: true };
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        return {
+          success: false,
+          error: redactSecrets(error instanceof Error ? error.message : String(error), credentials),
+        };
       }
     },
   };

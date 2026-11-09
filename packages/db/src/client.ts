@@ -23,5 +23,3 @@ const env = loadEnv(
 const queryClient = postgres(env.DATABASE_URL, { max: 1, prepare: false });
 
 export const db = drizzle(queryClient, { schema });
-
-export type Database = typeof db;

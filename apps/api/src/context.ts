@@ -2,6 +2,7 @@ import { db } from "@ori/db";
 import { profiles } from "@ori/db/schema";
 import type { UserRole } from "@ori/shared/roles";
 import { createClient } from "@supabase/supabase-js";
+import { TRPCError } from "@trpc/server";
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
 import { eq } from "drizzle-orm";
 
@@ -10,8 +11,11 @@ import { env } from "./env";
 // Verifying a bearer token only needs the anon key — it's the same
 // operation supabase-js does client-side, just run here so we can look up
 // the caller's app-level role afterward. This client never touches the
-// service-role key.
-const anonClient = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
+// service-role key. It only ever checks other people's tokens, so it keeps
+// no session of its own and runs no refresh timer.
+const anonClient = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
 
 export interface AuthenticatedCaller {
   userId: string;
@@ -33,7 +37,19 @@ async function resolveCaller(
   const token = authorizationHeader.slice("Bearer ".length);
 
   const { data, error } = await anonClient.auth.getUser(token);
-  if (error || !data.user?.email) {
+  if (error) {
+    // "Not a valid session" (a 4xx) is an answer; Auth being down or
+    // unreachable (a 5xx, or no status at all) is not, and must not tell the
+    // caller their sign-in is bad — the same rule as whatsapp-dispatch/db.ts.
+    // The message is the bare code, as UNAUTHORIZED's is.
+    if (error.status !== undefined && error.status >= 400 && error.status < 500) return null;
+    throw new TRPCError({
+      code: "SERVICE_UNAVAILABLE",
+      message: "SERVICE_UNAVAILABLE",
+      cause: error,
+    });
+  }
+  if (!data.user?.email) {
     return null;
   }
 

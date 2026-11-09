@@ -100,4 +100,54 @@ describe("createGreenApiChannel", () => {
       error: "network down",
     });
   });
+
+  // The token is part of the URL path, so a provider body or a fetch error
+  // that repeats the URL would otherwise hand it to the admin's screen.
+  it("takes the instance id and token out of a failure, and caps the provider's body", async () => {
+    const credentials = { idInstance: "7105123456", apiToken: "secret-token-abc" };
+    const echoing = createGreenApiChannel(
+      credentials,
+      (async (url: string) =>
+        new Response(`bad request for ${url} (token secret-token-abc)`, {
+          status: 400,
+        })) as unknown as typeof fetch,
+    );
+    const echoed = await echoing.send({ to: "972501234567", isGroup: false, body: "x" });
+    expect(echoed).toEqual({
+      success: false,
+      error:
+        "Green API responded 400: bad request for https://api.green-api.com/waInstance***/sendMessage/*** (token ***)",
+    });
+
+    const throwing = createGreenApiChannel(credentials, (async (url: string) => {
+      throw new Error(`fetch failed: ${url}`);
+    }) as unknown as typeof fetch);
+    const thrown = await throwing.send({ to: "972501234567", isGroup: false, body: "x" });
+    expect(thrown.error).toBe(
+      "fetch failed: https://api.green-api.com/waInstance***/sendMessage/***",
+    );
+
+    const verbose = createGreenApiChannel(
+      credentials,
+      (async () => new Response("x".repeat(5000), { status: 502 })) as unknown as typeof fetch,
+    );
+    const capped = await verbose.send({ to: "972501234567", isGroup: false, body: "x" });
+    expect(capped.error).toBe(`Green API responded 502: ${"x".repeat(300)}`);
+  });
+
+  // Redaction matches whole secrets only, so the body must be redacted before
+  // it is capped: cut first, a token straddling the cut kept its first letters.
+  it("redacts a token that straddles the cap", async () => {
+    const credentials = { idInstance: "7105123456", apiToken: "secret-token-abc" };
+    const straddling = createGreenApiChannel(
+      credentials,
+      (async () =>
+        new Response(`${"x".repeat(290)}token=secret-token-abc`, {
+          status: 500,
+        })) as unknown as typeof fetch,
+    );
+    const result = await straddling.send({ to: "972501234567", isGroup: false, body: "x" });
+    expect(result.error).toBe(`Green API responded 500: ${"x".repeat(290)}token=***`);
+    expect(result.error).not.toContain("secr");
+  });
 });
