@@ -24,7 +24,7 @@
     "@supabase/supabase-js": "^2.47.0",
     "@trpc/server": "^11.0.0",
     "drizzle-orm": "^0.38.0",
-    "fastify": "^5.2.0",
+    "fastify": "^5.12.8",
     "zod": "^3.24.0"
   },
   "devDependencies": {
