@@ -229,8 +229,12 @@ web3 = 30
 
 [auth.email]
 # Allow/disallow new user signups via email to your project.
-# SECURITY: off, for the same reason as [auth] enable_signup above.
-enable_signup = false
+# Stays ON, despite its name: the Supabase CLI turns this into "is the email
+# provider enabled at all", so false would also stop every existing user from
+# signing in with email and password (it broke CI's sign-ins). New accounts
+# are already refused by [auth] enable_signup = false above, which keeps sign-in
+# working.
+enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
