@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { inputClassName } from "@/components/reference-data/form-field";
 import { Icon } from "@/components/ui/icon";
 import { useExitAnimation } from "@/lib/use-exit-animation";
+
+import { placeCellPopoverVertically } from "./cell-popover-placement";
 
 // A trigger button plus a panel that opens over the page, for the one kind
 // of field a table cell can't hold inline: a list (a grower's in-season
@@ -45,7 +47,6 @@ export function CellPopover({
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{
-    top: number;
     right: number;
     maxWidth: number;
   } | null>(null);
@@ -59,8 +60,9 @@ export function CellPopover({
   function openPanel() {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) {
-      // Anchored under the trigger and aligned to its inline start (the
-      // right edge, in this RTL app), then clamped at BOTH edges.
+      // Aligned to the trigger's inline start (the right edge, in this RTL
+      // app), then clamped at BOTH edges. Above or below it is decided once
+      // the panel can be measured — see the layout effect below.
       //
       // `Math.max(8, …)` alone only held the right edge. Nothing held the
       // left: the panel's width is fixed by `panelClassName`, so on a narrow
@@ -80,13 +82,38 @@ export function CellPopover({
         Math.max(VIEWPORT_MARGIN, window.innerWidth - VIEWPORT_MARGIN - MIN_PANEL_WIDTH),
       );
       setPosition({
-        top: Math.min(rect.bottom + 6, window.innerHeight - 24),
         right,
         maxWidth: Math.max(MIN_PANEL_WIDTH, window.innerWidth - right - VIEWPORT_MARGIN),
       });
     }
     setOpen(true);
   }
+
+  // Below the trigger, or above it when it doesn't fit below (see
+  // cell-popover-placement.ts). Needs the panel's real height, so it runs
+  // once the panel is in the page — a layout effect, before the first paint.
+  // Written straight onto the panel's style, as ui/select.tsx does: none of
+  // it changes what React renders.
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current;
+    const panel = panelRef.current;
+    if (!open || !trigger || !panel) return;
+    const rect = trigger.getBoundingClientRect();
+    const placement = placeCellPopoverVertically({
+      triggerTop: rect.top,
+      triggerBottom: rect.bottom,
+      viewportHeight: window.innerHeight,
+      // Full height of the content whatever max-height applies right now
+      // (scrollHeight), plus the border (offsetHeight − clientHeight).
+      panelHeight: panel.scrollHeight + panel.offsetHeight - panel.clientHeight,
+    });
+    panel.style.top = placement.top === null ? "" : `${placement.top}px`;
+    panel.style.bottom = placement.bottom === null ? "" : `${placement.bottom}px`;
+    panel.style.maxHeight = `${placement.maxHeight}px`;
+    // The corner against the trigger, which the open/close animation scales
+    // from — so the panel grows out of it whichever way it opened.
+    panel.style.transformOrigin = placement.upward ? "bottom right" : "top right";
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -158,13 +185,10 @@ export function CellPopover({
             data-closing={closing || undefined}
             style={{
               position: "fixed",
-              top: position.top,
               right: position.right,
               maxWidth: position.maxWidth,
             }}
-            // `origin-top-right`: the corner pinned under the trigger (see
-            // openPanel), which the open/close animation scales from.
-            className={`animate-popover origin-top-right z-50 max-h-[60dvh] overflow-y-auto rounded-xl border border-border bg-surface p-3 text-ink shadow-overlay ${panelClassName}`}
+            className={`animate-popover z-50 max-h-[60dvh] overflow-y-auto rounded-xl border border-border bg-surface p-3 text-ink shadow-overlay ${panelClassName}`}
           >
             <div className="mb-2 flex items-center justify-between gap-2">
               <span className="text-xs font-semibold tracking-[0.08em] text-ink-subtle">

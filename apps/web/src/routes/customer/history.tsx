@@ -131,7 +131,7 @@ export default function CustomerOrderHistoryPage() {
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-10 w-full" />
           </div>
-        ) : daysQuery.isError && !daysQuery.isFetchNextPageError ? (
+        ) : daysQuery.isError && daysQuery.data === undefined ? (
           // Not "you have no orders yet" — that sentence would tell a customer
           // their entire order history had vanished.
           <QueryError

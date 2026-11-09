@@ -79,9 +79,10 @@ export function TradingDayCalendarPicker({
   onSelect: (date: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [viewDate, setViewDate] = useState<Date>(() =>
-    parseIsoDate(selectedDate ?? liveDate ?? todayIsoDate()),
-  );
+  // The month the popover opens on: the pinned date's, else the live day's,
+  // else today's.
+  const openingDate = () => parseIsoDate(selectedDate ?? liveDate ?? todayIsoDate());
+  const [viewDate, setViewDate] = useState<Date>(openingDate);
   const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
 
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -109,7 +110,7 @@ export function TradingDayCalendarPicker({
   }, [open, position]);
 
   function openPopover() {
-    setViewDate(parseIsoDate(selectedDate ?? liveDate ?? todayIsoDate()));
+    setViewDate(openingDate());
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) {
       // Right-anchored, growing toward the inline end (left, in this RTL
@@ -164,8 +165,11 @@ export function TradingDayCalendarPicker({
   // the visible month's trading days are already cached by the time the
   // popover opens — the grid (mounted only while open) then paints its dots
   // on the first frame instead of popping them in a round trip later.
-  // TanStack Query dedupes the two calls into one request.
-  const [monthStart, monthEnd] = monthBounds(viewDate);
+  // TanStack Query dedupes the two calls into one request. Keyed on the
+  // month openPopover will open on, not on viewDate: after paging and
+  // dismissing, viewDate is left on the paged month, which the next open
+  // resets away from.
+  const [monthStart, monthEnd] = monthBounds(openingDate());
   useTradingDaysInRange(monthStart, monthEnd);
 
   const shownDate = selectedDate ?? liveDate;

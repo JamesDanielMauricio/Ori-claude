@@ -32,6 +32,7 @@ import { isPalletQuantity, roundPallets } from "@ori/shared/pallets";
 import { formatVarietyName } from "@/lib/variety-label";
 
 import {
+  canArrangeFrom,
   parsePallets,
   type BoardCompany,
   type BoardOrder,
@@ -224,18 +225,6 @@ export interface Matrix {
 // occur in either half costs nothing and removes the question.
 const SEP = "\u0000";
 
-function emptyCells(width: number): MatrixCell[] {
-  return Array.from({ length: width }, () => ({
-    ordered: 0,
-    comment: null,
-    allocated: 0,
-    proposed: 0,
-    recordId: null,
-    price: null,
-    priceType: null,
-  }));
-}
-
 export function buildMatrix({
   picks,
   orders,
@@ -409,20 +398,19 @@ export function buildMatrix({
       const leftover = parsePallets(line.leftover_pallets);
       const allocated = allocatedByPickLine.get(line.id) ?? 0;
       const growerId = growerIdByPickId.get(line.daily_pick_id) ?? "";
-      const cells = emptyCells(columns.length);
-
-      for (const [customerId, index] of columnIndex) {
+      const cells = columns.map(({ customerId }): MatrixCell => {
+        const demand = `${variety.id}${SEP}${customerId}`;
         const allocation = cellByPickLineCustomer.get(`${line.id}${SEP}${customerId}`);
-        cells[index] = {
-          ordered: orderedByVarietyCustomer.get(`${variety.id}${SEP}${customerId}`) ?? 0,
-          comment: commentByVarietyCustomer.get(`${variety.id}${SEP}${customerId}`) ?? null,
+        return {
+          ordered: orderedByVarietyCustomer.get(demand) ?? 0,
+          comment: commentByVarietyCustomer.get(demand) ?? null,
           allocated: allocation?.allocated ?? 0,
           proposed: allocation?.proposed ?? 0,
           recordId: allocation?.recordId ?? null,
           price: allocation?.price ?? null,
           priceType: allocation?.priceType ?? null,
         };
-      }
+      });
 
       entry.growers.push({
         kind: "grower",
@@ -435,7 +423,7 @@ export function buildMatrix({
         leftover,
         allocated,
         available: roundPallets(inStock + leftover - allocated),
-        closed: pick.status === "closed",
+        closed: !canArrangeFrom(pick),
         cells,
       });
     }
@@ -445,36 +433,43 @@ export function buildMatrix({
     .map(([varietyId, entry]) => {
       const growers = entry.growers.sort((a, b) => a.growerName.localeCompare(b.growerName, "he"));
 
-      const summed = emptyCells(columns.length);
-      for (const [customerId, index] of columnIndex) {
-        // The product row's own cell: the customer's request (a fact about
-        // the variety, identical on every grower row beneath it) over the
-        // sum of what those growers have committed to them. No recordId —
-        // the sum may span several records, which is exactly why it is
-        // read-only.
-        summed[index] = {
-          ordered: orderedByVarietyCustomer.get(`${varietyId}${SEP}${customerId}`) ?? 0,
-          comment: commentByVarietyCustomer.get(`${varietyId}${SEP}${customerId}`) ?? null,
-          allocated: roundPallets(
-            growers.reduce((sum, grower) => sum + (grower.cells[index]?.allocated ?? 0), 0),
-          ),
-          proposed: roundPallets(
-            growers.reduce((sum, grower) => sum + (grower.cells[index]?.proposed ?? 0), 0),
-          ),
-          recordId: null,
-          price: null,
-          priceType: null,
-        };
-      }
+      // Present only when this variety came from exactly one lot — the case
+      // where the product row and the grower row are the same row.
+      const soleGrower = growers.length === 1 ? growers[0] : undefined;
+      // With one lot the product row IS the grower row, so it takes that
+      // grower's cells verbatim — recordId, price and all — and becomes
+      // directly writable. This is the one place the two row shapes merge,
+      // and it is why there is no expand control on a row that would only
+      // ever reveal a copy of itself.
+      const cells = soleGrower
+        ? soleGrower.cells
+        : columns.map(({ customerId }, index): MatrixCell => {
+            // The product row's own cell: the customer's request (a fact about
+            // the variety, identical on every grower row beneath it) over the
+            // sum of what those growers have committed to them. No recordId —
+            // the sum may span several records, which is exactly why it is
+            // read-only.
+            const demand = `${varietyId}${SEP}${customerId}`;
+            return {
+              ordered: orderedByVarietyCustomer.get(demand) ?? 0,
+              comment: commentByVarietyCustomer.get(demand) ?? null,
+              allocated: roundPallets(
+                growers.reduce((sum, grower) => sum + (grower.cells[index]?.allocated ?? 0), 0),
+              ),
+              proposed: roundPallets(
+                growers.reduce((sum, grower) => sum + (grower.cells[index]?.proposed ?? 0), 0),
+              ),
+              recordId: null,
+              price: null,
+              priceType: null,
+            };
+          });
 
       // Rounded to the database's two decimals: in JavaScript 0.1 + 0.2 is
       // 0.30000000000000004, and זמין would show a sliver of stock left.
       const inStock = roundPallets(growers.reduce((sum, grower) => sum + grower.inStock, 0));
       const leftover = roundPallets(growers.reduce((sum, grower) => sum + grower.leftover, 0));
       const allocated = roundPallets(growers.reduce((sum, grower) => sum + grower.allocated, 0));
-      // Present only when this variety came from exactly one lot — the case
-      // where the product row and the grower row are the same row.
-      const soleGrower = growers.length === 1 ? growers[0] : undefined;
 
       return {
         kind: "product" as const,
@@ -484,17 +479,12 @@ export function buildMatrix({
         familyName: entry.familyName,
         inStock,
         leftover,
-        ordered: roundPallets(summed.reduce((sum, cell) => sum + cell.ordered, 0)),
+        ordered: roundPallets(cells.reduce((sum, cell) => sum + cell.ordered, 0)),
         allocated,
         available: roundPallets(inStock + leftover - allocated),
         expandable: growers.length > 1,
         growers,
-        // With one lot the product row IS the grower row, so it takes that
-        // grower's cells verbatim — recordId, price and all — and becomes
-        // directly writable. This is the one place the two row shapes merge,
-        // and it is why there is no expand control on a row that would only
-        // ever reveal a copy of itself.
-        cells: soleGrower ? soleGrower.cells : summed,
+        cells,
       };
     })
     // Family first, then variety — the same catalog order the board's

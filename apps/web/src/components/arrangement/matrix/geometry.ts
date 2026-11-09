@@ -54,7 +54,7 @@ export const THUMB_INSET = 6;
 // thumb's is `bottom: 4` + its h-2, so without this each track would let its
 // thumb slide the last few pixels half-underneath the other one. Applied to
 // only ONE end of each track (the end nearest the other thumb's fixed
-// edge — see `measure()`), and only when the OTHER axis actually has
+// edge — see `thumbGeometry`), and only when the OTHER axis actually has
 // something to scroll; a table that only overflows vertically still gets
 // the full-height vertical track a plain scrollbar would have.
 export const CORNER_GUTTER = 18;
@@ -70,4 +70,86 @@ export const CELL_BORDER = "border-b border-e border-border/70";
 
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+/** The vertical thumb: px from the card's top, its length, and 0–100 progress. */
+export interface VerticalThumb {
+  top: number;
+  height: number;
+  /** 0–100, for the thumb's `aria-valuenow` — how far down the list this is. */
+  percent: number;
+}
+
+/**
+ * The horizontal thumb. `left`/`width` rather than `right`, so the maths is
+ * plain physical pixels-from-the-left regardless of the page's RTL
+ * direction — only the PROGRESS calculation has to account for RTL's
+ * negative `scrollLeft` convention.
+ */
+export interface HorizontalThumb {
+  left: number;
+  width: number;
+  percent: number;
+}
+
+/** What the thumbs are worked out from — an HTMLElement is one. */
+export interface ScrollMetrics {
+  clientHeight: number;
+  scrollHeight: number;
+  scrollTop: number;
+  clientWidth: number;
+  scrollWidth: number;
+  scrollLeft: number;
+}
+
+/**
+ * Both custom scrollbar thumbs for one reading of the scrollport, each null
+ * when its axis has nothing to scroll — in which case nothing is drawn, the
+ * same way a native scrollbar simply isn't when content already fits.
+ */
+export function thumbGeometry(element: ScrollMetrics): {
+  vertical: VerticalThumb | null;
+  horizontal: HorizontalThumb | null;
+} {
+  const scrollable = element.scrollHeight - element.clientHeight;
+  const hScrollable = element.scrollWidth - element.clientWidth;
+
+  let vertical: VerticalThumb | null = null;
+  if (scrollable > 0) {
+    const trackHeight = Math.max(
+      0,
+      element.clientHeight - THUMB_INSET - (hScrollable > 0 ? CORNER_GUTTER : THUMB_INSET),
+    );
+    const proportional = trackHeight * (element.clientHeight / element.scrollHeight);
+    const height = clamp(proportional, MIN_THUMB_H, trackHeight);
+    const top = THUMB_INSET + (element.scrollTop / scrollable) * (trackHeight - height);
+    const percent = Math.round((element.scrollTop / scrollable) * 100);
+    vertical = { top, height, percent };
+  }
+
+  // The one real difference from the vertical thumb is RTL's `scrollLeft`:
+  // 0 is the START (unscrolled — the rightmost columns, since this page
+  // reads right to left) and it goes NEGATIVE down to `-scrollable` at the
+  // far END, so `progress` has to be built from `-scrollLeft` rather than
+  // read off it directly the way `scrollTop` is above.
+  let horizontal: HorizontalThumb | null = null;
+  if (hScrollable > 0) {
+    // The vertical thumb's gutter is at the LEFT (its own home edge),
+    // not the right, so only the left bound of this track moves.
+    const leftMin = scrollable > 0 ? CORNER_GUTTER : THUMB_INSET;
+    const leftMax = element.clientWidth - THUMB_INSET;
+    const trackWidth = Math.max(0, leftMax - leftMin);
+    const proportional = trackWidth * (element.clientWidth / element.scrollWidth);
+    const width = clamp(proportional, MIN_THUMB_W, trackWidth);
+    const progress = -element.scrollLeft / hScrollable;
+    // 1 - progress: at progress 0 (start, unscrolled) the thumb sits at
+    // the FAR end of its own travel — which in this RTL track is the
+    // RIGHT side, i.e. the larger `left` value — and eases toward
+    // `leftMin` as progress reaches 1.
+    const left = leftMin + (1 - progress) * (trackWidth - width);
+    const percent = Math.round(progress * 100);
+    horizontal = { left, width, percent };
+  }
+
+  return { vertical, horizontal };
 }

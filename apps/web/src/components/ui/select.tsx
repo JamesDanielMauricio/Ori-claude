@@ -5,8 +5,11 @@ import { inputClassName } from "@/components/reference-data/form-field";
 import { Icon } from "@/components/ui/icon";
 import { useExitAnimation } from "@/lib/use-exit-animation";
 
-export interface SelectOption {
-  value: string;
+// Generic over the value so an enum-valued field (role, status, category…)
+// gets its own union back from onChange, and an option whose value isn't in
+// that union fails to compile instead of being written into the form.
+export interface SelectOption<T extends string = string> {
+  value: T;
   label: string;
   disabled?: boolean;
 }
@@ -39,7 +42,7 @@ const PORTAL_ROOT_SELECTOR = "dialog[open], [data-portal-root]";
 // Focus stays on the trigger the whole time — `aria-activedescendant` tells
 // assistive tech which option is highlighted — so the arrow keys, Home/End,
 // type-ahead and Enter all work from the trigger's own key handler.
-export function Select({
+export function Select<T extends string>({
   value,
   onChange,
   options,
@@ -47,19 +50,14 @@ export function Select({
   id,
   disabled = false,
   className = "",
-  // Order-product-list's quantity pill draws its own leading icon and
-  // trailing unit label around the trigger and doesn't want a second,
-  // built-in chevron competing with them.
-  showChevron = true,
 }: {
-  value: string;
-  onChange: (value: string) => void;
-  options: SelectOption[];
+  value: T;
+  onChange: (value: T) => void;
+  options: readonly SelectOption<T>[];
   "aria-label"?: string;
   id?: string;
   disabled?: boolean;
   className?: string;
-  showChevron?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
@@ -308,14 +306,12 @@ export function Select({
         className={`${inputClassName} flex items-center justify-between gap-2 text-start ${className}`}
       >
         <span className="truncate">{selectedOption?.label ?? value}</span>
-        {showChevron && (
-          <Icon
-            name="chevronDown"
-            className={`h-3.5 w-3.5 shrink-0 text-ink-subtle transition-transform duration-200 ${
-              open ? "rotate-180" : ""
-            }`}
-          />
-        )}
+        <Icon
+          name="chevronDown"
+          className={`h-3.5 w-3.5 shrink-0 text-ink-subtle transition-transform duration-200 ${
+            open ? "rotate-180" : ""
+          }`}
+        />
       </button>
 
       {present &&

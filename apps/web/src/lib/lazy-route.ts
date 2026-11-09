@@ -24,13 +24,31 @@ import { lazy, type ComponentType } from "react";
 // every other tab and outlive the problem.
 const RELOAD_GUARD_KEY = "ori-chunk-reload";
 
-// Whether this tab has already reloaded once for a failed chunk. The guard is
-// what stops a reload loop: if the chunk is still unreachable after a reload,
-// the cause is not a stale build (offline, a broken deployment) and reloading
+// How long a reload counts as "already tried". Long enough to cover the
+// reloaded page getting back to the same screen (the auth read, then the
+// layout's chunk, then the screen's), short enough that a later deployment in
+// this same long-lived tab gets its own reload.
+export const RELOAD_GUARD_MS = 60_000;
+
+// Pure, for lazy-route.test.ts: `stored` is the guard's value (when the last
+// reload happened), `now` the current time.
+//
+// Time-bounded rather than cleared by the next chunk that loads: a screen is
+// nested in a layout, and the layout's chunk loading in the reloaded page
+// cleared the guard before the screen's chunk failed again — so a screen whose
+// chunk always fails reloaded the tab forever.
+export function reloadedRecently(stored: string | null, now: number): boolean {
+  const elapsed = now - Number(stored);
+  return stored !== null && elapsed >= 0 && elapsed < RELOAD_GUARD_MS;
+}
+
+// Whether this tab has already reloaded for a failed chunk. The guard is what
+// stops a reload loop: if the chunk is still unreachable after a reload, the
+// cause is not a stale build (offline, a broken deployment) and reloading
 // again would just spin.
 function hasAlreadyReloaded(): boolean {
   try {
-    return window.sessionStorage.getItem(RELOAD_GUARD_KEY) !== null;
+    return reloadedRecently(window.sessionStorage.getItem(RELOAD_GUARD_KEY), Date.now());
   } catch {
     // sessionStorage can throw outright (blocked site data, some private
     // modes). Without it we cannot tell a first failure from a repeat, so we
@@ -41,17 +59,9 @@ function hasAlreadyReloaded(): boolean {
 
 function rememberReload() {
   try {
-    window.sessionStorage.setItem(RELOAD_GUARD_KEY, "1");
+    window.sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
   } catch {
     // Nothing to do: hasAlreadyReloaded() fails closed for the same reason.
-  }
-}
-
-function forgetReload() {
-  try {
-    window.sessionStorage.removeItem(RELOAD_GUARD_KEY);
-  } catch {
-    // Never stored in the first place.
   }
 }
 
@@ -60,12 +70,7 @@ function forgetReload() {
 export function lazyRoute(load: () => Promise<{ default: ComponentType }>) {
   return lazy(async () => {
     try {
-      const routeModule = await load();
-      // A chunk loaded, so this tab is on a build that still exists. Clear the
-      // guard so a *later* deployment in this same long-lived tab gets its own
-      // one free reload rather than inheriting a spent one.
-      forgetReload();
-      return routeModule;
+      return await load();
     } catch (error) {
       if (hasAlreadyReloaded()) throw error;
       rememberReload();

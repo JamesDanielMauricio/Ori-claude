@@ -7,6 +7,8 @@ import {
   hasSupply,
   listedFamilies,
   markSelected,
+  OPTIMISTIC_RECORD_PREFIX,
+  settleOptimisticRecord,
   type BoardCompany,
   type BoardPick,
   type BoardRecord,
@@ -271,5 +273,58 @@ describe("the board data underneath stays whole", () => {
     };
     const board = build([pickA, blank]);
     expect(board.growers.map((g) => g.growerId).sort()).toEqual([GROWER_A, GROWER_B].sort());
+  });
+});
+
+describe("settleOptimisticRecord", () => {
+  // A ✓ adds a placeholder record before the server answers; once it has,
+  // the placeholder must carry the real id or a × on it sends one that
+  // delete_arrangement_record cannot read.
+  const record = (id: string, pickLineId: string, orderLineId: string, quantity: number) => ({
+    id,
+    daily_pick_product_id: pickLineId,
+    daily_order_product_id: orderLineId,
+    customer_company_id: CUSTOMER_1,
+    quantity_pallets: quantity,
+    price: null,
+    price_type: null,
+  });
+  const dayWith = (records: BoardRecord[]) => ({
+    id: "day",
+    daily_arrangements: { id: "arrangement", arrangement_records: records },
+  });
+  const saved = {
+    id: "real-id",
+    daily_pick_product_id: "line-a",
+    daily_order_product_id: "order-1",
+  };
+
+  it("gives the matching placeholder the saved id, keeping what it holds", () => {
+    const other = record("other-id", "line-b", "order-1", 2);
+    // 4, not what was saved: a later edit typed over the same cell.
+    const placeholder = record(`${OPTIMISTIC_RECORD_PREFIX}x`, "line-a", "order-1", 4);
+    const settled = settleOptimisticRecord(dayWith([other, placeholder]), saved);
+    expect(settled.daily_arrangements.arrangement_records).toEqual([
+      other,
+      { ...placeholder, id: "real-id" },
+    ]);
+  });
+
+  it("leaves a real record on the same cell alone", () => {
+    const day = dayWith([record("existing-id", "line-a", "order-1", 3)]);
+    expect(settleOptimisticRecord(day, saved)).toBe(day);
+  });
+
+  it("leaves a placeholder on another cell alone", () => {
+    const day = dayWith([
+      record(`${OPTIMISTIC_RECORD_PREFIX}y`, "line-a", "order-2", 1),
+      record(`${OPTIMISTIC_RECORD_PREFIX}z`, "line-b", "order-1", 1),
+    ]);
+    expect(settleOptimisticRecord(day, saved)).toBe(day);
+  });
+
+  it("hands back the same day when there is no arrangement", () => {
+    const day = { id: "day", daily_arrangements: null };
+    expect(settleOptimisticRecord(day, saved)).toBe(day);
   });
 });

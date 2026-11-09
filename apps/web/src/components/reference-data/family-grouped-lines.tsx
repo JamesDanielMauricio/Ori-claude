@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import { ProductThumbnail } from "@/components/ui/product-thumbnail";
 
 // A read-only, family-grouped list of a single pick's or a single order's
@@ -31,7 +33,10 @@ export interface FamilyGroupedRow {
   lines: FamilyGroupedLine[];
 }
 
-export function FamilyGroupedLines({
+// Memoized: every row's panel stays mounted while collapsed, so without it
+// each keystroke or tick anywhere on the host screen re-rendered every
+// company's whole list. The hosts keep `families` stable per day's data.
+export const FamilyGroupedLines = memo(function FamilyGroupedLines({
   families,
   emptyLabel,
 }: {
@@ -50,7 +55,7 @@ export function FamilyGroupedLines({
       ))}
     </div>
   );
-}
+});
 
 function FamilyBlock({ family }: { family: FamilyGroupedRow }) {
   return (

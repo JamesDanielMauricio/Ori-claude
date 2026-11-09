@@ -15,7 +15,7 @@ import { initTheme } from "./lib/theme";
 import "@fontsource-variable/assistant";
 import "./globals.css";
 
-// The browser entry point. AuthProvider wraps Providers (React Query + tRPC +
+// The browser entry point. AuthProvider wraps Providers (React Query +
 // toasts), so that Providers can give every signed-in account a cache of its
 // own and start a fresh one when the account changes (lib/account-scope.ts).
 // AuthProvider itself reads nothing through React Query, so it needs nothing

@@ -140,6 +140,49 @@ export interface BoardRecord {
   price_type: string | null;
 }
 
+/**
+ * The id an optimistic ✓ gives a record the server has not returned yet. Not
+ * a uuid, so it must never reach an RPC — see settleOptimisticRecord.
+ */
+export const OPTIMISTIC_RECORD_PREFIX = "optimistic-";
+
+/**
+ * Gives the placeholder record an optimistic write added its real id, from
+ * the row arrange_to_customer returned, before the refetch lands. Until then
+ * the placeholder is what a × or an edit would send, and the server refuses
+ * its id. Matched on (pick line, order line), the key the RPC upserts on.
+ *
+ * Only the id changes: a later edit typed over the same cell may already sit
+ * on the placeholder, and the saved row would put the older figure back. The
+ * same day object comes back when there is nothing to settle, so a screen
+ * memoised on it does not re-derive.
+ */
+export function settleOptimisticRecord<
+  Day extends { daily_arrangements: { arrangement_records: BoardRecord[] } | null },
+>(
+  day: Day,
+  saved: Pick<BoardRecord, "id" | "daily_pick_product_id" | "daily_order_product_id">,
+): Day {
+  const arrangement = day.daily_arrangements;
+  if (!arrangement) return day;
+  const placeholder = arrangement.arrangement_records.find(
+    (record) =>
+      record.id.startsWith(OPTIMISTIC_RECORD_PREFIX) &&
+      record.daily_pick_product_id === saved.daily_pick_product_id &&
+      record.daily_order_product_id === saved.daily_order_product_id,
+  );
+  if (!placeholder) return day;
+  return {
+    ...day,
+    daily_arrangements: {
+      ...arrangement,
+      arrangement_records: arrangement.arrangement_records.map((record) =>
+        record === placeholder ? { ...record, id: saved.id } : record,
+      ),
+    },
+  };
+}
+
 export interface BoardCompany {
   id: string;
   name: string;
@@ -150,7 +193,6 @@ export interface BoardCompany {
 export interface BoardProduct {
   varietyId: string;
   varietyName: string;
-  familyId: string;
   familyName: string;
   imageUrl: string | null;
   /** נקטף — total pallets picked across every grower. */
@@ -254,8 +296,6 @@ export interface CustomerOrderLine {
    */
   previousOrdered: number | null;
   allocated: number;
-  /** Still owed to this customer on this line. */
-  outstanding: number;
   comment: string | null;
   allocations: LineAllocation[];
 }
@@ -294,6 +334,18 @@ export function parsePallets(value: string | number | null | undefined): number 
 // "what is a missing pallet count" across two views of one day is exactly the
 // disagreement this function exists to prevent.
 const num = parsePallets;
+
+/**
+ * Whether a pick's lots can still be arranged from. A closed pick (the truck
+ * icon) cannot: migration 0089 refuses any save that adds, re-sizes or removes
+ * an allocation on it. One rule for every view that offers a cell, so they
+ * cannot drift apart: the grid shows such a lot read-only (buildMatrix),
+ * nothing is proposed off it (dayToPropose) and no proposal lands on it
+ * (resolveProposal).
+ */
+export function canArrangeFrom(pick: Pick<BoardPick, "status">): boolean {
+  return pick.status !== "closed";
+}
 
 // "12:00:00" -> "12:00". Postgres `time` columns arrive with seconds that
 // nobody sets and nobody reads.
@@ -410,7 +462,6 @@ export function buildBoard({
       return {
         varietyId: variety.id,
         varietyName: formatVarietyName(variety.name, variety.sizes),
-        familyId: variety.family_id,
         familyName: variety.product_families?.name ?? "",
         imageUrl: variety.product_families?.image_url ?? null,
         picked,
@@ -557,7 +608,6 @@ export function buildBoard({
               ? previousLineOrdered
               : null,
           allocated: lineAllocated,
-          outstanding: roundPallets(lineOrdered - lineAllocated),
           comment: line.comment,
           allocations: (recordsByOrderLine.get(line.id) ?? []).sort((a, b) =>
             a.growerName.localeCompare(b.growerName, "he"),

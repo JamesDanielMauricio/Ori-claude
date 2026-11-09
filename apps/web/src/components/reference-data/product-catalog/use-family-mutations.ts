@@ -26,9 +26,8 @@ export function useFamilyMutations({
   editingFamily,
   pendingPhotoFile,
   setPendingPhotoFile,
-  deleteFamilyTargetId,
-  setDeleteFamilyTargetId,
-  familyById,
+  deleteFamilyTarget,
+  setDeleteFamilyTarget,
 }: {
   queryClient: QueryClient;
   showToast: ReturnType<typeof useToast>["showToast"];
@@ -38,12 +37,16 @@ export function useFamilyMutations({
   editingFamily: ProductFamily | null;
   pendingPhotoFile: File | null;
   setPendingPhotoFile: Dispatch<SetStateAction<File | null>>;
-  deleteFamilyTargetId: string | null;
-  setDeleteFamilyTargetId: Dispatch<SetStateAction<string | null>>;
-  familyById: ReadonlyMap<string, ProductFamily>;
+  // The row itself, held from the click: the optimistic delete takes it out
+  // of the cache before the photo cleanup below reads its URL.
+  deleteFamilyTarget: ProductFamily | null;
+  setDeleteFamilyTarget: Dispatch<SetStateAction<ProductFamily | null>>;
 }) {
   const supabase = createClient();
   const familiesQueryKey = referenceDataQueries.productFamilies().queryKey;
+  // The Growers and Users chips and pickers name each variety by its
+  // family, under their own key. Not mounted here: this only marks it stale.
+  const catalogQueryKey = referenceDataQueries.productCatalog().queryKey;
 
   const saveFamilyOptimistic = optimisticUpdate<ProductFamily[], void>(
     queryClient,
@@ -139,6 +142,7 @@ export function useFamilyMutations({
       setEditingFamilyId(null);
       setPendingPhotoFile(null);
       void queryClient.invalidateQueries({ queryKey: familiesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: catalogQueryKey });
     },
     onError: mergeOnError(saveFamilyOptimistic.onError, (error: { message?: string }) => {
       showToast(`שמירת המשפחה נכשלה: ${errorMessage(error)}`, "error");
@@ -148,17 +152,17 @@ export function useFamilyMutations({
   const deleteFamilyOptimistic = optimisticUpdate<ProductFamily[], void>(
     queryClient,
     familiesQueryKey,
-    (families) => families?.filter((family) => family.id !== deleteFamilyTargetId),
+    (families) => families?.filter((family) => family.id !== deleteFamilyTarget?.id),
   );
 
   const deleteFamilyMutation = useMutation({
     mutationFn: async () => {
-      if (!deleteFamilyTargetId) return;
-      const photoUrl = familyById.get(deleteFamilyTargetId)?.image_url ?? null;
+      if (!deleteFamilyTarget) return;
+      const photoUrl = deleteFamilyTarget.image_url;
       const { error } = await supabase
         .from("product_families")
         .delete()
-        .eq("id", deleteFamilyTargetId);
+        .eq("id", deleteFamilyTarget.id);
       if (error) throw error;
 
       // Best-effort, same reasoning as the replace-on-save cleanup above: the
@@ -179,12 +183,12 @@ export function useFamilyMutations({
     onMutate: deleteFamilyOptimistic.onMutate,
     onSuccess: () => {
       showToast("המשפחה נמחקה.", "success");
-      setDeleteFamilyTargetId(null);
+      setDeleteFamilyTarget(null);
       void queryClient.invalidateQueries({ queryKey: familiesQueryKey });
     },
     onError: mergeOnError(deleteFamilyOptimistic.onError, (error: { message?: string }) => {
       showToast(`מחיקת המשפחה נכשלה: ${errorMessage(error)}`, "error");
-      setDeleteFamilyTargetId(null);
+      setDeleteFamilyTarget(null);
     }),
   });
 

@@ -1,9 +1,4 @@
-import {
-  flattenMatrixRows,
-  productColumnWidth,
-  type Matrix,
-  type MatrixProductRow,
-} from "./matrix-data";
+import { flattenMatrixRows, productColumnWidth, type Matrix } from "./matrix-data";
 import { NO_ROWS_LABEL } from "./matrix/cell-look";
 import {
   ROW_H,
@@ -80,9 +75,9 @@ export function ArrangementMatrix({
   const rows = flattenMatrixRows(matrix.rows, expanded);
   const rowCount = rows.length;
 
-  // The scrollport, the window of rows actually mounted, both custom
-  // scrollbars' geometry and the scrollport's width — see useMatrixScroll.
-  const { scrollRef, range, thumbGeo, hThumbGeo, gridWidth } = useMatrixScroll(rowCount);
+  // The scrollport, the window of rows actually mounted and the
+  // scrollport's width — see useMatrixScroll.
+  const { scrollRef, range, gridWidth } = useMatrixScroll(rowCount);
   // The products column follows the grid's own width — see
   // productColumnWidth. One number per render, shared by the <col>, the
   // sticky offsets and the scroll margins.
@@ -237,9 +232,7 @@ export function ArrangementMatrix({
         )}
       </div>
 
-      <MatrixScrollbars scrollRef={scrollRef} thumbGeo={thumbGeo} hThumbGeo={hThumbGeo} />
+      <MatrixScrollbars scrollRef={scrollRef} />
     </div>
   );
 }
-
-export type { MatrixProductRow };

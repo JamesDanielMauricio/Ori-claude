@@ -1035,6 +1035,22 @@ describe("proposeArrangement — rules pinned after review", () => {
     expect(shortages).toEqual({});
   });
 
+  it("does not count a day with exactly enough stock in tenths as a shortage", () => {
+    // 1.1 + 2.2 is 3.3000000000000003 in JavaScript: above the 3.3 there was.
+    const { shortages } = learnFrom(
+      [
+        day("2026-09-01", {
+          supply: { [PRODUCT]: 3.3 },
+          orders: { [PRODUCT]: { אסף: 1.1, פשה: 2.2 } },
+          recorded: { [PRODUCT]: { אסף: 1.1, פשה: 2.2 } },
+        }),
+      ],
+      FAMILY_OF,
+    );
+
+    expect(shortages).toEqual({});
+  });
+
   it("scores a customer with no score exactly as one scored 1", () => {
     // Equal in every other way, so the earlier order settles it.
     const lines = propose(

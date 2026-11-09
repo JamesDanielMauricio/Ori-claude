@@ -19,6 +19,8 @@ import {
   findPickLine,
   flattenRecords,
   markSelected,
+  OPTIMISTIC_RECORD_PREFIX,
+  settleOptimisticRecord,
   type BoardRecord,
   type GrowerSupply,
   type PickSelection,
@@ -238,6 +240,9 @@ export default function ArrangementPage() {
     },
     onError: mergeOnError(deleteOptimistic.onError, (error: RpcError) => {
       showToast(`המחיקה נכשלה: ${describeRpcError(error)}`, "error");
+      // Re-read on failure, as the update below does: the rollback restores
+      // a copy that a NOT_FOUND or INVALID_STATE refusal says is behind.
+      void queryClient.invalidateQueries({ queryKey: boardDataQueryKey });
     }),
   });
 
@@ -323,7 +328,7 @@ export default function ArrangementPage() {
     return [
       ...records,
       {
-        id: `optimistic-${crypto.randomUUID()}`,
+        id: `${OPTIMISTIC_RECORD_PREFIX}${crypto.randomUUID()}`,
         daily_pick_product_id: pickLineId,
         daily_order_product_id: orderLineId,
         customer_company_id: request.customerId,
@@ -353,15 +358,22 @@ export default function ArrangementPage() {
         price: existing?.price ?? null,
         priceType: existing?.priceType ?? null,
       });
-      const { error } = await supabase.rpc(
+      const { data, error } = await supabase.rpc(
         "arrange_to_customer",
         toArrangeToCustomerRpcArgs(parsed),
       );
       if (error) throw error;
+      return data;
     },
     onMutate: arrangeOptimistic.onMutate,
-    onSuccess: () => {
+    onSuccess: (saved) => {
       showToast("הסידור נשמר.", "success");
+      // Before the refetch: the board is writable again from here, and a ×
+      // on the new allocation must not send the placeholder's id.
+      queryClient.setQueryData<ArrangementDay | null>(
+        boardDataQueryKey,
+        (current) => current && settleOptimisticRecord(current, saved),
+      );
       void queryClient.invalidateQueries({ queryKey: boardDataQueryKey });
     },
     onError: mergeOnError(arrangeOptimistic.onError, (error: RpcError) => {
@@ -370,18 +382,14 @@ export default function ArrangementPage() {
     }),
   });
 
+  // A promoted customer stays in `promoted` after their ✓: mutateAsync
+  // resolves before the refetch that brings their new order line, and
+  // dropping them from the set any earlier sends their card below the rule
+  // and back. Once the line lands it keeps them above on its own; the set is
+  // cleared with the next product selection anyway.
   const arrange = async (request: ArrangeRequest): Promise<boolean> => {
     try {
       await arrangeMutation.mutateAsync(request);
-      // The customer now has a real order line, so the board's own split
-      // will keep them above the rule from here on and the staging entry has
-      // done its job.
-      setPromoted((current) => {
-        if (!current.has(request.customerId)) return current;
-        const next = new Set(current);
-        next.delete(request.customerId);
-        return next;
-      });
       return true;
     } catch {
       return false;
@@ -484,14 +492,18 @@ export default function ArrangementPage() {
   // "there is no open trading day" plus an invitation to open one — which, on
   // a day that is in fact open, invites the distributor to try an action the
   // single-open-day index will then reject for reasons the screen just
-  // contradicted.
-  if (dayView.isError || boardDataQuery.isError) {
+  // contradicted. Only when nothing was ever loaded: a failed background
+  // re-read keeps the board, and any dialog open on it, on screen.
+  if (dayView.isLoadError || (boardDataQuery.isError && boardDataQuery.data === undefined)) {
     return (
       <QueryError
         what="לוח הסידור"
         onRetry={() => {
           void dayView.refetch();
-          void boardDataQuery.refetch();
+          // Not with no day: refetch() ignores `enabled`, and a read for a null
+          // id fails on its own, keeping this screen up even when the day
+          // comes back as "none open". A day that arrives starts it anyway.
+          if (day) void boardDataQuery.refetch();
         }}
         retrying={dayView.isFetching || boardDataQuery.isFetching}
       />

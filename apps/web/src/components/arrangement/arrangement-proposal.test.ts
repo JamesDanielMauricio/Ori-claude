@@ -283,6 +283,68 @@ describe("resolveProposal", () => {
   });
 });
 
+// A pick can be closed (the truck icon) while a proposal is on preview, and
+// the proposal is re-resolved against that read. Migration 0089 refuses every
+// cell of a closed pick, and the grid shows them read-only, so a line left on
+// one could neither be corrected nor saved.
+describe("a proposal on a pick closed since it was offered", () => {
+  const closing = (pickId: string) =>
+    picks.map((pick) => (pick.id === pickId ? { ...pick, status: "closed" } : pick));
+
+  it("lands nothing on the closed pick's lots, and counts the lines as unplaceable", () => {
+    expect(
+      resolveProposal({
+        lines: [line(GROWER_A, LYCHEE, CUSTOMER_1, 3), line(GROWER_A, LEMON, CUSTOMER_2, 1)],
+        picks: closing("pick-a"),
+        orders,
+        records: [savedLemons],
+      }),
+    ).toEqual({ allocations: [], alreadyArranged: 0, unplaceable: 2, heldToOrder: 0 });
+  });
+
+  it("still counts what was saved off the closed pick against the customer's order", () => {
+    // Customer 2 ordered 3 lemons and has 2 off grower B's lot, now closed.
+    const resolved = resolveProposal({
+      lines: [{ ...line(GROWER_A, LEMON, CUSTOMER_2, 3), forOrder: "suggested" }],
+      picks: closing("pick-b"),
+      orders,
+      records: [savedLemons],
+    });
+
+    expect(resolved.allocations).toEqual([
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+    ]);
+  });
+
+  it("lands the same lines again once the pick is reopened", () => {
+    const lines = [line(GROWER_A, LYCHEE, CUSTOMER_1, 3)];
+    const closed = resolveProposal({ lines, picks: closing("pick-a"), orders, records: [] });
+    const reopened = resolveProposal({ lines, picks, orders, records: [] });
+
+    expect(closed.allocations).toEqual([]);
+    expect(reopened.allocations).toEqual([
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 },
+    ]);
+  });
+
+  it("agrees with the grid, which shows that lot read-only", () => {
+    const closedPicks = closing("pick-a");
+    const lychee = buildMatrix({ picks: closedPicks, orders, records: [], companies }).rows.find(
+      (row) => row.varietyId === LYCHEE,
+    );
+
+    expect(lychee?.growers.map((grower) => grower.closed)).toEqual([true]);
+    expect(
+      resolveProposal({
+        lines: [line(GROWER_A, LYCHEE, CUSTOMER_1, 3)],
+        picks: closedPicks,
+        orders,
+        records: [],
+      }).allocations,
+    ).toEqual([]);
+  });
+});
+
 // The day is read again once a proposal has been saved, and whenever anybody
 // else changes it while the proposal is still on preview. The proposal is
 // worked out afresh against each read, so what it holds is always what is

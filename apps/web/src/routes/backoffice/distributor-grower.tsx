@@ -1,14 +1,9 @@
-import {
-  bootstrapGrowerPickInputSchema,
-  sendPickReminderInputSchema,
-  toBootstrapGrowerPickRpcArgs,
-  toSendPickReminderRpcArgs,
-} from "@ori/domain/grower";
+import { sendPickReminderInputSchema, toSendPickReminderRpcArgs } from "@ori/domain/grower";
 import { toSaveGrowerRpcArgs } from "@ori/domain/reference-data";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
-import { formatPallets, formatPickupTime } from "@/components/arrangement/board-data";
+import { formatPickupTime } from "@/components/arrangement/board-data";
 import { GrowerPickDialog } from "@/components/arrangement/grower-pick-dialog";
 import { CheckboxList } from "@/components/reference-data/checkbox-list";
 import { ExpandableEntityRow } from "@/components/reference-data/expandable-entity-row";
@@ -27,6 +22,7 @@ import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
+import { groupLinesByFamily } from "@/lib/family-grouping";
 import { growerProductsSaveInput } from "@/lib/grower-products-save-input";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
 import { nudgeWhatsAppDispatch } from "@/lib/nudge-whatsapp-dispatch";
@@ -37,50 +33,23 @@ import {
   type OversightGrower,
   type PickLineRow,
 } from "@/lib/queries/oversight";
+import { referenceDataQueries } from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 import { useTradingDayView } from "@/lib/trading-day-view";
-import { formatVarietyName } from "@/lib/variety-label";
+import { useCatalogOptions } from "@/lib/use-catalog-options";
 
-// One pick's lines, grouped by family — the read view an expanded row shows.
-// Same shape the arrangement board's grower column derives (board-data.ts's
-// GrowerFamilyGroup), rebuilt small here rather than imported: that one is
-// entangled with allocation totals and a selection this screen has no use
-// for, and pulling it in would mean carrying arrangement_records into a
-// query that has nothing to do with them.
-function groupPickLines(lines: PickLineRow[]): FamilyGroupedRow[] {
-  const families = new Map<string, FamilyGroupedRow>();
-  for (const line of lines) {
-    const variety = line.product_varieties;
-    if (!variety) continue;
-    let group = families.get(variety.family_id);
-    if (!group) {
-      group = {
-        familyId: variety.family_id,
-        familyName: variety.product_families?.name ?? "",
-        imageUrl: variety.product_families?.image_url ?? null,
-        lines: [],
-      };
-      families.set(variety.family_id, group);
-    }
-    // Picked + leftover, not picked alone: carried-forward leftover is real,
-    // arrangeable stock on equal footing with a fresh pick (migration 0050),
-    // and every other supply view — the arrangement board, the matrix, the
-    // grower's own confirmation total — already shows the combined figure.
-    const pallets = (Number(line.pallets_picked) || 0) + (Number(line.leftover_pallets) || 0);
-    group.lines.push({
-      id: line.id,
-      varietyName: formatVarietyName(variety.name, variety.sizes),
-      quantityLabel: formatPallets(pallets),
-      hasQuantity: pallets > 0,
-      comment: line.comment,
-    });
-  }
-  const groups = [...families.values()];
-  for (const group of groups) {
-    group.lines.sort((a, b) => a.varietyName.localeCompare(b.varietyName, "he"));
-  }
-  return groups.sort((a, b) => a.familyName.localeCompare(b.familyName, "he"));
+// A pick line's supply, as an expanded row shows it (groupLinesByFamily).
+// Picked + leftover, not picked alone: carried-forward leftover is real,
+// arrangeable stock on equal footing with a fresh pick (migration 0050), and
+// every other supply view — the arrangement board, the matrix, the grower's
+// own confirmation total — already shows the combined figure.
+function pickLineSupply(line: PickLineRow): number {
+  return (Number(line.pallets_picked) || 0) + (Number(line.leftover_pallets) || 0);
 }
+
+// A grower with no pick on the day: one stable empty list, so its memoized
+// FamilyGroupedLines skips re-rendering like every other row's.
+const NO_FAMILIES: FamilyGroupedRow[] = [];
 
 // Distributor-facing "Grower Inventory Status" oversight (PRD:
 // backoffice.md's "distributor+grower" tab — "Distributor as Grower View":
@@ -138,7 +107,20 @@ export default function DistributorAsGrowerPage() {
     return map;
   }, [picksForDayQuery.data]);
 
-  const catalogQuery = useQuery(oversightQueries.productCatalog());
+  // Grouped once per read of the day's picks, not on every render: this
+  // page's state also holds the products dialog's ticks and the search box,
+  // and every grower's list stays mounted (collapsed) under its row.
+  const familiesByGrowerId = useMemo(() => {
+    const map = new Map<string, FamilyGroupedRow[]>();
+    for (const pick of picksForDayQuery.data ?? []) {
+      map.set(pick.grower_company_id, groupLinesByFamily(pick.daily_pick_products, pickLineSupply));
+    }
+    return map;
+  }, [picksForDayQuery.data]);
+
+  // The whole catalog for the products dialog — the Growers screen's own
+  // entry, so a variety just added on Products shows in both.
+  const { options: catalogOptions } = useCatalogOptions();
 
   // Which growers have an in-season list at all — separate from
   // `pickByGrowerId` because "no pick yet today" is ambiguous on its own: it
@@ -164,29 +146,39 @@ export default function DistributorAsGrowerPage() {
   // products onto another. Seeding once, rather than on every change of the
   // query's data, also stops a background refetch from overwriting ticks the
   // distributor is in the middle of making.
-  const [draftGrowerId, setDraftGrowerId] = useState<string | null>(null);
+  //
+  // Only from a read that has landed: a reopened dialog first holds the
+  // cached copy while its re-read runs (staleTime 0, see
+  // oversightQueries.growerProducts), and seeding from that would save an
+  // old list and an old company row back over newer ones. `draftGrower` is
+  // that same read's company row — what the save sends back.
+  const [draftGrower, setDraftGrower] = useState<OversightGrower | null>(null);
   useEffect(() => {
     if (!productsDialogGrower) {
-      setDraftGrowerId(null);
+      setDraftGrower(null);
       return;
     }
-    if (!growerProductsQuery.data || draftGrowerId === productsDialogGrower.id) return;
-    setProductDraft(new Set(growerProductsQuery.data));
-    setDraftGrowerId(productsDialogGrower.id);
-  }, [productsDialogGrower, growerProductsQuery.data, draftGrowerId]);
+    const loaded = growerProductsQuery.data;
+    if (
+      !loaded ||
+      // Not "idle" covers a re-read paused while offline, not only a running one.
+      growerProductsQuery.fetchStatus !== "idle" ||
+      growerProductsQuery.isError ||
+      draftGrower?.id === productsDialogGrower.id
+    ) {
+      return;
+    }
+    setProductDraft(new Set(loaded.productVarietyIds));
+    setDraftGrower(loaded.grower);
+  }, [
+    productsDialogGrower,
+    growerProductsQuery.data,
+    growerProductsQuery.fetchStatus,
+    growerProductsQuery.isError,
+    draftGrower,
+  ]);
   const productDraftReady =
-    productsDialogGrower !== null && draftGrowerId === productsDialogGrower.id;
-
-  const catalogOptions = useMemo(
-    () =>
-      (catalogQuery.data ?? []).map((product) => ({
-        id: product.id,
-        label: product.product_families?.name
-          ? `${product.product_families.name} — ${formatVarietyName(product.name, product.sizes)}`
-          : formatVarietyName(product.name, product.sizes),
-      })),
-    [catalogQuery.data],
-  );
+    productsDialogGrower !== null && draftGrower?.id === productsDialogGrower.id;
 
   // Alphabetical once, here — both the single-column and two-column layouts
   // (TwoColumnRowList) read off this same order, so a column split never has
@@ -204,26 +196,18 @@ export default function DistributorAsGrowerPage() {
     mutationFn: async () => {
       const grower = productsDialogGrower;
       if (!grower) throw new Error("no grower selected");
-      // Backstop behind the disabled button — see `draftGrowerId` above.
-      if (draftGrowerId !== grower.id) throw new Error("רשימת המוצרים של המגדל עדיין לא נטענה");
-      const saveInput = growerProductsSaveInput(grower, [...productDraft]);
+      // Backstop behind the disabled button — see `draftGrower` above.
+      if (draftGrower?.id !== grower.id) throw new Error("רשימת המוצרים של המגדל עדיין לא נטענה");
+      // The only write. save_grower also syncs the OPEN day's picks in the
+      // same transaction (sync_grower_picks, migrations 0037/0088), creating
+      // this grower's pick there if it has none — and only the open day's:
+      // with a past day pinned, nothing is written into that day.
+      const saveInput = growerProductsSaveInput(draftGrower, [...productDraft]);
       const { error: saveError } = await supabase.rpc(
         "save_grower",
         toSaveGrowerRpcArgs(saveInput),
       );
       if (saveError) throw saveError;
-
-      if (dayId) {
-        const bootstrapInput = bootstrapGrowerPickInputSchema.parse({
-          tradingDayId: dayId,
-          growerCompanyId: grower.id,
-        });
-        const { error: bootstrapError } = await supabase.rpc(
-          "bootstrap_grower_pick",
-          toBootstrapGrowerPickRpcArgs(bootstrapInput),
-        );
-        if (bootstrapError) throw bootstrapError;
-      }
     },
     onSuccess: () => {
       showToast("רשימת המוצרים עודכנה.", "success");
@@ -234,6 +218,11 @@ export default function DistributorAsGrowerPage() {
       });
       void queryClient.invalidateQueries({
         queryKey: oversightQueries.picksForDay(dayId).queryKey,
+      });
+      // The Growers screen seeds its edit form from this, and grower_products
+      // broadcasts nothing (0061): left stale, its next save would undo this one.
+      void queryClient.invalidateQueries({
+        queryKey: referenceDataQueries.growerProducts().queryKey,
       });
     },
     onError: (error: { message?: string }) => {
@@ -352,7 +341,7 @@ export default function DistributorAsGrowerPage() {
       !pick && !hasProducts
         ? "אין מוצרים בעונה — יש להוסיף מוצרים"
         : [pickupTime && `איסוף ${pickupTime}`, statusCaption].filter(Boolean).join(" · ") || null;
-    const families = pick ? groupPickLines(pick.daily_pick_products) : [];
+    const families = familiesByGrowerId.get(grower.id) ?? NO_FAMILIES;
     const reminding = reminderMutation.isPending && reminderMutation.variables === pick?.id;
 
     return (
@@ -369,9 +358,9 @@ export default function DistributorAsGrowerPage() {
           } else {
             // No pick exists yet for this grower today — nothing for
             // GrowerPickDialog to open. The products dialog is what
-            // creates one (save_grower + bootstrap_grower_pick, exactly
-            // the flow the old master-detail screen's "ערוך מוצרים בעונה"
-            // button drove), so the pencil opens that instead.
+            // creates one (save_grower, whose sync_grower_picks gives an
+            // active grower with in-season products a pick on the open
+            // day), so the pencil opens that instead.
             setProductsDialogGrower(grower);
           }
         }}
@@ -424,9 +413,9 @@ export default function DistributorAsGrowerPage() {
           <Skeleton className="h-14 w-full" />
         </div>
       ) : dayView.isLoadError ||
-        growersQuery.isError ||
-        picksForDayQuery.isError ||
-        growersWithProductsQuery.isError ? (
+        (growersQuery.isError && growersQuery.data === undefined) ||
+        (picksForDayQuery.isError && picksForDayQuery.data === undefined) ||
+        (growersWithProductsQuery.isError && growersWithProductsQuery.data === undefined) ? (
         <QueryError
           what="מגדלים"
           onRetry={() => {
@@ -483,7 +472,9 @@ export default function DistributorAsGrowerPage() {
         }
       >
         <div className="flex flex-col gap-4">
-          {growerProductsQuery.isError ? (
+          {/* Before the seed only: once the ticks are on screen, a failed
+              background re-read must not replace them. */}
+          {growerProductsQuery.isError && !productDraftReady ? (
             <QueryError
               what="המוצרים בעונה"
               onRetry={() => void growerProductsQuery.refetch()}

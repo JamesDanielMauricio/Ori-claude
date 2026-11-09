@@ -77,6 +77,11 @@ export function BusinessDayPanel() {
   const { showToast } = useToast();
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [canSeePrices, setCanSeePrices] = useState(true);
+  // The day the discard dialog was opened for, frozen at that click. A live
+  // refresh can swap the open day while the dialog is up (another device
+  // discards it and starts a new one); reading `day` at confirm time would
+  // then delete the new day under the old dialog.
+  const [discardTarget, setDiscardTarget] = useState<TradingDayView | null>(null);
 
   const openDayQuery = useOpenTradingDay();
   const day = openDayQuery.data ?? null;
@@ -164,12 +169,12 @@ export function BusinessDayPanel() {
       queryClient.setQueryData(tradingDayQueries.open().queryKey, liveDay);
       showToast("יום העסקים נפתח.", "success");
       setConfirmAction(null);
-      invalidate();
     },
     onError: (error: { message?: string }) => {
       showToast(`פתיחת היום נכשלה: ${errorMessage(error)}`, "error");
       setConfirmAction(null);
     },
+    onSettled: invalidate,
   });
 
   const openShopPhaseOptimistic = dayPhaseOptimistic("shop_open");
@@ -196,12 +201,12 @@ export function BusinessDayPanel() {
     onSuccess: () => {
       showToast("החנות נפתחה.", "success");
       setConfirmAction(null);
-      invalidate();
     },
     onError: mergeOnError(openShopPhaseOptimistic.onError, (error: { message?: string }) => {
       showToast(`פתיחת החנות נכשלה: ${errorMessage(error)}`, "error");
       setConfirmAction(null);
     }),
+    onSettled: invalidate,
   });
 
   const closeShopPhaseOptimistic = dayPhaseOptimistic("shop_closed");
@@ -215,12 +220,12 @@ export function BusinessDayPanel() {
     onSuccess: () => {
       showToast("החנות נסגרה.", "success");
       setConfirmAction(null);
-      invalidate();
     },
     onError: mergeOnError(closeShopPhaseOptimistic.onError, (error: { message?: string }) => {
       showToast(`סגירת החנות נכשלה: ${errorMessage(error)}`, "error");
       setConfirmAction(null);
     }),
+    onSettled: invalidate,
   });
 
   const closeDayPhaseOptimistic = dayPhaseOptimistic("closed");
@@ -234,12 +239,12 @@ export function BusinessDayPanel() {
     onSuccess: () => {
       showToast("יום העסקים נסגר.", "success");
       setConfirmAction(null);
-      invalidate();
     },
     onError: mergeOnError(closeDayPhaseOptimistic.onError, (error: { message?: string }) => {
       showToast(`סגירת יום העסקים נכשלה: ${errorMessage(error)}`, "error");
       setConfirmAction(null);
     }),
+    onSettled: invalidate,
   });
 
   // "סגירת יום עסקים" on a day whose shop was never opened — the way out of
@@ -247,8 +252,8 @@ export function BusinessDayPanel() {
   // deletes the day and everything it owns, so the date can be started
   // again; it refuses any day that isn't still 'initiated', so a day that
   // went live can never be removed this way. It is passed the id of the day
-  // on screen, not "whichever is open", so it deletes exactly the day the
-  // dialog named.
+  // the dialog was opened for (discardTarget), not "whichever is open", so
+  // it deletes exactly the day the dialog named.
   //
   // No optimistic update: this is irreversible, so the panel changes only
   // once the server confirms, while the dialog shows "מבצע…".
@@ -272,12 +277,12 @@ export function BusinessDayPanel() {
         "success",
       );
       setConfirmAction(null);
-      invalidate();
     },
     onError: (error: { code?: string; message?: string }) => {
       showToast(`מחיקת יום העסקים נכשלה: ${discardErrorMessage(error)}`, "error");
       setConfirmAction(null);
     },
+    onSettled: invalidate,
   });
 
   const busy =
@@ -375,8 +380,7 @@ export function BusinessDayPanel() {
         >
           <Icon name="chevronStart" className="h-3 w-3" />
           חזרה ליום הפעיל
-          {day &&
-            ` (${new Intl.DateTimeFormat("he-IL", { dateStyle: "short" }).format(new Date(day.trade_date))})`}
+          {day && ` (${SHORT_DATE_FORMAT.format(parseIsoDate(day.trade_date))})`}
         </button>
       )}
 
@@ -384,7 +388,10 @@ export function BusinessDayPanel() {
         <Button
           variant="secondary"
           disabled={busy || !closeDayEnabled}
-          onClick={() => setConfirmAction(closeDayAction)}
+          onClick={() => {
+            if (closeDayAction === "discardDay") setDiscardTarget(day);
+            setConfirmAction(closeDayAction);
+          }}
           className="w-full"
         >
           סגירת יום עסקים
@@ -489,15 +496,15 @@ export function BusinessDayPanel() {
         onClose={() => setConfirmAction(null)}
         title="סגירת יום עסקים"
       >
-        {confirmAction === "discardDay" && day && (
+        {confirmAction === "discardDay" && discardTarget && (
           <ConfirmBody
-            text={`החנות לא נפתחה ביום העסקים של ${LONG_DATE_FORMAT.format(parseIsoDate(day.trade_date))}, ולכן סגירתו תמחק אותו לגמרי: רשימות הקטיף שנוצרו למגדלים וכל מה שהוזן בהן יימחקו, והתאריך יתפנה לפתיחה מחדש. לא ניתן לבטל פעולה זו.`}
+            text={`החנות לא נפתחה ביום העסקים של ${LONG_DATE_FORMAT.format(parseIsoDate(discardTarget.trade_date))}, ולכן סגירתו תמחק אותו לגמרי: רשימות הקטיף שנוצרו למגדלים וכל מה שהוזן בהן יימחקו, והתאריך יתפנה לפתיחה מחדש. לא ניתן לבטל פעולה זו.`}
             note="הודעות WhatsApp על פתיחת היום שכבר נשלחו למגדלים לא יבוטלו."
             confirmLabel="מחק את יום העסקים"
             danger
             busy={discardMutation.isPending}
             onCancel={() => setConfirmAction(null)}
-            onConfirm={() => discardMutation.mutate(day.id)}
+            onConfirm={() => discardMutation.mutate(discardTarget.id)}
           />
         )}
       </Dialog>

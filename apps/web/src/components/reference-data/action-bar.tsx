@@ -29,28 +29,24 @@ import { Button } from "../ui/button";
 const STICKY_CLASSES =
   "sticky bottom-4 z-10 mt-3 rounded-xl bg-surface p-3 shadow-float ring-1 ring-inset ring-border-strong";
 
-// The "delete, edit, discard & save" reusable the PRD documents on every
-// one of the five management screens — one real component instead of six
-// near-identical Bubble copies (R1). `editing` toggles which buttons show,
-// exactly like the source's `edit?` state, but driven by real React state
-// in the parent, not a per-screen custom state.
+// The "discard & save" bar under the two produce editors (OrderLinesEditor,
+// PickLinesEditor) — one real component instead of near-identical Bubble
+// copies (R1). It once also carried the management screens' browse mode
+// (ערוך / מחק); those screens moved to RecordTable, and neither editor has a
+// browse mode: each renders this bar only while its order or pick is
+// editable at all.
 export function ActionBar({
-  editing,
   saving = false,
   dirty = true,
   canSaveUnchanged = false,
-  canDelete = true,
   sticky = false,
-  onEdit,
   onDiscard,
   onSave,
-  onDelete,
   extra,
 }: {
-  editing: boolean;
   saving?: boolean;
   // Whether the draft actually differs from what the server holds. Both
-  // buttons in the editing branch act on that difference, so with nothing
+  // buttons act on that difference, so with nothing
   // changed there is nothing for either to do: "שמור" would write the values
   // already stored, "בטל שינויים" would restore the ones already on screen.
   // Greying them out says so before the click, instead of after — and on the
@@ -61,9 +57,6 @@ export function ActionBar({
   // Defaults to true — i.e. to the always-clickable behaviour every one of
   // these bars had before — so a future screen that forgets to pass it gets
   // a harmless extra save rather than a permanently dead save button.
-  //
-  // NOT applied to "מחק": deleting a record has nothing to do with whether
-  // its form has unsaved edits.
   dirty?: boolean;
   // Keeps "שמור" clickable when nothing has been edited, for the hosts whose
   // save does more than write the draft back: the grower's own picking screen
@@ -73,7 +66,6 @@ export function ActionBar({
   // is still nothing to discard. Defaults to false, so every other bar is
   // unchanged.
   canSaveUnchanged?: boolean;
-  canDelete?: boolean;
   // Pins the bar to the bottom of whatever is scrolling it, instead of
   // leaving it at the end of the content. The reference-data screens are
   // short forms where the bar is on screen anyway; the two produce editors
@@ -82,73 +74,32 @@ export function ActionBar({
   // everything to commit a change made at the top. See STICKY_CLASSES for
   // why pinning also changes how the bar is drawn.
   sticky?: boolean;
-  // Optional, because not every host has a browse mode to return to. A host
-  // that decides editability from something outside this bar — the customer
-  // order screen reads it off the trading day's phase — is never in the
-  // `editing === false` branch at all, and a "ערוך" button there would be a
-  // control for a state that screen cannot enter. Omitting it renders no
-  // such button rather than one wired to nothing.
-  onEdit?: (() => void) | undefined;
   onDiscard: () => void;
   onSave: () => void;
-  onDelete?: (() => void) | undefined;
   extra?: ReactNode | undefined;
 }) {
   return (
-    // Keyed on `editing` so React remounts the row when the mode flips, which
-    // is what lets the entrance animation replay. Without the key the two sets
-    // of buttons swap in place with no transition and the mode change is easy
-    // to miss — which matters here, because "am I editing?" is exactly the
-    // question this bar exists to answer.
     <div
-      key={editing ? "editing" : "idle"}
       className={`animate-rise-in flex flex-wrap items-center gap-2 ${
         sticky ? STICKY_CLASSES : "mt-1 border-t border-border pt-4"
       }`}
     >
-      {editing ? (
-        <>
-          <Button type="button" onClick={onSave} disabled={saving || (!dirty && !canSaveUnchanged)}>
-            {/* A spinning ring during the save, not just the word "שומר…".
-                The text alone changes by two characters and is easy to miss;
-                a moving element is unambiguous proof the click registered. */}
-            {saving && (
-              <span
-                aria-hidden
-                className="animate-spin-loop h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent"
-              />
-            )}
-            {saving ? "שומר…" : "שמור"}
-          </Button>
-          {/* Discard is greyed out with nothing to discard — EXCEPT on a bar
-              that has a browse mode, where this button is also the only way
-              back to it. Disabling it there would strand anyone who pressed
-              "ערוך", changed their mind, and changed nothing: a form with two
-              dead buttons and no exit. `onEdit` is exactly the signal for
-              that, since a bar only has a browse mode if it has a way in. */}
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={onDiscard}
-            disabled={saving || (!dirty && !onEdit)}
-          >
-            בטל שינויים
-          </Button>
-        </>
-      ) : (
-        <>
-          {onEdit && (
-            <Button type="button" variant="secondary" onClick={onEdit}>
-              ערוך
-            </Button>
-          )}
-          {onDelete && (
-            <Button type="button" variant="danger" onClick={onDelete} disabled={!canDelete}>
-              מחק
-            </Button>
-          )}
-        </>
-      )}
+      <Button type="button" onClick={onSave} disabled={saving || (!dirty && !canSaveUnchanged)}>
+        {/* A spinning ring during the save, not just the word "שומר…".
+            The text alone changes by two characters and is easy to miss;
+            a moving element is unambiguous proof the click registered. */}
+        {saving && (
+          <span
+            aria-hidden
+            className="animate-spin-loop h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent"
+          />
+        )}
+        {saving ? "שומר…" : "שמור"}
+      </Button>
+      {/* Greyed out with nothing to discard. */}
+      <Button type="button" variant="secondary" onClick={onDiscard} disabled={saving || !dirty}>
+        בטל שינויים
+      </Button>
       {extra}
     </div>
   );

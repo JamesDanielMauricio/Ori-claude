@@ -46,9 +46,11 @@ export function SettingsTogglesButton() {
       const { error } = await supabase.from("notification_settings").update(patch).eq("id", true);
       if (error) throw error;
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: shopQueries.notificationSettings().queryKey });
-    },
+    // Returned, not voided: the mutation stays pending until the re-read
+    // lands, so the switches stay disabled instead of re-enabling on the
+    // pre-click value, where a quick second click would resend the same one.
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: shopQueries.notificationSettings().queryKey }),
     onError: (error: { message?: string }) => {
       showToast(`עדכון ההגדרה נכשל: ${errorMessage(error)}`, "error");
     },
@@ -81,7 +83,7 @@ export function SettingsTogglesButton() {
               </h3>
               {settingsQuery.isLoading ? (
                 <Skeleton className="h-24 w-full" />
-              ) : settingsQuery.isError ? (
+              ) : settingsQuery.isError && settings === undefined ? (
                 <p className="text-sm text-ink-muted">טעינת ההגדרות נכשלה.</p>
               ) : (
                 <>

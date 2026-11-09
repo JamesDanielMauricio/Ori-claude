@@ -14,7 +14,11 @@ import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
-import { referenceDataQueries, type TransporterCompany } from "@/lib/queries/reference-data";
+import {
+  invalidateCompanyPickers,
+  referenceDataQueries,
+  type TransporterCompany,
+} from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 import { useContactPersonDirectory } from "@/lib/use-contact-person-directory";
 
@@ -75,7 +79,10 @@ export default function TransportersPage() {
   const [saving, setSaving] = useState(false);
   // Separate from `editingId` — deleting a row is still a confirm dialog,
   // not inline, so it needs its own target rather than reusing edit state.
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  // The row itself, not its id: the optimistic delete takes it out of the
+  // cache while the dialog is still naming it.
+  const [deleteTarget, setDeleteTarget] = useState<TransporterCompany | null>(null);
+  const deleteTargetId = deleteTarget?.id ?? null;
 
   const transportersQueryKey = referenceDataQueries.transporters().queryKey;
 
@@ -85,7 +92,6 @@ export default function TransportersPage() {
 
   const editingRowId = editingId !== null && editingId !== NEW_ROW_ID ? editingId : null;
   const selected = transportersQuery.data?.find((row) => row.id === editingRowId) ?? null;
-  const deleteTarget = transportersQuery.data?.find((row) => row.id === deleteTargetId) ?? null;
 
   const saveOptimistic = optimisticUpdate<TransporterCompany[], void>(
     queryClient,
@@ -125,6 +131,7 @@ export default function TransportersPage() {
       showToast("הנתונים נשמרו.", "success");
       setEditingId(null);
       void queryClient.invalidateQueries({ queryKey: transportersQueryKey });
+      invalidateCompanyPickers(queryClient);
     },
     onError: mergeOnError(saveOptimistic.onError, (error: { message?: string }) => {
       showToast(`השמירה נכשלה: ${errorMessage(error)}`, "error");
@@ -146,12 +153,13 @@ export default function TransportersPage() {
     onMutate: deleteOptimistic.onMutate,
     onSuccess: () => {
       showToast("המוביל נמחק.", "success");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
       void queryClient.invalidateQueries({ queryKey: transportersQueryKey });
+      invalidateCompanyPickers(queryClient);
     },
     onError: mergeOnError(deleteOptimistic.onError, (error: { message?: string }) => {
       showToast(`המחיקה נכשלה: ${errorMessage(error)}`, "error");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
     }),
   });
 
@@ -208,9 +216,7 @@ export default function TransportersPage() {
           aria-label="סטטוס"
           className="w-28"
           value={form.status}
-          onChange={(next) =>
-            setForm((current) => ({ ...current, status: next as "active" | "inactive" }))
-          }
+          onChange={(next) => setForm((current) => ({ ...current, status: next }))}
           options={[
             { value: "active", label: "פעיל" },
             { value: "inactive", label: "לא פעיל" },
@@ -277,7 +283,7 @@ export default function TransportersPage() {
         onEdit={handleEditRow}
         onSaveEdit={handleSave}
         onCancelEdit={handleCancel}
-        onDelete={(row) => setDeleteTargetId(row.id)}
+        onDelete={(row) => setDeleteTarget(row)}
         onAdd={handleNew}
         addLabel="מוביל חדש"
         // Waits for the contact-person directory too: it's a column now,
@@ -301,12 +307,12 @@ export default function TransportersPage() {
         emptyLabel="אין מובילים עדיין."
       />
 
-      <Dialog open={deleteTargetId !== null} onClose={() => setDeleteTargetId(null)} title="מחיקת מוביל">
+      <Dialog open={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title="מחיקת מוביל">
         <p className="mb-4 text-sm">
           האם למחוק את המוביל &quot;{deleteTarget?.name}&quot;? פעולה זו אינה הפיכה.
         </p>
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setDeleteTargetId(null)}>
+          <Button variant="secondary" onClick={() => setDeleteTarget(null)}>
             ביטול
           </Button>
           <Button

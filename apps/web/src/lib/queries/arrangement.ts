@@ -19,8 +19,7 @@ import { createClient } from "@/lib/supabase/client";
 //
 // The prefixes are what the screens refresh: a write on the grid refreshes
 // both boards' whole-day entries (they read the same records out of two
-// cache entries), and a price change refreshes everything under
-// `arrangementKeys.all`.
+// cache entries).
 
 export const arrangementKeys = {
   all: ["arrangement"] as const,
@@ -95,8 +94,13 @@ const RECORD_COLUMNS =
 // is far below 1,000 and costs nothing extra; only a day that reaches the
 // cap pays one more round trip. The shape handed back is unchanged, so both
 // boards and their optimistic updates work as before.
+//
+// `signal` is the query's own: every optimistic write cancels the read in
+// flight (lib/optimistic-mutation.ts), and on the grid each typed cell does,
+// so a cancelled whole-day read stops downloading instead of finishing unseen.
 async function completeArrangementRecords<Log extends BoardSubmissionTime>(
   day: ArrangementDay<Log> | null,
+  signal: AbortSignal,
 ): Promise<ArrangementDay<Log> | null> {
   const arrangement = day?.daily_arrangements;
   if (!day || !arrangement || arrangement.arrangement_records.length < PAGE_SIZE) return day;
@@ -106,7 +110,8 @@ async function completeArrangementRecords<Log extends BoardSubmissionTime>(
       .select(RECORD_COLUMNS)
       .eq("daily_arrangement_id", arrangement.id)
       .order("id")
-      .range(from, to),
+      .range(from, to)
+      .abortSignal(signal),
   );
   return { ...day, daily_arrangements: { ...arrangement, arrangement_records: records } };
 }
@@ -150,7 +155,7 @@ export const arrangementQueries = {
     return queryOptions({
       queryKey: arrangementKeys.boardData(dayId),
       enabled: !!dayId,
-      queryFn: async (): Promise<ArrangementDay | null> => {
+      queryFn: async ({ signal }): Promise<ArrangementDay | null> => {
         const { data, error } = await createClient()
           .from("trading_days")
           .select(
@@ -160,11 +165,12 @@ export const arrangementQueries = {
            daily_orders(id, customer_company_id, status, daily_order_products(id, daily_order_id, product_variety_id, pallets_ordered, comment, product_varieties(id, name, sizes, family_id, product_families(name, image_url))), order_submission_logs(id, snapshot, created_at))`,
           )
           .eq("id", dayId!)
+          .abortSignal(signal)
           .maybeSingle();
         if (error) throw error;
         // numeric columns come back as bare JSON numbers over PostgREST, not
         // decimal-preserving strings — see packages/db/src/supabase-types.ts.
-        return completeArrangementRecords(data);
+        return completeArrangementRecords(data, signal);
       },
     });
   },
@@ -182,7 +188,7 @@ export const arrangementQueries = {
     return queryOptions({
       queryKey: newArrangementKeys.matrix(dayId),
       enabled: !!dayId,
-      queryFn: async (): Promise<MatrixDay | null> => {
+      queryFn: async ({ signal }): Promise<MatrixDay | null> => {
         const { data, error } = await createClient()
           .from("trading_days")
           .select(
@@ -192,9 +198,10 @@ export const arrangementQueries = {
            daily_orders(id, customer_company_id, status, submitted_at, order_submission_logs(id, created_at), daily_order_products(id, daily_order_id, product_variety_id, pallets_ordered, comment, created_at, product_varieties(id, name, sizes, family_id, product_families(name, image_url))))`,
           )
           .eq("id", dayId!)
+          .abortSignal(signal)
           .maybeSingle();
         if (error) throw error;
-        return completeArrangementRecords(data);
+        return completeArrangementRecords(data, signal);
       },
     });
   },

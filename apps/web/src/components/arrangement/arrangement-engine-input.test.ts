@@ -23,9 +23,9 @@ describe("historyFromRows", () => {
   // Two days: 2.10 has been closed, 3.10 is still open.
   const rows: HistoryRows = {
     days: [
-      { id: "day-3", trade_date: "2026-10-03", daily_arrangements: { status: "open" } },
-      { id: "day-2", trade_date: "2026-10-02", daily_arrangements: { status: "closed" } },
-      { id: "day-1", trade_date: "2026-10-01", daily_arrangements: null },
+      { id: "day-3", trade_date: "2026-10-03" },
+      { id: "day-2", trade_date: "2026-10-02" },
+      { id: "day-1", trade_date: "2026-10-01" },
     ],
     pickLines: [
       // Closed day: 6 picked, nothing carried in, 5 arranged and 1 left at the
@@ -158,9 +158,7 @@ describe("historyFromRows", () => {
 
   describe("on the rows of one day", () => {
     // 2026-10-05, to which each test adds only what it is about.
-    const closedDay: HistoryRows["days"] = [
-      { id: "day-5", trade_date: "2026-10-05", daily_arrangements: { status: "closed" } },
-    ];
+    const closedDay: HistoryRows["days"] = [{ id: "day-5", trade_date: "2026-10-05" }];
     const none = { pickLines: [], orderLines: [], records: [] };
     const record = (
       overrides: Partial<HistoryRows["records"][number]> = {},

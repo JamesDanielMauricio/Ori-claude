@@ -10,11 +10,7 @@ import { StatusPill } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
 import { ProductThumbnail } from "@/components/ui/product-thumbnail";
 import { Select } from "@/components/ui/select";
-import {
-  PRODUCE_CATEGORIES,
-  PRODUCE_CATEGORY_LABEL,
-  type ProduceCategory,
-} from "@/lib/produce-categories";
+import { PRODUCE_CATEGORIES, PRODUCE_CATEGORY_LABEL } from "@/lib/produce-categories";
 import type { ProductFamily } from "@/lib/queries/reference-data";
 
 import {
@@ -42,7 +38,7 @@ export interface FamilyHeaderContext {
   handleSaveFamily: () => void;
   handleCancelFamily: () => void;
   handleEditFamily: (family: ProductFamily) => void;
-  setDeleteFamilyTargetId: Dispatch<SetStateAction<string | null>>;
+  setDeleteFamilyTarget: Dispatch<SetStateAction<ProductFamily | null>>;
 }
 
 export function buildAddRow(
@@ -167,7 +163,7 @@ export function buildFamilyHeader(
     handleSaveFamily,
     handleCancelFamily,
     handleEditFamily,
-    setDeleteFamilyTargetId,
+    setDeleteFamilyTarget,
   } = ctx;
   const isEditing = editingFamilyId === family.id;
   const isDraft = family.id === NEW_FAMILY_ID;
@@ -300,9 +296,7 @@ export function buildFamilyHeader(
             aria-label="קטגוריית המשפחה"
             className="w-32"
             value={familyForm.category}
-            onChange={(next) =>
-              setFamilyForm((current) => ({ ...current, category: next as ProduceCategory | "" }))
-            }
+            onChange={(next) => setFamilyForm((current) => ({ ...current, category: next }))}
             options={[
               { value: "", label: "ללא קטגוריה" },
               ...PRODUCE_CATEGORIES.map((category) => ({
@@ -350,7 +344,7 @@ export function buildFamilyHeader(
           icon="trash"
           label="מחק משפחה"
           tone="danger"
-          onClick={() => setDeleteFamilyTargetId(family.id)}
+          onClick={() => setDeleteFamilyTarget(family)}
           disabled={locked}
         />
         <RowIconButton

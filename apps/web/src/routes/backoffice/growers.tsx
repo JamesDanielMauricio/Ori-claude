@@ -16,10 +16,15 @@ import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
-import { referenceDataQueries, type GrowerCompany } from "@/lib/queries/reference-data";
+import { growerOversightKeys } from "@/lib/queries/oversight";
+import {
+  invalidateCompanyPickers,
+  referenceDataQueries,
+  type GrowerCompany,
+} from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
+import { useCatalogOptions } from "@/lib/use-catalog-options";
 import { useContactPersonDirectory } from "@/lib/use-contact-person-directory";
-import { formatVarietyName } from "@/lib/variety-label";
 
 interface FormState {
   name: string;
@@ -96,7 +101,10 @@ export default function GrowersPage() {
   const [saving, setSaving] = useState(false);
   // Separate from `editingId` — deleting a row is still a confirm dialog,
   // not inline, so it needs its own target rather than reusing edit state.
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  // The row itself, not its id: the optimistic delete takes it out of the
+  // cache while the dialog is still naming it.
+  const [deleteTarget, setDeleteTarget] = useState<GrowerCompany | null>(null);
+  const deleteTargetId = deleteTarget?.id ?? null;
 
   const growersQueryKey = referenceDataQueries.growers().queryKey;
   const growerProductsQueryKey = referenceDataQueries.growerProducts().queryKey;
@@ -109,35 +117,26 @@ export default function GrowersPage() {
   // referenceDataQueries.growerProducts).
   const growerProductsQuery = useQuery(referenceDataQueries.growerProducts());
 
-  // Active transporters only, for the "מוביל" dropdown.
-  const transportersQuery = useQuery(referenceDataQueries.transportersForGrowerAssignment());
+  // Every transporter, inactive ones too — the Transporters screen's own
+  // entry. A grower can still be assigned one that was since made inactive
+  // (the advice a refused delete gives), and its name must still show; only
+  // the dropdown is limited to active ones (see the "מוביל" column).
+  const transportersQuery = useQuery(referenceDataQueries.transporters());
   const transporterNameById = useMemo(
     () => new Map((transportersQuery.data ?? []).map((row) => [row.id, row.name])),
     [transportersQuery.data],
   );
 
   // The whole catalog for the in-season chips and picker — the same entry
-  // the Users screen reads (referenceDataQueries.productCatalog).
-  const catalogQuery = useQuery(referenceDataQueries.productCatalog());
-
-  const catalogOptions = useMemo(
-    () =>
-      (catalogQuery.data ?? []).map((product) => ({
-        id: product.id,
-        label: product.product_families?.name
-          ? `${product.product_families.name} — ${formatVarietyName(product.name, product.sizes)}`
-          : formatVarietyName(product.name, product.sizes),
-      })),
-    [catalogQuery.data],
-  );
-  const varietyLabelById = useMemo(
-    () => new Map(catalogOptions.map((option) => [option.id, option.label])),
-    [catalogOptions],
-  );
+  // the Users screen reads (useCatalogOptions).
+  const {
+    catalogQuery,
+    options: catalogOptions,
+    labelById: varietyLabelById,
+  } = useCatalogOptions();
 
   const editingRowId = editingId !== null && editingId !== NEW_ROW_ID ? editingId : null;
   const selected = growersQuery.data?.find((row) => row.id === editingRowId) ?? null;
-  const deleteTarget = growersQuery.data?.find((row) => row.id === deleteTargetId) ?? null;
 
   // Only patches an existing row — a brand-new grower (still unsaved,
   // editingId === NEW_ROW_ID) stays pessimistic: faking a row for an id the
@@ -204,6 +203,7 @@ export default function GrowersPage() {
       setEditingId(null);
       void queryClient.invalidateQueries({ queryKey: growersQueryKey });
       void queryClient.invalidateQueries({ queryKey: growerProductsQueryKey });
+      invalidateGrowerReaders();
     },
     onError: (
       error: { message?: string },
@@ -236,14 +236,25 @@ export default function GrowersPage() {
     onMutate: deleteOptimistic.onMutate,
     onSuccess: () => {
       showToast("המגדל נמחק.", "success");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
       void queryClient.invalidateQueries({ queryKey: growersQueryKey });
+      invalidateGrowerReaders();
     },
     onError: mergeOnError(deleteOptimistic.onError, (error: { message?: string }) => {
       showToast(`המחיקה נכשלה: ${errorMessage(error)}`, "error");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
     }),
   });
+
+  // The other screens that read these same grower rows under keys of their
+  // own: "בשם מגדל" (its grower list, in-season lists and picks) and the two
+  // user screens' company pickers. None is mounted here, so this only marks
+  // them stale — reference data is out of live updates (migration 0061), and
+  // without it they'd serve the pre-save copy for up to the 30 s staleTime.
+  function invalidateGrowerReaders() {
+    void queryClient.invalidateQueries({ queryKey: growerOversightKeys.all });
+    invalidateCompanyPickers(queryClient);
+  }
 
   // Seeded synchronously from data the table already has — the in-season
   // list is loaded up front for the column, not lazily on click, so there's
@@ -315,9 +326,7 @@ export default function GrowersPage() {
           aria-label="סטטוס"
           className="w-28"
           value={form.status}
-          onChange={(next) =>
-            setForm((current) => ({ ...current, status: next as "active" | "inactive" }))
-          }
+          onChange={(next) => setForm((current) => ({ ...current, status: next }))}
           options={[
             { value: "active", label: "פעיל" },
             { value: "inactive", label: "לא פעיל" },
@@ -348,6 +357,9 @@ export default function GrowersPage() {
         row.transporter_company_id
           ? (transporterNameById.get(row.transporter_company_id) ?? "—")
           : "—",
+      // Active transporters only, plus the one this grower is saved with
+      // even if it has since been made inactive — shown by name rather than
+      // as its raw id, and kept choosable after switching away from it.
       renderEdit: () => (
         <Select
           aria-label="מוביל"
@@ -358,10 +370,13 @@ export default function GrowersPage() {
           }
           options={[
             { value: "", label: "— ללא —" },
-            ...(transportersQuery.data?.map((transporter) => ({
-              value: transporter.id,
-              label: transporter.name,
-            })) ?? []),
+            ...(transportersQuery.data ?? [])
+              .filter(
+                (transporter) =>
+                  transporter.status === "active" ||
+                  transporter.id === selected?.transporter_company_id,
+              )
+              .map((transporter) => ({ value: transporter.id, label: transporter.name })),
           ]}
         />
       ),
@@ -465,30 +480,44 @@ export default function GrowersPage() {
         onEdit={handleEditRow}
         onSaveEdit={handleSave}
         onCancelEdit={handleCancel}
-        onDelete={(row) => setDeleteTargetId(row.id)}
+        onDelete={(row) => setDeleteTarget(row)}
         onAdd={handleNew}
         addLabel="מגדל חדש"
         // Waits for the in-season lists and the contact-person directory
         // too: both are columns now, and a table that paints rows before
         // they arrive would show every grower as having nothing in season
-        // (or an unresolved contact) for a moment.
+        // (or an unresolved contact) for a moment. The catalog and the
+        // transporters name what those columns hold, so without them the
+        // chips read as raw ids and every מוביל as "—".
         loading={
-          growersQuery.isLoading || growerProductsQuery.isLoading || contactDirectory.isLoading
+          growersQuery.isLoading ||
+          growerProductsQuery.isLoading ||
+          contactDirectory.isLoading ||
+          catalogQuery.isLoading ||
+          transportersQuery.isLoading
         }
         // Same reasoning as `loading` above, for the error path.
         loadError={
           (growersQuery.isError && !growersQuery.data) ||
           (growerProductsQuery.isError && !growerProductsQuery.data) ||
-          (contactDirectory.isError && contactDirectory.options.length === 0)
+          (contactDirectory.isError && contactDirectory.options.length === 0) ||
+          (catalogQuery.isError && catalogQuery.data === undefined) ||
+          (transportersQuery.isError && transportersQuery.data === undefined)
             ? {
                 what: "רשימת המגדלים",
                 onRetry: () => {
                   void growersQuery.refetch();
                   void growerProductsQuery.refetch();
                   contactDirectory.refetch();
+                  void catalogQuery.refetch();
+                  void transportersQuery.refetch();
                 },
                 retrying:
-                  growersQuery.isFetching || growerProductsQuery.isFetching || contactDirectory.isFetching,
+                  growersQuery.isFetching ||
+                  growerProductsQuery.isFetching ||
+                  contactDirectory.isFetching ||
+                  catalogQuery.isFetching ||
+                  transportersQuery.isFetching,
               }
             : null
         }
@@ -496,12 +525,12 @@ export default function GrowersPage() {
         emptyLabel="אין מגדלים עדיין."
       />
 
-      <Dialog open={deleteTargetId !== null} onClose={() => setDeleteTargetId(null)} title="מחיקת מגדל">
+      <Dialog open={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title="מחיקת מגדל">
         <p className="mb-4 text-sm">
           האם למחוק את המגדל &quot;{deleteTarget?.name}&quot;? פעולה זו אינה הפיכה.
         </p>
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setDeleteTargetId(null)}>
+          <Button variant="secondary" onClick={() => setDeleteTarget(null)}>
             ביטול
           </Button>
           <Button

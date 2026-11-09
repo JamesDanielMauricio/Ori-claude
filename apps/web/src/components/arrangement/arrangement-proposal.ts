@@ -18,7 +18,14 @@ import { floorToPalletStep, isPalletQuantity, roundPallets } from "@ori/shared/p
 
 import { formatVarietyName } from "@/lib/variety-label";
 
-import type { BoardOrder, BoardPick, BoardRecord, BoardSubmissionTime } from "./board-data";
+import {
+  canArrangeFrom,
+  parsePallets,
+  type BoardOrder,
+  type BoardPick,
+  type BoardRecord,
+  type BoardSubmissionTime,
+} from "./board-data";
 import type { ProposedAllocation } from "./matrix-data";
 
 /** One line of a suggestion, in the day's own terms rather than in row ids. */
@@ -55,8 +62,9 @@ export interface ResolvedProposal {
   alreadyArranged: number;
   /**
    * Lines left out because the day has nowhere to put them: that grower has
-   * no lot of that product, that customer is not trading, or the quantity is
-   * not a number of pallets above zero with at most one decimal place.
+   * no lot of that product or its pick is closed, that customer is not
+   * trading, or the quantity is not a number of pallets above zero with at
+   * most one decimal place.
    */
   unplaceable: number;
   /**
@@ -80,7 +88,7 @@ function orderedPallets(orders: readonly BoardOrder<BoardSubmissionTime>[]): Map
   const ordered = new Map<string, number>();
   for (const order of orders) {
     for (const line of order.daily_order_products) {
-      const pallets = Number(line.pallets_ordered);
+      const pallets = parsePallets(line.pallets_ordered);
       if (!(pallets > 0)) continue;
       const key = `${order.customer_company_id}${SEP}${line.product_varieties?.id ?? line.product_variety_id}`;
       ordered.set(key, roundPallets((ordered.get(key) ?? 0) + pallets));
@@ -120,6 +128,10 @@ export function resolveProposal({
 }): ResolvedProposal {
   const pickLineByGrowerVariety = new Map<string, string>();
   for (const pick of picks) {
+    // Nor on a closed pick's lot: the grid shows it read-only and the save
+    // would be refused (0089), with no way to correct the cell but to drop
+    // the whole proposal. Its records still count below.
+    if (!canArrangeFrom(pick)) continue;
     for (const line of pick.daily_pick_products) {
       // A lot whose product did not come back has no row on the grid —
       // buildMatrix skips it — so nothing may land on it here either: it
@@ -164,7 +176,7 @@ export function resolveProposal({
     arrangedCells.add(`${record.daily_pick_product_id}${SEP}${ownerId}`);
     arrangedCells.add(`${record.daily_pick_product_id}${SEP}${record.customer_company_id}`);
     const varietyId = varietyOfPickLine.get(record.daily_pick_product_id);
-    const pallets = Number(record.quantity_pallets);
+    const pallets = parsePallets(record.quantity_pallets);
     if (varietyId && pallets > 0) {
       const key = `${ownerId}${SEP}${varietyId}`;
       if (owed.has(key)) owed.set(key, roundPallets((owed.get(key) ?? 0) - pallets));
@@ -259,7 +271,8 @@ export function resolveProposal({
  * resolveProposal lands nothing there: it has no row to have been typed into.
  * One grower has one lot of a product on a day (daily_picks is unique per day
  * and grower, daily_pick_products per pick and variety), so this and
- * resolveProposal's own lookup are each other's inverse.
+ * resolveProposal's own lookup are each other's inverse on every pick that
+ * is not closed.
  */
 export function lotOfPickLine(
   picks: BoardPick[],

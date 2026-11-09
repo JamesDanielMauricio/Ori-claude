@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth-context";
 
 import { AlertsBell } from "./alerts-bell";
 import { BusinessDayPanel } from "./business-day-panel";
+import { MenuToggleButton } from "./menu-toggle-button";
 import { NavLink } from "./nav-link";
 import { SettingsTogglesButton } from "./settings-toggles-button";
 import { SignOutButton } from "./sign-out-button";
@@ -66,7 +67,7 @@ const SYSTEM_NAV: Array<{ href: string; label: string; icon: IconName }> = [
 // scan down — the icons now form that line.
 function BackofficeNavLink({ href, label, icon }: { href: string; label: string; icon: IconName }) {
   return (
-    <NavLink href={href} variant="outline">
+    <NavLink href={href}>
       {/* The icon scales up a hair on hover. It's a 2px change on an 18px
           glyph — not readable as movement, but enough that the row feels
           responsive under the pointer rather than merely tinted. */}
@@ -175,18 +176,7 @@ export function BackofficeNav() {
           <LogoMark size="sm" />
           <div className="flex shrink-0 items-center gap-0.5">
             <AlertsBell />
-            <button
-              type="button"
-              aria-label="תפריט"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
-              // 40px, matching the AlertsBell beside it and RoleShell's copy
-              // of this same button — it was 36, and it is the only way into
-              // navigation on the phone layout.
-              className="flex h-10 w-10 items-center justify-center rounded-md text-ink-muted transition-[background-color,color,transform] duration-200 hover:bg-accent-soft hover:text-accent active:scale-95"
-            >
-              <Icon name={menuOpen ? "close" : "menu"} />
-            </button>
+            <MenuToggleButton open={menuOpen} setOpen={setMenuOpen} />
           </div>
         </header>
 
@@ -215,7 +205,7 @@ export function BackofficeNav() {
 
             <div className="mt-3 flex flex-col gap-3 border-t border-border pt-3">
               <SettingsTogglesButton />
-              <SignOutButton variant="solid" />
+              <SignOutButton />
             </div>
           </div>
         )}
@@ -283,7 +273,7 @@ function DesktopRail() {
           the nav rows. */}
       <div className="flex flex-col gap-3 border-t border-border px-5 py-4">
         <SettingsTogglesButton />
-        <SignOutButton variant="solid" />
+        <SignOutButton />
       </div>
     </nav>
   );

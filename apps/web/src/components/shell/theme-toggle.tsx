@@ -23,7 +23,7 @@ export function ThemeToggle() {
     <Select
       aria-label="ערכת צבעים"
       value={preference}
-      onChange={(next) => setThemePreference(next as ThemePreference)}
+      onChange={(next) => setThemePreference(next)}
       options={OPTIONS}
       className="w-full"
     />

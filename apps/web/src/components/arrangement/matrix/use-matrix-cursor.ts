@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 
 import { cellTarget, parseMatrixQuantity, type Matrix, type MatrixRow } from "../matrix-data";
 
@@ -54,6 +54,12 @@ export function useMatrixCursor({
   // Only ever one draft: a cell commits when it loses focus, so a second one
   // cannot begin before the first has ended.
   const [draft, setDraft] = useState<(CellAddress & { value: string }) | null>(null);
+  // Set by a keyboard navigation and cleared once its target has focus. The
+  // focus effect below acts only while it is set: `active` outlives the cell
+  // losing focus, and without this every later change of `range` (a scroll,
+  // a search) would pull focus back into a cell the user has left, its text
+  // selected for the next keystroke to replace.
+  const focusPending = useRef(false);
 
   /** An address, or null once the row it named is no longer at that index. */
   function resolve<T extends CellAddress>(address: T | null): T | null {
@@ -73,11 +79,19 @@ export function useMatrixCursor({
   // arrives as an argument; it is the same ref object on every render, so it
   // never re-runs the effect.)
   useEffect(() => {
-    if (!activeCell) return;
+    if (!focusPending.current) return;
+    if (!activeCell) {
+      // The row it was headed for has moved or gone (a search, a collapse).
+      focusPending.current = false;
+      return;
+    }
     const input = scrollRef.current?.querySelector<HTMLInputElement>(
       `input[data-cell="${activeCell.row}-${activeCell.col}"]`,
     );
-    if (input && document.activeElement !== input) {
+    // Not mounted yet: `range` catching up re-runs this.
+    if (!input) return;
+    focusPending.current = false;
+    if (document.activeElement !== input) {
       input.focus();
       input.select();
     }
@@ -96,7 +110,16 @@ export function useMatrixCursor({
       else if (element.scrollTop < minScroll) element.scrollTop = minScroll;
     }
     const key = rows[row]?.key;
-    if (key) setActive({ row, col, key });
+    if (!key) return;
+    focusPending.current = true;
+    setActive({ row, col, key });
+  }
+
+  // A cell focused by pointer or Tab already has focus, and cancels any
+  // navigation still waiting for its target to mount.
+  function focusedCell(cell: CellAddress) {
+    focusPending.current = false;
+    setActive(cell);
   }
 
   /**
@@ -198,7 +221,7 @@ export function useMatrixCursor({
     // Whether anything is being typed at all — even into a row a search or a
     // collapse has hidden, which `draftCell` reads as none.
     hasDraft: draft !== null,
-    setActive,
+    setActive: focusedCell,
     setDraft,
     commitDraft,
     handleKeyDown,

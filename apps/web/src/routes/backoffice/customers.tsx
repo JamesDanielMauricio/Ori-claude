@@ -21,7 +21,12 @@ import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
-import { referenceDataQueries, type CustomerCompany } from "@/lib/queries/reference-data";
+import { oversightQueries } from "@/lib/queries/oversight";
+import {
+  invalidateCompanyPickers,
+  referenceDataQueries,
+  type CustomerCompany,
+} from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 import { useContactPersonDirectory } from "@/lib/use-contact-person-directory";
 
@@ -104,7 +109,10 @@ export default function CustomersPage() {
   const [saving, setSaving] = useState(false);
   // Separate from `editingId` — deleting a row is still a confirm dialog,
   // not inline, so it needs its own target rather than reusing edit state.
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  // The row itself, not its id: the optimistic delete takes it out of the
+  // cache while the dialog is still naming it.
+  const [deleteTarget, setDeleteTarget] = useState<CustomerCompany | null>(null);
+  const deleteTargetId = deleteTarget?.id ?? null;
 
   const customersQueryKey = referenceDataQueries.customers().queryKey;
 
@@ -210,7 +218,6 @@ export default function CustomersPage() {
 
   const editingRowId = editingId === NEW_ROW_ID ? null : editingId;
   const selected = customersQuery.data?.find((row) => row.id === editingRowId) ?? null;
-  const deleteTarget = customersQuery.data?.find((row) => row.id === deleteTargetId) ?? null;
 
   const saveOptimistic = optimisticUpdate<CustomerCompany[], void>(
     queryClient,
@@ -249,6 +256,7 @@ export default function CustomersPage() {
       showToast("הנתונים נשמרו.", "success");
       setEditingId(null);
       void queryClient.invalidateQueries({ queryKey: customersQueryKey });
+      invalidateCustomerReaders();
     },
     onError: mergeOnError(saveOptimistic.onError, (error: { message?: string }) => {
       showToast(`השמירה נכשלה: ${errorMessage(error)}`, "error");
@@ -270,14 +278,23 @@ export default function CustomersPage() {
     onMutate: deleteOptimistic.onMutate,
     onSuccess: () => {
       showToast("הלקוח נמחק.", "success");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
       void queryClient.invalidateQueries({ queryKey: customersQueryKey });
+      invalidateCustomerReaders();
     },
     onError: mergeOnError(deleteOptimistic.onError, (error: { message?: string }) => {
       showToast(`המחיקה נכשלה: ${errorMessage(error)}`, "error");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
     }),
   });
+
+  // The other screens that list these same customers under keys of their
+  // own: "בשם לקוח" and the two user screens' company pickers. Not mounted
+  // here, so this only marks them stale (see growers.tsx's identical note).
+  function invalidateCustomerReaders() {
+    void queryClient.invalidateQueries({ queryKey: oversightQueries.activeCustomers().queryKey });
+    invalidateCompanyPickers(queryClient);
+  }
 
   // No second, lazily-fetched query behind this form (unlike growers/products/
   // users), so — unlike those three — the row already fetched is the whole
@@ -337,9 +354,7 @@ export default function CustomersPage() {
           aria-label="סטטוס"
           className="w-28"
           value={form.status}
-          onChange={(next) =>
-            setForm((current) => ({ ...current, status: next as "active" | "inactive" }))
-          }
+          onChange={(next) => setForm((current) => ({ ...current, status: next }))}
           options={[
             { value: "active", label: "פעיל" },
             { value: "inactive", label: "לא פעיל" },
@@ -484,7 +499,7 @@ export default function CustomersPage() {
         onEdit={handleEditRow}
         onSaveEdit={handleSave}
         onCancelEdit={handleCancel}
-        onDelete={(row) => setDeleteTargetId(row.id)}
+        onDelete={(row) => setDeleteTarget(row)}
         onAdd={handleNew}
         addLabel="לקוח חדש"
         // Waits for the contact-person directory too: it's a column now,
@@ -512,12 +527,12 @@ export default function CustomersPage() {
         emptyLabel="אין לקוחות עדיין."
       />
 
-      <Dialog open={deleteTargetId !== null} onClose={() => setDeleteTargetId(null)} title="מחיקת לקוח">
+      <Dialog open={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title="מחיקת לקוח">
         <p className="mb-4 text-sm">
           האם למחוק את הלקוח &quot;{deleteTarget?.name}&quot;? פעולה זו אינה הפיכה.
         </p>
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setDeleteTargetId(null)}>
+          <Button variant="secondary" onClick={() => setDeleteTarget(null)}>
             ביטול
           </Button>
           <Button

@@ -9,6 +9,9 @@ import { createClient } from "@/lib/supabase/client";
 // fetch together; see lib/queries/trading-day.ts for why the keys matter.
 
 export const growerOversightKeys = {
+  // Every read below keyed under "grower-oversight" — what a grower save made
+  // elsewhere (the Growers screen) invalidates, so this screen re-reads it.
+  all: ["grower-oversight"] as const,
   growerProductsAll: ["grower-oversight", "grower-products"] as const,
 };
 
@@ -121,31 +124,6 @@ export const oversightQueries = {
     });
   },
 
-  // The whole catalog for the in-season products dialog.
-  productCatalog() {
-    return queryOptions({
-      queryKey: ["grower-oversight", "product-catalog"],
-      queryFn: async () => {
-        // Paged for the same reason as growersWithProducts() below: the
-        // catalog (~900 varieties) is near PostgREST's 1,000-row cap, which
-        // truncates silently. `id` breaks ties between same-named varieties.
-        return fetchAllRows<{
-          id: string;
-          name: string;
-          sizes: string | null;
-          product_families: { name: string } | null;
-        }>((from, to) =>
-          createClient()
-            .from("product_varieties")
-            .select("id, name, sizes, product_families(name)")
-            .order("name")
-            .order("id")
-            .range(from, to),
-        );
-      },
-    });
-  },
-
   // Which growers have an in-season list at all — see
   // routes/backoffice/distributor-grower.tsx for why "no pick yet" needs
   // this to be told apart from "nothing in season".
@@ -170,18 +148,46 @@ export const oversightQueries = {
     });
   },
 
-  // One grower's in-season list, for the products dialog opened on them.
+  // One grower's in-season list, for the products dialog opened on them —
+  // with the grower's own row read in the same go. save_grower rewrites the
+  // whole company row as well as the whole list, so the dialog sends back
+  // what THIS read returned, not the screen's list row: that one can predate
+  // an edit made on the Growers screen, and writing it back would undo it.
+  //
+  // staleTime 0, so every opening re-reads both rather than seeding from a
+  // cached copy (the dialog waits for the read; see distributor-grower.tsx).
+  // Paged like growersWithProducts(): a list cut short at PostgREST's row
+  // cap would be saved back short.
   growerProducts(growerId: string | null) {
     return queryOptions({
       queryKey: ["grower-oversight", "grower-products", growerId],
       enabled: !!growerId,
-      queryFn: async () => {
-        const { data, error } = await createClient()
-          .from("grower_products")
-          .select("product_variety_id")
-          .eq("company_id", growerId!);
-        if (error) throw error;
-        return data.map((row) => row.product_variety_id);
+      staleTime: 0,
+      queryFn: async (): Promise<{ grower: OversightGrower; productVarietyIds: string[] }> => {
+        const supabase = createClient();
+        const [growerResult, rows] = await Promise.all([
+          supabase
+            .from("companies")
+            .select(
+              "id, name, status, default_pickup_time, whatsapp_group_id, transporter_company_id, contact_person_id",
+            )
+            .eq("id", growerId!)
+            .eq("type", "grower")
+            .single(),
+          fetchAllRows<{ product_variety_id: string }>((from, to) =>
+            supabase
+              .from("grower_products")
+              .select("product_variety_id")
+              .eq("company_id", growerId!)
+              .order("product_variety_id")
+              .range(from, to),
+          ),
+        ]);
+        if (growerResult.error) throw growerResult.error;
+        return {
+          grower: growerResult.data,
+          productVarietyIds: rows.map((row) => row.product_variety_id),
+        };
       },
     });
   },

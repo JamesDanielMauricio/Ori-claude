@@ -14,7 +14,6 @@ import {
   PACK_TYPE_LABEL,
   orDash,
   type FormState,
-  type PackType,
 } from "./catalog-form";
 
 export interface VarietyColumnsContext {
@@ -124,9 +123,7 @@ export function buildVarietyColumns({
           aria-label="סוג אריזה"
           className="w-28"
           value={form.packType}
-          onChange={(next) =>
-            setForm((current) => ({ ...current, packType: next as PackType | "" }))
-          }
+          onChange={(next) => setForm((current) => ({ ...current, packType: next }))}
           options={[
             { value: "", label: "—" },
             { value: "pallets", label: "משטחים" },

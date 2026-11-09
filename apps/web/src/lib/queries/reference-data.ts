@@ -1,8 +1,9 @@
 import type { UserRole } from "@ori/shared/roles";
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
 import { fetchAllRows } from "@/lib/fetch-all-rows";
 import type { ProduceCategory } from "@/lib/produce-categories";
+import { usersAdminQueries } from "@/lib/queries/users-admin";
 import { createClient } from "@/lib/supabase/client";
 
 // Server reads behind the backoffice's reference-data screens (products,
@@ -17,7 +18,8 @@ import { createClient } from "@/lib/supabase/client";
 // ---------------------------------------------------------------- products
 
 // The whole catalog as a pick-list (name + family) for chips and pickers —
-// shared by the Growers and Users screens, which is why it has one key.
+// shared by the Growers, Users and "בשם מגדל" screens (useCatalogOptions),
+// which is why it has one key.
 export interface CatalogVariety {
   id: string;
   name: string;
@@ -73,11 +75,6 @@ export interface GrowerCompany {
   created_at: string;
 }
 
-export interface TransporterOption {
-  id: string;
-  name: string;
-}
-
 export interface CustomerCompany {
   id: string;
   name: string;
@@ -124,7 +121,8 @@ export interface ProfileRow {
   product_category: ProduceCategory | null;
 }
 
-// One entry in the contact-person picker's directory.
+// One entry in the contact-person picker's directory — also the
+// password-reset page's list of users.
 export interface ContactPersonProfile {
   user_id: string;
   display_name: string;
@@ -243,25 +241,6 @@ export const referenceDataQueries = {
     });
   },
 
-  // Active transporters only — the Growers screen's "מוביל" dropdown assigns
-  // the transporter that gets cc'd on a grower's arrangement-finalization
-  // message (id 8, packages/db/migrations/0031/0033).
-  transportersForGrowerAssignment() {
-    return queryOptions({
-      queryKey: ["reference-data", "transporters-for-grower-assignment"],
-      queryFn: async (): Promise<TransporterOption[]> => {
-        const { data, error } = await createClient()
-          .from("companies")
-          .select("id, name")
-          .eq("type", "transporter")
-          .eq("status", "active")
-          .order("name");
-        if (error) throw error;
-        return data;
-      },
-    });
-  },
-
   customers() {
     return queryOptions({
       queryKey: ["reference-data", "customers"],
@@ -279,6 +258,9 @@ export const referenceDataQueries = {
     });
   },
 
+  // Also read by the Growers screen, whose "מוביל" column assigns the
+  // transporter that gets cc'd on a grower's arrangement-finalization message
+  // (id 8, packages/db/migrations/0031/0033).
   transporters() {
     return queryOptions({
       queryKey: ["reference-data", "transporters"],
@@ -359,7 +341,8 @@ export const referenceDataQueries = {
   },
 
   // Every profile with its company name — the contact-person picker on the
-  // Growers/Customers/Transporters screens (see useContactPersonDirectory).
+  // Growers/Customers/Transporters screens (see useContactPersonDirectory)
+  // and the password-reset page's user list.
   contactPersonProfiles() {
     return queryOptions({
       queryKey: ["reference-data", "contact-person-directory-profiles"],
@@ -379,3 +362,15 @@ export const referenceDataQueries = {
     });
   },
 };
+
+// The two pickers that list every company by name, each under its own key:
+// the Users screen's and the bulk import's. A company saved or deleted on its
+// own screen marks both stale. Neither is mounted there, so nothing refetches
+// until one is next opened — without this it would offer the pre-save list
+// for up to the 30 s staleTime (reference data is out of live updates, 0061).
+export function invalidateCompanyPickers(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({
+    queryKey: referenceDataQueries.companiesForUsers().queryKey,
+  });
+  void queryClient.invalidateQueries({ queryKey: usersAdminQueries.importCompanies().queryKey });
+}

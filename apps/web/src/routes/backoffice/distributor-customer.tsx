@@ -2,7 +2,6 @@ import { sendOrderReminderInputSchema, toSendOrderReminderRpcArgs } from "@ori/d
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
-import { formatPallets } from "@/components/arrangement/board-data";
 import { CustomerOrdersDialog } from "@/components/arrangement/customer-orders-dialog";
 import { ExpandableEntityRow } from "@/components/reference-data/expandable-entity-row";
 import {
@@ -18,6 +17,7 @@ import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
+import { groupLinesByFamily } from "@/lib/family-grouping";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
 import { nudgeWhatsAppDispatch } from "@/lib/nudge-whatsapp-dispatch";
 import {
@@ -28,40 +28,15 @@ import {
 } from "@/lib/queries/oversight";
 import { createClient } from "@/lib/supabase/client";
 import { useTradingDayView } from "@/lib/trading-day-view";
-import { formatVarietyName } from "@/lib/variety-label";
 
-// Same grouping as distributor-grower.tsx's groupPickLines, mirrored onto
-// order lines.
-function groupOrderLines(lines: OrderLineRow[]): FamilyGroupedRow[] {
-  const families = new Map<string, FamilyGroupedRow>();
-  for (const line of lines) {
-    const variety = line.product_varieties;
-    if (!variety) continue;
-    let group = families.get(variety.family_id);
-    if (!group) {
-      group = {
-        familyId: variety.family_id,
-        familyName: variety.product_families?.name ?? "",
-        imageUrl: variety.product_families?.image_url ?? null,
-        lines: [],
-      };
-      families.set(variety.family_id, group);
-    }
-    const pallets = Number(line.pallets_ordered) || 0;
-    group.lines.push({
-      id: line.id,
-      varietyName: formatVarietyName(variety.name, variety.sizes),
-      quantityLabel: formatPallets(pallets),
-      hasQuantity: pallets > 0,
-      comment: line.comment,
-    });
-  }
-  const groups = [...families.values()];
-  for (const group of groups) {
-    group.lines.sort((a, b) => a.varietyName.localeCompare(b.varietyName, "he"));
-  }
-  return groups.sort((a, b) => a.familyName.localeCompare(b.familyName, "he"));
+// Same grouping as distributor-grower.tsx (groupLinesByFamily), on the
+// ordered quantity.
+function orderLineQuantity(line: OrderLineRow): number {
+  return Number(line.pallets_ordered) || 0;
 }
+
+// See distributor-grower.tsx's NO_FAMILIES.
+const NO_FAMILIES: FamilyGroupedRow[] = [];
 
 // Distributor-facing "Customer Order Status" oversight (PRD:
 // backoffice.md's "distributor+customer" tab — "Distributor as Customer
@@ -105,6 +80,19 @@ export default function DistributorAsCustomerPage() {
   const orderByCustomerId = useMemo(() => {
     const map = new Map<string, DailyOrderForDay>();
     for (const order of ordersForDayQuery.data ?? []) map.set(order.customer_company_id, order);
+    return map;
+  }, [ordersForDayQuery.data]);
+
+  // Grouped once per read of the day's orders — see distributor-grower.tsx's
+  // familiesByGrowerId.
+  const familiesByCustomerId = useMemo(() => {
+    const map = new Map<string, FamilyGroupedRow[]>();
+    for (const order of ordersForDayQuery.data ?? []) {
+      map.set(
+        order.customer_company_id,
+        groupLinesByFamily(order.daily_order_products, orderLineQuantity),
+      );
+    }
     return map;
   }, [ordersForDayQuery.data]);
 
@@ -190,7 +178,7 @@ export default function DistributorAsCustomerPage() {
       order?.status === "submitted" && order.submitted_at
         ? `נשלח ב-${new Date(order.submitted_at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}`
         : null;
-    const families = order ? groupOrderLines(order.daily_order_products) : [];
+    const families = familiesByCustomerId.get(customer.id) ?? NO_FAMILIES;
     const reminding = reminderMutation.isPending && reminderMutation.variables === order?.id;
 
     return (
@@ -250,7 +238,9 @@ export default function DistributorAsCustomerPage() {
           <Skeleton className="h-14 w-full" />
           <Skeleton className="h-14 w-full" />
         </div>
-      ) : dayView.isLoadError || customersQuery.isError || ordersForDayQuery.isError ? (
+      ) : dayView.isLoadError ||
+        (customersQuery.isError && customersQuery.data === undefined) ||
+        (ordersForDayQuery.isError && ordersForDayQuery.data === undefined) ? (
         <QueryError
           what="לקוחות"
           onRetry={() => {

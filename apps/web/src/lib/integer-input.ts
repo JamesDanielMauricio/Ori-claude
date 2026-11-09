@@ -9,19 +9,27 @@ import type { KeyboardEvent, WheelEvent } from "react";
 // lets someone type "8.5" while focused, and only flags it as :invalid on
 // blur/submit (which this app doesn't check). Blocking the separator key
 // itself is what actually stops it from being typed in the first place.
+// The sign and exponent keys too: a number input takes "-5", "1e3" and
+// "2e-1" as valid numbers, and none of them is a whole count of pallets.
+const NON_DIGIT_KEYS = new Set([".", ",", "-", "+", "e", "E"]);
+
 export function blockDecimalKey(event: KeyboardEvent<HTMLInputElement>) {
-  if (event.key === "." || event.key === ",") {
+  // Not with Ctrl/Cmd/Alt held: those are the browser's shortcuts (Ctrl+-
+  // and Ctrl++ zoom), which type nothing. Shift still counts — Shift+= is "+".
+  // Whatever a modified key could still insert, stripDecimal below cleans.
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (NON_DIGIT_KEYS.has(event.key)) {
     event.preventDefault();
   }
 }
 
 // Second line of defense for however a decimal could still land in the
 // field without a keystroke `blockDecimalKey` would see — a paste, or
-// autofill. Keeps only what was typed before the first separator, so
-// "8.5" pasted in becomes "8" rather than being accepted whole.
+// autofill. Keeps only the digits before the first non-digit, so "8.5"
+// pasted in becomes "8" rather than being accepted whole, "1e3" becomes "1"
+// rather than 1,000 pallets, and "-5" becomes empty.
 export function stripDecimal(value: string): string {
-  const separatorIndex = value.search(/[.,]/);
-  return separatorIndex === -1 ? value : value.slice(0, separatorIndex);
+  return /^\d*/.exec(value.trim())?.[0] ?? "";
 }
 
 // Chrome, Firefox and Edge all change a focused number input's value on

@@ -90,7 +90,7 @@ function TodayPickView() {
   // grower "no business day is open" when the request actually errored is the
   // costliest wrong answer on this screen — it reads as "nothing to pick
   // today" and they stop.
-  if (openDayQuery.isError) {
+  if (openDayQuery.isError && openDayQuery.data === undefined) {
     return <QueryError what="יום המסחר" onRetry={() => void openDayQuery.refetch()} retrying={openDayQuery.isFetching} />;
   }
 
@@ -109,7 +109,7 @@ function TodayPickView() {
   // Same reasoning one level down: "no pick list was created for you" is a
   // real state that tells the grower to call the distributor, so it must not
   // be shown for a request that simply failed.
-  if (pickQuery.isError) {
+  if (pickQuery.isError && pickQuery.data === undefined) {
     return <QueryError what="רשימת הליקוט" onRetry={() => void pickQuery.refetch()} retrying={pickQuery.isFetching} />;
   }
 
@@ -153,7 +153,7 @@ function SpecificPickView({ pickId }: { pickId: string }) {
     );
   }
 
-  if (pickQuery.isError) {
+  if (pickQuery.isError && pickQuery.data === undefined) {
     return (
       <QueryError what="הליקוט" onRetry={() => void pickQuery.refetch()} retrying={pickQuery.isFetching} />
     );
@@ -201,7 +201,7 @@ function NoPickView({ tradingDayId }: { tradingDayId: string }) {
     );
   }
 
-  if (dayQuery.isError) {
+  if (dayQuery.isError && dayQuery.data === undefined) {
     return <QueryError what="יום המסחר" onRetry={() => void dayQuery.refetch()} retrying={dayQuery.isFetching} />;
   }
 

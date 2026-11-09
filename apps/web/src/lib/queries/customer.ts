@@ -11,6 +11,14 @@ import type { TradingDayPhase } from "./trading-day";
 // why the keys matter. The backoffice's on-behalf-of order editor reuses
 // customerQueries.catalog with an explicit company.
 
+export const customerKeys = {
+  // Every order catalog, any day and company — what a price save made on a
+  // backoffice screen invalidates: product_varieties is out of live updates
+  // (migration 0061), so an open catalog would otherwise keep the old price
+  // for up to the 30 s staleTime.
+  catalogAll: ["customer", "catalog"] as const,
+};
+
 export interface CustomerHistoryDay {
   id: string;
   trade_date: string;
@@ -61,7 +69,7 @@ export const customerQueries = {
   // session reads its own company ("self" in the key).
   catalog(tradingDayId: string, customerCompanyId?: string) {
     return queryOptions({
-      queryKey: ["customer", "catalog", tradingDayId, customerCompanyId ?? "self"],
+      queryKey: [...customerKeys.catalogAll, tradingDayId, customerCompanyId ?? "self"],
       queryFn: async (): Promise<CatalogRow[]> => {
         const input = orderableCatalogInputSchema.parse({ tradingDayId, customerCompanyId });
         const { data, error } = await createClient().rpc(

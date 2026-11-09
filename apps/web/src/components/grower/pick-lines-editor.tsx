@@ -5,7 +5,7 @@ import {
   toSubmitPickRpcArgs,
 } from "@ori/domain/lifecycle-engine";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PickConfirmationDialog, type PickReviewFamily } from "@/components/grower/pick-confirmation-dialog";
 import {
@@ -130,6 +130,90 @@ function NumberCell({
     </div>
   );
 }
+
+// One variety's row. Memoized, and given only primitives and the editor's
+// stable `updateLine`: the editor re-renders on every keystroke, and every
+// family's rows stay mounted (see the accordion note below), so without it
+// each digit re-rendered every row of a grower's in-season list — hundreds —
+// to change one.
+const PickVarietyRow = memo(function PickVarietyRow({
+  locked,
+  onUpdate,
+  ...variety
+}: PickFamilyVariety & {
+  locked: boolean;
+  onUpdate: (id: string, patch: Partial<DraftLine>) => void;
+}) {
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/60 px-4 py-3 last:border-b-0">
+      {/* `w-full` in the narrow layout takes a whole flex
+          line, which pushes the inputs down to their own
+          row. Measured at 375px, sharing the line left this
+          name 87px — and 32px at 320px, 28px on a 768px
+          tablet — so a variety like "עגבניה אשכולות L"
+          broke across three lines beside two full-width
+          number boxes. The inputs don't shrink (they carry
+          explicit widths), so the name was the only thing
+          that could absorb a narrow container, and it
+          absorbed all of it. At `@2xl` it goes back to
+          sharing the line, which is where the column header
+          above lines up. */}
+      <p className="w-full min-w-0 text-sm font-medium text-ink @2xl:w-auto @2xl:flex-1">
+        {variety.varietyName}
+      </p>
+      {/* The shared header above labels these two columns
+          (נקטף/עודף) — this input carries its own
+          aria-label too, so it's still identified on its
+          own for anyone not reading the header visually. */}
+      <NumberCell
+        caption="נקטף"
+        disabled={locked}
+        ariaLabel={`פלטות שנקטפו — ${variety.varietyName}`}
+        value={variety.pallets}
+        onChange={(next) => onUpdate(variety.id, { pallets: next })}
+      />
+      {/* Carried forward from the grower's most recent prior
+          line for this variety (bootstrap_grower_pick /
+          sync_grower_picks, migration 0050) and
+          independently editable — kept as its own number,
+          not folded into "pallets", so a grower can see
+          which pallets are fresh vs. carried over and can
+          zero this out alone if it's gone bad. Counts as
+          real arrangeable supply either way: the save floor
+          (P0006) guards pallets + leftover combined, not
+          either field alone. */}
+      <NumberCell
+        caption="עודף"
+        disabled={locked}
+        ariaLabel={`פלטות עודף — ${variety.varietyName}`}
+        value={variety.leftover}
+        onChange={(next) => onUpdate(variety.id, { leftover: next })}
+      />
+      {/* Wrapped in the same caption-spacer shape as
+          NumberCell, even though this field has no caption
+          of its own (its placeholder already says "הערה").
+          Without the spacer, this was the only item in the
+          row shorter than the NumberCells' caption+input
+          stack, so `items-center` on the row centered it
+          against them instead of lining up its top edge —
+          it sat visibly lower than the two number boxes. */}
+      <div className="flex w-40 flex-1 flex-col gap-1 @2xl:w-auto @2xl:flex-none">
+        <span aria-hidden className="invisible text-[11px] font-medium @2xl:hidden">
+          הערה
+        </span>
+        <input
+          type="text"
+          disabled={locked}
+          placeholder="הערה"
+          aria-label={`הערה — ${variety.varietyName}`}
+          className={`${inputClassName} w-full`}
+          value={variety.comment}
+          onChange={(event) => onUpdate(variety.id, { comment: event.target.value })}
+        />
+      </div>
+    </li>
+  );
+});
 
 // The one place both the grower's own picking screen and the
 // distributor's Grower Inventory Status oversight screen edit a Daily
@@ -377,10 +461,12 @@ export function PickLinesEditor({
     }),
   });
 
-  function updateLine(id: string, patch: Partial<DraftLine>) {
+  // Stable (it touches only a ref and a state setter), so the memoized
+  // PickVarietyRow re-renders only when its own values change.
+  const updateLine = useCallback((id: string, patch: Partial<DraftLine>) => {
     editedIds.current.add(id);
     setDraft((current) => current.map((line) => (line.id === id ? { ...line, ...patch } : line)));
-  }
+  }, []);
 
   const families = useMemo(
     () => groupDraftByFamily(linesQuery.data ?? [], draft),
@@ -455,7 +541,7 @@ export function PickLinesEditor({
   // "This grower has no in-season products" is a real, actionable state
   // (someone has to fix their product list) — so it must not double as the
   // display for a failed fetch, which needs a retry instead.
-  if (linesQuery.isError) {
+  if (linesQuery.isError && linesQuery.data === undefined) {
     return (
       <QueryError
         what="שורות הליקוט"
@@ -567,78 +653,12 @@ export function PickLinesEditor({
                   </div>
                   <ul inert={!expanded}>
                     {family.varieties.map((variety) => (
-                      <li
+                      <PickVarietyRow
                         key={variety.id}
-                        className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/60 px-4 py-3 last:border-b-0"
-                      >
-                        {/* `w-full` in the narrow layout takes a whole flex
-                            line, which pushes the inputs down to their own
-                            row. Measured at 375px, sharing the line left this
-                            name 87px — and 32px at 320px, 28px on a 768px
-                            tablet — so a variety like "עגבניה אשכולות L"
-                            broke across three lines beside two full-width
-                            number boxes. The inputs don't shrink (they carry
-                            explicit widths), so the name was the only thing
-                            that could absorb a narrow container, and it
-                            absorbed all of it. At `@2xl` it goes back to
-                            sharing the line, which is where the column header
-                            above lines up. */}
-                        <p className="w-full min-w-0 text-sm font-medium text-ink @2xl:w-auto @2xl:flex-1">
-                          {variety.varietyName}
-                        </p>
-                        {/* The shared header above labels these two columns
-                            (נקטף/עודף) — this input carries its own
-                            aria-label too, so it's still identified on its
-                            own for anyone not reading the header visually. */}
-                        <NumberCell
-                          caption="נקטף"
-                          disabled={locked}
-                          ariaLabel={`פלטות שנקטפו — ${variety.varietyName}`}
-                          value={variety.pallets}
-                          onChange={(next) => updateLine(variety.id, { pallets: next })}
-                        />
-                        {/* Carried forward from the grower's most recent prior
-                            line for this variety (bootstrap_grower_pick /
-                            sync_grower_picks, migration 0050) and
-                            independently editable — kept as its own number,
-                            not folded into "pallets", so a grower can see
-                            which pallets are fresh vs. carried over and can
-                            zero this out alone if it's gone bad. Counts as
-                            real arrangeable supply either way: the save floor
-                            (P0006) guards pallets + leftover combined, not
-                            either field alone. */}
-                        <NumberCell
-                          caption="עודף"
-                          disabled={locked}
-                          ariaLabel={`פלטות עודף — ${variety.varietyName}`}
-                          value={variety.leftover}
-                          onChange={(next) => updateLine(variety.id, { leftover: next })}
-                        />
-                        {/* Wrapped in the same caption-spacer shape as
-                            NumberCell, even though this field has no caption
-                            of its own (its placeholder already says "הערה").
-                            Without the spacer, this was the only item in the
-                            row shorter than the NumberCells' caption+input
-                            stack, so `items-center` on the row centered it
-                            against them instead of lining up its top edge —
-                            it sat visibly lower than the two number boxes. */}
-                        <div className="flex w-40 flex-1 flex-col gap-1 @2xl:w-auto @2xl:flex-none">
-                          <span aria-hidden className="invisible text-[11px] font-medium @2xl:hidden">
-                            הערה
-                          </span>
-                          <input
-                            type="text"
-                            disabled={locked}
-                            placeholder="הערה"
-                            aria-label={`הערה — ${variety.varietyName}`}
-                            className={`${inputClassName} w-full`}
-                            value={variety.comment}
-                            onChange={(event) =>
-                              updateLine(variety.id, { comment: event.target.value })
-                            }
-                          />
-                        </div>
-                      </li>
+                        {...variety}
+                        locked={locked}
+                        onUpdate={updateLine}
+                      />
                     ))}
                   </ul>
                 </div>
@@ -650,11 +670,6 @@ export function PickLinesEditor({
 
       {!locked && (
         <ActionBar
-          // Never false: this bar only renders when the pick is editable at
-          // all, so the mode it would have switched to no longer exists. No
-          // `onEdit` is passed for the same reason — see ActionBar's own
-          // comment on that prop.
-          editing
           saving={saving}
           dirty={dirty}
           // A draft pick still has to be SENT even when every number on it is
@@ -663,7 +678,6 @@ export function PickLinesEditor({
           // submitted, a save with nothing changed would do nothing, so the
           // usual dirty rule applies again.
           canSaveUnchanged={submitOnSave && pickStatus === "draft"}
-          canDelete={false}
           sticky={sticky}
           onDiscard={handleDiscard}
           onSave={() => setConfirmOpen(true)}

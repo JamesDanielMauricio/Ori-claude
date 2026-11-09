@@ -23,7 +23,12 @@ import {
   typeIntoProposal,
   type ProposalLine,
 } from "@/components/arrangement/arrangement-proposal";
-import { formatPallets, type BoardRecord } from "@/components/arrangement/board-data";
+import {
+  formatPallets,
+  OPTIMISTIC_RECORD_PREFIX,
+  settleOptimisticRecord,
+  type BoardRecord,
+} from "@/components/arrangement/board-data";
 import {
   buildMatrix,
   filterMatrixRows,
@@ -265,7 +270,7 @@ export default function NewArrangementPage() {
     return [
       ...records,
       {
-        id: `optimistic-${crypto.randomUUID()}`,
+        id: `${OPTIMISTIC_RECORD_PREFIX}${crypto.randomUUID()}`,
         daily_pick_product_id: write.pickLineId,
         daily_order_product_id: orderLineId,
         customer_company_id: write.customerId,
@@ -288,14 +293,24 @@ export default function NewArrangementPage() {
         price: write.price,
         priceType: write.priceType,
       });
-      const { error } = await supabase.rpc(
+      const { data, error } = await supabase.rpc(
         "arrange_to_customer",
         toArrangeToCustomerRpcArgs(parsed),
       );
       if (error) throw error;
+      return data;
     },
     onMutate: arrangeOptimistic.onMutate,
-    onSuccess: invalidateBoards,
+    onSuccess: (saved) => {
+      // Before the refetch, which the next cell's write cancels: through a
+      // burst of typing, clearing a cell just filled must not send the
+      // placeholder's id.
+      queryClient.setQueryData<MatrixDay | null>(
+        boardDataQueryKey,
+        (current) => current && settleOptimisticRecord(current, saved),
+      );
+      invalidateBoards();
+    },
     onError: mergeOnError(arrangeOptimistic.onError, (error: RpcError) => {
       showToast(`שמירת הסידור נכשלה: ${describeRpcError(error)}`, "error");
       // Refetch on failure too: a refusal usually means this screen's copy of
@@ -540,14 +555,19 @@ export default function NewArrangementPage() {
   }
 
   // A failed load must not present itself as "no trading day is open" — that
-  // invites the distributor to open a day that already exists.
-  if (dayView.isError || boardDataQuery.isError) {
+  // invites the distributor to open a day that already exists. Only when
+  // nothing was ever loaded: a failed background re-read keeps the grid, and
+  // whatever is being typed into it, on screen.
+  if (dayView.isLoadError || (boardDataQuery.isError && boardDataQuery.data === undefined)) {
     return (
       <QueryError
         what="לוח הסידור"
         onRetry={() => {
           void dayView.refetch();
-          void boardDataQuery.refetch();
+          // Not with no day: refetch() ignores `enabled`, and a read for a null
+          // id fails on its own, keeping this screen up even when the day
+          // comes back as "none open". A day that arrives starts it anyway.
+          if (day) void boardDataQuery.refetch();
         }}
         retrying={dayView.isFetching || boardDataQuery.isFetching}
       />

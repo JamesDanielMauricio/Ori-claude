@@ -1,13 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MotionConfig } from "motion/react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ToastProvider } from "@/components/ui/toast";
-import { TRANSITION_ENTER } from "@/lib/motion";
 
 import { startsNewAccountScope } from "./account-scope";
 import { useAuth } from "./auth-context";
-import { trpc, trpcClientConfig } from "./trpc-client";
 
 // Whether a failed READ is worth trying again. (Only reads: this is a
 // `queries` default, and mutations already default to no retries.)
@@ -92,33 +89,13 @@ export function Providers({ children }: { children: ReactNode }) {
     previousClient.current = scope.queryClient;
   }, [scope.queryClient]);
 
-  const [trpcClient] = useState(() => trpc.createClient(trpcClientConfig()));
-
   return (
-    // App-wide defaults for every component animated with Motion, set once
-    // here so no individual component has to remember them.
-    //
-    // reducedMotion="user": when the OS "reduce motion" setting is on, Motion
-    // switches transform animations (movement, scaling) off while opacity
-    // fades keep running — things still visibly appear and disappear, they
-    // just stop moving. It is the JavaScript counterpart of the
-    // prefers-reduced-motion block at the bottom of globals.css, which can
-    // only reach CSS animations (and is stricter, dropping fades too, because
-    // a CSS rule can't tell a fade from a slide).
-    //
-    // transition: the house ENTER timing from lib/motion.ts, for any component
-    // that doesn't name its own. Something leaving should pass
-    // TRANSITION_EXIT instead, so it eases in rather than out.
-    <MotionConfig reducedMotion="user" transition={TRANSITION_ENTER}>
-      <trpc.Provider client={trpcClient} queryClient={scope.queryClient}>
-        <QueryClientProvider client={scope.queryClient}>
-          {/* Keyed by the cache, so a new account also gets every screen
-              mounted afresh: a form still holding the previous account's
-              values (the profile's name and phone, an order's draft) is
-              gone with it, and so is a toast meant for them. */}
-          <ToastProvider key={scope.generation}>{children}</ToastProvider>
-        </QueryClientProvider>
-      </trpc.Provider>
-    </MotionConfig>
+    <QueryClientProvider client={scope.queryClient}>
+      {/* Keyed by the cache, so a new account also gets every screen
+          mounted afresh: a form still holding the previous account's
+          values (the profile's name and phone, an order's draft) is
+          gone with it, and so is a toast meant for them. */}
+      <ToastProvider key={scope.generation}>{children}</ToastProvider>
+    </QueryClientProvider>
   );
 }

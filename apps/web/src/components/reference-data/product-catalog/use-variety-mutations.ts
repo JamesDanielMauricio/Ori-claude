@@ -9,6 +9,7 @@ import type { Dispatch, SetStateAction } from "react";
 import type { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
+import { customerKeys } from "@/lib/queries/customer";
 import { referenceDataQueries, type ProductVariety } from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 
@@ -25,7 +26,7 @@ export function useVarietyMutations({
   editingRowId,
   setEditingId,
   deleteTargetId,
-  setDeleteTargetId,
+  setDeleteTarget,
 }: {
   queryClient: QueryClient;
   showToast: ReturnType<typeof useToast>["showToast"];
@@ -34,10 +35,13 @@ export function useVarietyMutations({
   editingRowId: string | null;
   setEditingId: Dispatch<SetStateAction<string | null>>;
   deleteTargetId: string | null;
-  setDeleteTargetId: Dispatch<SetStateAction<string | null>>;
+  setDeleteTarget: Dispatch<SetStateAction<ProductVariety | null>>;
 }) {
   const supabase = createClient();
   const productsQueryKey = referenceDataQueries.products().queryKey;
+  // The same varieties' names, as the Growers and Users chips and pickers
+  // read them. Not mounted here, so invalidating it only marks it stale.
+  const catalogQueryKey = referenceDataQueries.productCatalog().queryKey;
 
   // Patches every field the form edits except `version` — that's a real
   // optimistic-concurrency column, bumped by the server only. Leaving it
@@ -100,10 +104,20 @@ export function useVarietyMutations({
       const rows = await saveOptimistic.onMutate(variables);
       return { rows };
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
+      // The version the server just agreed to (see saveOptimistic's note),
+      // straight away rather than when the refetch lands: a variety re-opened
+      // before then would be seeded with the old one, and its next save
+      // refused as a conflict with itself. A create matches no cached row.
+      queryClient.setQueryData<ProductVariety[]>(productsQueryKey, (rows) =>
+        rows?.map((row) => (row.id === saved.id ? { ...row, version: saved.version } : row)),
+      );
       showToast("הנתונים נשמרו.", "success");
       setEditingId(null);
       void queryClient.invalidateQueries({ queryKey: productsQueryKey });
+      void queryClient.invalidateQueries({ queryKey: catalogQueryKey });
+      // The order catalogs show its price (see customerKeys.catalogAll).
+      void queryClient.invalidateQueries({ queryKey: customerKeys.catalogAll });
     },
     onError: async (
       error: { message?: string; code?: string },
@@ -154,12 +168,13 @@ export function useVarietyMutations({
     onMutate: deleteOptimistic.onMutate,
     onSuccess: () => {
       showToast("המוצר נמחק.", "success");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
       void queryClient.invalidateQueries({ queryKey: productsQueryKey });
+      void queryClient.invalidateQueries({ queryKey: catalogQueryKey });
     },
     onError: mergeOnError(deleteOptimistic.onError, (error: { message?: string }) => {
       showToast(`המחיקה נכשלה: ${errorMessage(error)}`, "error");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
     }),
   });
 

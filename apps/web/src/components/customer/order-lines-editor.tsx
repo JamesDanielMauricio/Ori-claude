@@ -4,7 +4,7 @@ import {
   toSubmitOrderRpcArgs,
 } from "@ori/domain/customer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 
 import { ActionBar } from "@/components/reference-data/action-bar";
 import { Icon } from "@/components/ui/icon";
@@ -57,7 +57,22 @@ class ShopClosedError extends Error {
 // `customerCompanyId` omitted means "my own order" (the customer's own
 // screen); supplied, it's the backoffice-on-behalf-of path — the RPC
 // layer is what actually enforces who may pass it, not this component.
-export function OrderLinesEditor({
+//
+// Keyed by the order it edits, for every host at once: the draft is keyed
+// by variety id, and variety ids are the same on every day, so an editor
+// left mounted while its day changed (a phone locked overnight, then one
+// refetch from yesterday's day to today's) re-applied yesterday's unsent
+// lines to today's order as if typed there.
+export function OrderLinesEditor(props: ComponentProps<typeof OrderLinesEditorBody>) {
+  return (
+    <OrderLinesEditorBody
+      key={`${props.tradingDayId}:${props.customerCompanyId ?? ""}`}
+      {...props}
+    />
+  );
+}
+
+function OrderLinesEditorBody({
   tradingDayId,
   customerCompanyId,
   onSubmitted,
@@ -269,18 +284,29 @@ export function OrderLinesEditor({
     },
     onError: mergeOnError(submitOptimistic.onError, (error: { message?: string }) => {
       showToast(`השליחה נכשלה: ${errorMessage(error)}`, "error");
-      // Nothing left to confirm: the page is turning read-only underneath.
-      if (error instanceof ShopClosedError) setConfirmOpen(false);
+      // Closed on every failure, as PickLinesEditor's confirmation is: toasts
+      // render below the browser's top layer, where the modal lives, so the
+      // reason would sit unreadable behind its backdrop. Nothing is lost —
+      // the draft stays, and "שמור" opens the review again. For a closed
+      // shop there is also nothing left to confirm: the page is turning
+      // read-only underneath.
+      setConfirmOpen(false);
     }),
   });
 
-  function updateLine(varietyId: string, patch: Partial<DraftLine>) {
+  // Stable (it touches only a ref and a state setter), so OrderProductList's
+  // memoized rows re-render only when their own values change.
+  const updateLine = useCallback((varietyId: string, patch: Partial<DraftLine>) => {
     editedIds.current.add(varietyId);
     setDraft((current) => ({
       ...current,
       [varietyId]: { pallets: "", comment: "", ...current[varietyId], ...patch },
     }));
-  }
+  }, []);
+  const changePallets = useCallback(
+    (varietyId: string, value: string) => updateLine(varietyId, { pallets: value }),
+    [updateLine],
+  );
 
   // The order with no unsaved edits — what "בטל שינויים" puts back, and what
   // the draft is measured against to decide whether either button has
@@ -340,7 +366,7 @@ export function OrderLinesEditor({
   // rendered identically before, and the first is the one a customer acts on
   // — they close the tab. The catalog is the whole screen, so a failure here
   // has to say so.
-  if (catalogQuery.isError) {
+  if (catalogQuery.isError && catalogQuery.data === undefined) {
     return (
       <QueryError
         what="קטלוג המוצרים"
@@ -371,20 +397,14 @@ export function OrderLinesEditor({
         <OrderProductList
           families={families}
           editable={editing}
-          onChangePallets={(varietyId, value) => updateLine(varietyId, { pallets: value })}
-          onOpenComment={(varietyId) => setCommentPopupVarietyId(varietyId)}
+          onChangePallets={changePallets}
+          onOpenComment={setCommentPopupVarietyId}
         />
       </div>
 
       {!readOnly && (
         <ActionBar
-          // Never false: this bar only renders when the order is editable at
-          // all, so the mode it would have switched to no longer exists. No
-          // `onEdit` is passed for the same reason — see ActionBar's own
-          // comment on that prop.
-          editing
           dirty={dirty}
-          canDelete={false}
           // Sticky on every host, the customer's own screen included: this
           // is exactly the "several hundred rows" case ActionBar's sticky
           // comment describes — "שמור" sitting under the whole catalogue

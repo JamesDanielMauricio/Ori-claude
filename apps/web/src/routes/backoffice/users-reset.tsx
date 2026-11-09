@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState, type FormEvent } from "react";
 
 import { FormField } from "@/components/reference-data/form-field";
@@ -10,7 +10,7 @@ import { QueryError } from "@/components/ui/query-error";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth-context";
-import { usersAdminQueries } from "@/lib/queries/users-admin";
+import { referenceDataQueries } from "@/lib/queries/reference-data";
 import { trpc } from "@/lib/trpc-client";
 
 // Last four digits of a phone as typed on the profile — enough to confirm
@@ -27,10 +27,18 @@ function lastFourDigits(phone: string | null): string | null {
 export default function AdminResetPasswordPage() {
   const { user } = useAuth();
   const [targetUserId, setTargetUserId] = useState("");
-  const resetPassword = trpc.auth.adminResetPassword.useMutation();
+  const queryClient = useQueryClient();
+  // A reset puts the user back on a temporary password, which the Users
+  // table shows (סיסמה זמנית). Not mounted here, so this only marks it stale.
+  const resetPassword = trpc.auth.adminResetPassword.useMutation({
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: referenceDataQueries.users().queryKey });
+    },
+  });
 
   // Readable by backoffice through the "profiles_select_backoffice" policy.
-  const usersQuery = useQuery(usersAdminQueries.resettableUsers());
+  // The contact-person picker's directory: the same columns, so one entry.
+  const usersQuery = useQuery(referenceDataQueries.contactPersonProfiles());
   // Shown beside the chosen user so two people with the same name can be
   // told apart. Optional: the reset works without it.
   const emailsQuery = trpc.auth.listUserEmails.useQuery();
@@ -76,7 +84,7 @@ export default function AdminResetPasswordPage() {
       <Card className="max-w-md">
         {usersQuery.isLoading ? (
           <Skeleton className="h-24 w-full" />
-        ) : usersQuery.isError ? (
+        ) : usersQuery.isError && usersQuery.data === undefined ? (
           <QueryError
             what="רשימת המשתמשים"
             onRetry={() => void usersQuery.refetch()}

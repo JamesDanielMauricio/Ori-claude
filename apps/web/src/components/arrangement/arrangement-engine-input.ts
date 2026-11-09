@@ -29,6 +29,7 @@ import {
 } from "./arrangement-engine";
 import type { ProposalLine } from "./arrangement-proposal";
 import {
+  canArrangeFrom,
   parsePallets,
   type BoardOrder,
   type BoardPick,
@@ -40,11 +41,7 @@ type FamilyRow = { family_id: string } | null;
 
 /** The history query's rows: the window's days, and their lots, order lines and allocations. */
 export interface HistoryRows {
-  days: ReadonlyArray<{
-    id: string;
-    trade_date: string;
-    daily_arrangements: { status: string } | null;
-  }>;
+  days: ReadonlyArray<{ id: string; trade_date: string }>;
   /** Lots with something on them (picked or leftover above zero). */
   pickLines: ReadonlyArray<{
     product_variety_id: string;
@@ -220,7 +217,7 @@ export function dayToPropose({
         (takenOff.get(line.id) ?? 0);
       // A closed pick (the truck icon) is not arranged from any more —
       // migration 0089 refuses it — so nothing is proposed off it.
-      lots.push({ ...lot, available: pick.status === "closed" ? 0 : Math.max(0, free) });
+      lots.push({ ...lot, available: canArrangeFrom(pick) ? Math.max(0, free) : 0 });
     }
   }
 

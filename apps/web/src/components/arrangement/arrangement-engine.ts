@@ -45,6 +45,8 @@
 // Kept free of React and of the network, like matrix-data.ts, so that what
 // the screen proposes can be checked against the owner's examples and
 // against the days he has already arranged.
+import { roundPallets } from "@ori/shared/pallets";
+
 import type { ProposalLine } from "./arrangement-proposal";
 
 /** How many of a product's past shortages a customer is judged on. */
@@ -280,7 +282,8 @@ export function learnFrom(
       const recorded = day.recorded[varietyId] ?? {};
       if (!Object.values(recorded).some((pallets) => pallets > 0)) continue;
       const ordered = Object.values(byCustomer).reduce((sum, pallets) => sum + pallets, 0);
-      if (ordered <= (day.supply[varietyId] ?? 0)) continue;
+      // At the database's precision: 1.1 + 2.2 must not read as more than 3.3.
+      if (roundPallets(ordered) <= roundPallets(day.supply[varietyId] ?? 0)) continue;
       for (const [customerId, pallets] of Object.entries(byCustomer)) {
         if (!(pallets > 0)) continue;
         const outcomes = ((shortages[customerId] ??= {})[varietyId] ??= []);

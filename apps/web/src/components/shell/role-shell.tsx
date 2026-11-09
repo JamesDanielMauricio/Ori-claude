@@ -1,10 +1,10 @@
 import { useState, type ReactNode } from "react";
 
-import { Icon } from "@/components/ui/icon";
 import { LogoMark } from "@/components/ui/logo-mark";
 import { useAuth } from "@/lib/auth-context";
 
 import { AlertsBell } from "./alerts-bell";
+import { MenuToggleButton } from "./menu-toggle-button";
 import { NavLink } from "./nav-link";
 import { SettingsTogglesButton } from "./settings-toggles-button";
 import { SignOutButton } from "./sign-out-button";
@@ -63,20 +63,7 @@ export function RoleShell({ navItems, children }: RoleShellProps) {
           )}
           <div className="flex items-center gap-0.5">
             <AlertsBell />
-            <button
-              type="button"
-              aria-label="תפריט"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((open) => !open)}
-              // 40px, matching the AlertsBell beside it — it was 36, the one
-              // control in the phone header under the touch-target floor, and
-              // it is the only way into navigation on that layout. The header
-              // row was already 40px tall because of the bell, so this costs
-              // no height.
-              className="flex h-10 w-10 items-center justify-center rounded-md text-ink-muted transition-[background-color,color,transform] duration-200 hover:bg-accent-soft hover:text-accent active:scale-95"
-            >
-              <Icon name={menuOpen ? "close" : "menu"} />
-            </button>
+            <MenuToggleButton open={menuOpen} setOpen={setMenuOpen} />
           </div>
         </header>
 
@@ -126,21 +113,21 @@ export function RoleShell({ navItems, children }: RoleShellProps) {
           <AlertsBell />
         </div>
 
-        {/* `outline` rather than the solid `filled` active state these rows
-            used to have — matches the current page's treatment in the
+        {/* A tint and edge bar rather than the solid fill these rows used
+            to have as their active state — matches the current page's treatment in the
             backoffice rail: a soft tint plus an edge bar rather than a solid
             fill, so an active row doesn't compete with the sign-out button
             below for "loudest thing in the sidebar". */}
         <nav aria-label="ניווט" className="flex flex-col gap-0.5">
           {navItems.map((item) => (
-            <NavLink key={item.href} href={item.href} variant="outline">
+            <NavLink key={item.href} href={item.href}>
               {item.label}
             </NavLink>
           ))}
         </nav>
 
-        {/* `solid` — the bordered, filled treatment — rather than the bare
-            text link this used to be. It was easy to miss sitting under a
+        {/* The bordered, filled sign-out button rather than the bare text
+            link this used to be. It was easy to miss sitting under a
             wall of nav rows, and on mobile it was missing outright (see
             HamburgerMenuContents below), so the desktop and mobile versions
             now match. It shares the bottom with system settings: both act
@@ -148,7 +135,7 @@ export function RoleShell({ navItems, children }: RoleShellProps) {
             neither belongs among the nav rows. */}
         <div className="mt-auto flex flex-col gap-3">
           <SettingsTogglesButton />
-          <SignOutButton variant="solid" />
+          <SignOutButton />
         </div>
       </aside>
 
@@ -210,7 +197,7 @@ function HamburgerMenuContents({
     <div className="flex flex-col gap-1">
       <div onClick={onNavigate} className="flex flex-col gap-1">
         {navItems.map((item) => (
-          <NavLink key={item.href} href={item.href} variant="outline">
+          <NavLink key={item.href} href={item.href}>
             {item.label}
           </NavLink>
         ))}
@@ -226,7 +213,7 @@ function HamburgerMenuContents({
           dialog doesn't close the menu the choice was made in. */}
       <div className="mt-1 flex flex-col gap-2 border-t border-border pt-2">
         <SettingsTogglesButton />
-        <SignOutButton variant="solid" />
+        <SignOutButton />
       </div>
     </div>
   );

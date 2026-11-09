@@ -8,10 +8,10 @@ import { QueryError } from "@/components/ui/query-error";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { useAuth } from "@/lib/auth-context";
 import { errorMessage } from "@/lib/error-message";
-import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
-import { phoneForDisplay, phoneToSave } from "@/lib/phone-to-save";
-import { profileQueries, type OwnProfile } from "@/lib/queries/profile";
+import { phoneToSave } from "@/lib/phone-to-save";
+import { profileQueries } from "@/lib/queries/profile";
 import { createClient } from "@/lib/supabase/client";
 
 // Self-service Edit Profile (PRD: reference/prd/user-profile.md,
@@ -30,6 +30,7 @@ export default function UserProfilePage() {
   const supabase = createClient();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const { refreshProfile } = useAuth();
 
   const [displayName, setDisplayName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -38,18 +39,15 @@ export default function UserProfilePage() {
 
   const profileQuery = useQuery(profileQueries.own());
 
+  // Not patched optimistically on save: every change to the cached row
+  // re-seeds the inputs, so a refused save's rollback wrote the old values
+  // over what the user had just typed.
   useEffect(() => {
     if (profileQuery.data) {
       setDisplayName(profileQuery.data.displayName);
       setPhoneNumber(profileQuery.data.phoneNumber ?? "");
     }
   }, [profileQuery.data]);
-
-  const saveOptimistic = optimisticUpdate<OwnProfile, void>(queryClient, profileQueryKey, (row) =>
-    row
-      ? { displayName: displayName.trim(), phoneNumber: phoneForDisplay(phoneNumber) }
-      : row,
-  );
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -70,14 +68,15 @@ export default function UserProfilePage() {
         .eq("user_id", userData.user.id);
       if (error) throw error;
     },
-    onMutate: saveOptimistic.onMutate,
     onSuccess: () => {
       showToast("הפרופיל נשמר.", "success");
       void queryClient.invalidateQueries({ queryKey: profileQueryKey });
+      // The shell shows the name from the auth context, not from this query.
+      void refreshProfile();
     },
-    onError: mergeOnError(saveOptimistic.onError, (error: { message?: string }) => {
+    onError: (error: { message?: string }) => {
       showToast(`השמירה נכשלה: ${errorMessage(error)}`, "error");
-    }),
+    },
   });
 
   function handleSubmit(event: FormEvent) {
@@ -104,8 +103,9 @@ export default function UserProfilePage() {
   // A failed read left the form rendering with empty inputs — indistinguishable
   // from a profile that genuinely has no name on file, and one Save away from
   // the user "correcting" it and overwriting their real phone number with
-  // nothing. Refusing to render the form is the only safe answer.
-  if (profileQuery.isError) {
+  // nothing. Refusing to render the form is the only safe answer — when
+  // nothing was ever loaded: a failed background refetch keeps the form.
+  if (profileQuery.isError && profileQuery.data === undefined) {
     return (
       <QueryError
         what="הפרופיל"

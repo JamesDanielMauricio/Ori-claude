@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { hasChanges } from "./has-changes";
 import { createClient } from "./supabase/client";
 import { retryOnClockSkew } from "./supabase/retry-clock-skew";
 
@@ -50,6 +51,36 @@ export interface AuthState {
   refreshProfile: () => Promise<void>;
 }
 
+type AuthSnapshot = Omit<AuthState, "refreshProfile">;
+
+// PostgREST's answer when `.single()` finds no row: a real answer (the
+// orphan account require-role.tsx sends to /login), not a failed read.
+const NO_PROFILE_ROW = "PGRST116";
+
+// What a finished profile read leaves the context holding. Pure, so it is
+// pinned by auth-context.test.ts.
+//
+// A re-read for the user already on screen is frequent: supabase-js
+// re-announces the session on every return to the tab, and to every other
+// open tab of the app over its BroadcastChannel. So such a re-read
+//   - that FAILED keeps what is loaded. Answering "no profile" sent a
+//     signed-in user to /login for a dropped connection, drafts and all. The
+//     kept copy grants nothing: RLS still decides every row;
+//   - that changed nothing keeps the same object, so no useAuth() consumer
+//     re-renders for it.
+export function settleProfileRead(
+  current: AuthSnapshot,
+  user: User,
+  profile: AuthProfile | null,
+  error: { code?: string } | null,
+): AuthSnapshot {
+  if (!current.loading && current.user?.id === user.id) {
+    if (error && error.code !== NO_PROFILE_ROW) return current;
+    if (!hasChanges(current.profile, profile) && !hasChanges(current.user, user)) return current;
+  }
+  return { user, profile, loading: false };
+}
+
 const AuthContext = createContext<AuthState>({
   user: null,
   profile: null,
@@ -73,21 +104,18 @@ const AuthContext = createContext<AuthState>({
 // unconditionally, and the service-role operations in apps/api are still
 // gated by that app's own server-side requireRole.
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<Omit<AuthState, "refreshProfile">>({
+  const [state, setState] = useState<AuthSnapshot>({
     user: null,
     profile: null,
     loading: true,
   });
 
-  // Lets loadProfile decide whether this is a *new* identity (show the
-  // pending state) or a refresh of one already on screen (don't). Held in a
-  // ref rather than read from `state` so the callback doesn't need `state`
-  // as a dependency, which would re-subscribe onAuthStateChange on every
-  // profile change.
-  const currentRef = useRef<{ userId: string | null; hasProfile: boolean }>({
-    userId: null,
-    hasProfile: false,
-  });
+  // The state last set. Lets loadProfile decide whether this is a *new*
+  // identity (show the pending state) or a refresh of one already on screen
+  // (don't). Held in a ref rather than read from `state` so the callback
+  // doesn't need `state` as a dependency, which would re-subscribe
+  // onAuthStateChange on every profile change.
+  const currentRef = useRef<AuthSnapshot>(state);
 
   // Sequence number for in-flight profile reads. Auth events can overlap —
   // a sign-out arriving while a sign-in's profile fetch is still open is the
@@ -97,10 +125,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loadProfile = useCallback(async (user: User | null) => {
     const requestId = ++requestRef.current;
+    const publish = (next: AuthSnapshot) => {
+      currentRef.current = next;
+      setState(next);
+    };
 
     if (!user) {
-      currentRef.current = { userId: null, hasProfile: false };
-      setState({ user: null, profile: null, loading: false });
+      publish({ user: null, profile: null, loading: false });
       return;
     }
 
@@ -115,12 +146,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // version never hit this because every navigation re-ran the check
     // server-side against the database.
     //
-    // Skipped when the same user's profile is already loaded — an hourly
-    // TOKEN_REFRESHED event should not blank the screen behind a skeleton.
-    const isSameLoadedUser = currentRef.current.userId === user.id && currentRef.current.hasProfile;
+    // Skipped when the same user's profile is already loaded — a token
+    // refresh or a return to the tab should not blank the screen behind a
+    // skeleton.
+    const current = currentRef.current;
+    const isSameLoadedUser =
+      !current.loading && current.user?.id === user.id && current.profile !== null;
     if (!isSameLoadedUser) {
-      currentRef.current = { userId: user.id, hasProfile: false };
-      setState({ user, profile: null, loading: true });
+      publish({ user, profile: null, loading: true });
     }
 
     // RLS-protected read: the "profiles_select_own" policy is what permits
@@ -140,14 +173,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Retried on PGRST303 — see retryOnClockSkew. This read runs the moment
     // Supabase hands out a new token (signing in, and the hourly refresh),
     // which is exactly when a database server whose clock runs a little
-    // behind refuses that token as "issued in the future". Its error is
-    // otherwise ignored here, so a refusal left `data` empty and the guard
-    // sent a signed-in user back to an empty /login with no message — at
-    // sign-in, or in the middle of a session after a refresh.
+    // behind refuses that token as "issued in the future". On a first read
+    // its error still means "no profile", so a refusal left `data` empty and
+    // the guard sent a signed-in user back to an empty /login with no message
+    // — at sign-in, or in the middle of a session after a refresh.
     //
     // Read beside it, not after it, so it costs no extra wait: whether the
     // user's company is still active (readAccountActive).
-    const [{ data }, accountActive] = await Promise.all([
+    const [{ data, error }, accountActive] = await Promise.all([
       retryOnClockSkew(() =>
         createClient()
           .from("profiles")
@@ -166,10 +199,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    currentRef.current = { userId: user.id, hasProfile: Boolean(data) };
-    setState({
+    const next = settleProfileRead(
+      currentRef.current,
       user,
-      profile: data
+      data
         ? {
             role: data.role,
             displayName: data.display_name,
@@ -179,15 +212,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             accountActive,
           }
         : null,
-      loading: false,
-    });
+      error,
+    );
+    if (next !== currentRef.current) publish(next);
   }, []);
 
+  // Who is signed in comes from the stored session, as everywhere else here:
+  // getUser() would ask the auth server, and a failed round trip there
+  // answers "nobody", which would sign the context out.
   const refreshProfile = useCallback(async () => {
     const {
-      data: { user },
-    } = await createClient().auth.getUser();
-    await loadProfile(user);
+      data: { session },
+    } = await createClient().auth.getSession();
+    await loadProfile(session?.user ?? null);
   }, [loadProfile]);
 
   useEffect(() => {
@@ -199,7 +236,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (active) void loadProfile(user);
     };
 
-    void supabase.auth.getUser().then(({ data }) => loadIfActive(data.user));
+    // Only asks the auth server whether the stored session is still alive. A
+    // revoked one is dropped by supabase-js, which emits SIGNED_OUT to the
+    // subscription below. Its answer is not applied here: INITIAL_SESSION
+    // already loads the profile (applying it too read everything twice), and
+    // a failed round trip is not a sign-out.
+    void supabase.auth.getUser();
 
     const {
       data: { subscription },

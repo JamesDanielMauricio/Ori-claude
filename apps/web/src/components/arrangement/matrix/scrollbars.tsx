@@ -1,29 +1,88 @@
-import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+} from "react";
 
-import { CORNER_GUTTER, THUMB_INSET, clamp } from "./geometry";
-import type { useMatrixScroll } from "./use-matrix-scroll";
-
-type ScrollState = ReturnType<typeof useMatrixScroll>;
+import {
+  CORNER_GUTTER,
+  THUMB_INSET,
+  clamp,
+  thumbGeometry,
+  type HorizontalThumb,
+  type VerticalThumb,
+} from "./geometry";
 
 // The matrix's two custom scrollbar thumbs — siblings of the scrollport,
 // never children of it, so scrolling the table can't carry them away.
 // Dragging one writes the scrollport's scroll position directly; the
-// scroll listener in useMatrixScroll turns that back into `range` and the
-// thumbs' geometry, one path for every way the list can move.
-export function MatrixScrollbars({
-  scrollRef,
-  thumbGeo,
-  hThumbGeo,
-}: {
-  scrollRef: RefObject<HTMLDivElement | null>;
-  thumbGeo: ScrollState["thumbGeo"];
-  hThumbGeo: ScrollState["hThumbGeo"];
-}) {
+// scroll listeners (this one for the thumbs, useMatrixScroll's for `range`)
+// turn that back into what is drawn, one path for every way the list can
+// move.
+export function MatrixScrollbars({ scrollRef }: { scrollRef: RefObject<HTMLDivElement | null> }) {
+  // Both thumbs' geometry, null when that axis has nothing to scroll. State
+  // HERE rather than in the grid: it changes on every scroll frame, and this
+  // way a frame repaints two thumbs instead of re-rendering every mounted row.
+  const [thumbGeo, setThumbGeo] = useState<VerticalThumb | null>(null);
+  const [hThumbGeo, setHThumbGeo] = useState<HorizontalThumb | null>(null);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const { vertical, horizontal } = thumbGeometry(element);
+      // Guarded: an unchanged thumb must not cost a render.
+      setThumbGeo((current) =>
+        current === vertical ||
+        (current &&
+          vertical &&
+          current.top === vertical.top &&
+          current.height === vertical.height &&
+          current.percent === vertical.percent)
+          ? current
+          : vertical,
+      );
+      setHThumbGeo((current) =>
+        current === horizontal ||
+        (current &&
+          horizontal &&
+          current.left === horizontal.left &&
+          current.width === horizontal.width &&
+          current.percent === horizontal.percent)
+          ? current
+          : horizontal,
+      );
+    };
+    // Coalesced into a frame, like the virtualiser's own listener.
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+
+    measure();
+    element.addEventListener("scroll", onScroll, { passive: true });
+    // The scrollport resizes with the window; the table inside it with the
+    // row count, the columns and the products column's width — none of which
+    // fires a scroll event.
+    const observer = new ResizeObserver(onScroll);
+    observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      element.removeEventListener("scroll", onScroll);
+      observer.disconnect();
+    };
+  }, [scrollRef]);
+
   // Drag state for both thumbs, as refs rather than state: they change on
   // every pointermove, and none of those frames need to trigger a React
   // render — dragging only ever ends up mutating `element.scrollTop` /
   // `scrollLeft` directly (see the two handlePointerMove functions), and the
-  // scroll listener already in place below is what turns that back into
+  // scroll listeners are what turn that back into
   // `range`/`thumbGeo`/`hThumbGeo` updates.
   const dragRef = useRef<{
     startY: number;
@@ -40,8 +99,8 @@ export function MatrixScrollbars({
 
   // ---- the custom thumb --------------------------------------------------
   // Dragging never touches React state directly: it writes `scrollTop` on
-  // the real element, and the `scroll` listener the virtualiser already
-  // owns (above) is what turns that back into a re-measured `range` and
+  // the real element, and the `scroll` listeners (the virtualiser's and the
+  // one above) are what turn that back into a re-measured `range` and
   // `thumbGeo` — one path for "the list moved," whether a wheel, a keypress
   // or this drag caused it.
   function handleThumbPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -51,7 +110,7 @@ export function MatrixScrollbars({
     // stealing focus from whatever cell was being edited.
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    // Mirrors `measure()`'s own track-height formula (use-matrix-scroll.ts) exactly — the corner
+    // Mirrors thumbGeometry's own track-height formula (geometry.ts) exactly — the corner
     // gutter has to match what's actually rendered, or the last few pixels
     // of a drag would move the thumb faster or slower than the cursor.
     const trackHeightFull =
@@ -90,7 +149,7 @@ export function MatrixScrollbars({
     if (!element || !hThumbGeo) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    // Mirrors `measure()`'s own track-width formula (use-matrix-scroll.ts) — see the vertical
+    // Mirrors thumbGeometry's own track-width formula (geometry.ts) — see the vertical
     // handler above for why this has to match exactly.
     const leftMin = thumbGeo ? CORNER_GUTTER : THUMB_INSET;
     const trackWidthFull = element.clientWidth - THUMB_INSET - leftMin;
@@ -145,8 +204,8 @@ export function MatrixScrollbars({
       )}
 
       {/* Same idea, horizontal — bottom edge instead of left, `width`
-          instead of `height`. See `hThumbGeo`'s own comment for the RTL
-          progress maths this position is built from. */}
+          instead of `height`. See thumbGeometry for the RTL progress
+          maths this position is built from. */}
       {hThumbGeo && (
         <div
           role="scrollbar"

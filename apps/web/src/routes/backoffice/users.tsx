@@ -1,7 +1,7 @@
 import { saveUserInputSchema, toSaveUserRpcArgs } from "@ori/domain/reference-data";
 import type { UserRole } from "@ori/shared/roles";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { CellChipList } from "@/components/reference-data/cell-popover";
@@ -14,6 +14,7 @@ import { StatusPill } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import { useAuth } from "@/lib/auth-context";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
@@ -25,8 +26,8 @@ import {
 } from "@/lib/produce-categories";
 import { referenceDataQueries, type ProfileRow } from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
-import { formatVarietyName } from "@/lib/variety-label";
 import { trpc } from "@/lib/trpc-client";
+import { useCatalogOptions } from "@/lib/use-catalog-options";
 
 // One place for the role wording, so the table's badge and the <select>
 // below can never drift apart.
@@ -47,6 +48,12 @@ interface FormState {
   // A customer user's category (migration 0090). No category and "both"
   // both mean everything, so a user with none is shown — and saved — as both.
   productCategory: ProduceCategory;
+}
+
+// The phone as stored before this save, taken when שמור is pressed: by the
+// time mutationFn runs, the optimistic patch may already have replaced it.
+interface SaveVariables {
+  storedPhone: string | null;
 }
 
 function toFormState(row: ProfileRow, blocked: string[]): FormState {
@@ -71,6 +78,7 @@ export default function UsersPage() {
   const supabase = createClient();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const { user, refreshProfile } = useAuth();
 
   // Which row (by user_id) is being edited inline right now — this screen
   // has no "new record" draft (see the header comment), so this is always
@@ -78,7 +86,9 @@ export default function UsersPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  // The row itself, not its id: the optimistic delete takes it out of the
+  // cache while the dialog is still naming it.
+  const [deleteTarget, setDeleteTarget] = useState<ProfileRow | null>(null);
 
   const usersQueryKey = referenceDataQueries.users().queryKey;
   const blockedQueryKey = referenceDataQueries.blockedProducts().queryKey;
@@ -97,28 +107,28 @@ export default function UsersPage() {
   const companiesQuery = useQuery(referenceDataQueries.companiesForUsers());
 
   // The whole catalog for the blocked-product chips and picker — the same
-  // entry the Growers screen reads (referenceDataQueries.productCatalog).
-  const catalogQuery = useQuery(referenceDataQueries.productCatalog());
-
-  const catalogOptions = useMemo(
-    () =>
-      (catalogQuery.data ?? []).map((product) => ({
-        id: product.id,
-        label: product.product_families?.name
-          ? `${product.product_families.name} — ${formatVarietyName(product.name, product.sizes)}`
-          : formatVarietyName(product.name, product.sizes),
-      })),
-    [catalogQuery.data],
-  );
-  const varietyLabelById = useMemo(
-    () => new Map(catalogOptions.map((option) => [option.id, option.label])),
-    [catalogOptions],
-  );
+  // entry the Growers screen reads (useCatalogOptions).
+  const {
+    catalogQuery,
+    options: catalogOptions,
+    labelById: varietyLabelById,
+  } = useCatalogOptions();
 
   const selected = usersQuery.data?.find((row) => row.user_id === editingId) ?? null;
-  const deleteTarget = usersQuery.data?.find((row) => row.user_id === deleteTargetId) ?? null;
 
-  const saveOptimistic = optimisticUpdate<ProfileRow[], void>(
+  // The other screens that read these same profiles under a key of their
+  // own: the contact-person picker on the company screens and the
+  // password-reset page (name, phone, company). Not mounted here, so this
+  // only marks it stale — reference data is out of live updates (migration
+  // 0061), and without it they'd serve the pre-save copy for up to the 30 s
+  // staleTime.
+  function invalidateProfileReaders() {
+    void queryClient.invalidateQueries({
+      queryKey: referenceDataQueries.contactPersonProfiles().queryKey,
+    });
+  }
+
+  const saveOptimistic = optimisticUpdate<ProfileRow[], SaveVariables>(
     queryClient,
     usersQueryKey,
     (rows) =>
@@ -140,7 +150,7 @@ export default function UsersPage() {
 
   // The blacklist is its own query, so it needs its own optimistic patch —
   // see growers.tsx's identical pairing.
-  const saveBlockedOptimistic = optimisticUpdate<Map<string, string[]>, void>(
+  const saveBlockedOptimistic = optimisticUpdate<Map<string, string[]>, SaveVariables>(
     queryClient,
     blockedQueryKey,
     (byUser) => {
@@ -152,13 +162,13 @@ export default function UsersPage() {
   );
 
   const saveMutation = useMutation({
-    mutationFn: async (): Promise<{ user_id: string }> => {
+    mutationFn: async ({ storedPhone }: SaveVariables): Promise<{ user_id: string }> => {
       if (!editingId || !form) throw new Error("No user selected");
       // One stored form per number — 0501234567, or +12125551234 for a
       // foreign one (migration 0077). Checked before anything is saved, so a
       // refused number leaves the role, company and blocked products
       // untouched too.
-      const phone = phoneToSave(form.phoneNumber, selected?.phone_number ?? null);
+      const phone = phoneToSave(form.phoneNumber, storedPhone);
       const input = saveUserInputSchema.parse({
         userId: editingId,
         displayName: form.displayName,
@@ -173,12 +183,15 @@ export default function UsersPage() {
       if (error) throw error;
       // Phone number isn't part of save_user's RPC signature — a plain
       // update, covered by the same "profiles_update_backoffice" RLS policy
-      // that lets this screen edit another user's role/company at all.
-      const { error: phoneError } = await supabase
-        .from("profiles")
-        .update({ phone_number: phone })
-        .eq("user_id", editingId);
-      if (phoneError) throw phoneError;
+      // that lets this screen edit another user's role/company at all. Sent
+      // only when it changed: most saves are a role, company or blocked list.
+      if (phone !== storedPhone) {
+        const { error: phoneError } = await supabase
+          .from("profiles")
+          .update({ phone_number: phone })
+          .eq("user_id", editingId);
+        if (phoneError) throw phoneError;
+      }
       return data;
     },
     onMutate: async (variables) => {
@@ -186,12 +199,16 @@ export default function UsersPage() {
       const blocked = await saveBlockedOptimistic.onMutate(variables);
       return { rows, blocked };
     },
-    onSuccess: () => {
+    onSuccess: (saved) => {
       showToast("הנתונים נשמרו.", "success");
       setEditingId(null);
       setForm(null);
       void queryClient.invalidateQueries({ queryKey: usersQueryKey });
       void queryClient.invalidateQueries({ queryKey: blockedQueryKey });
+      invalidateProfileReaders();
+      // Their own row: the shell shows the name from the auth context, not
+      // from this query.
+      if (saved.user_id === user?.id) void refreshProfile();
     },
     onError: (
       error: { message?: string },
@@ -205,6 +222,12 @@ export default function UsersPage() {
     ) => {
       saveOptimistic.onError(error, variables, context?.rows);
       saveBlockedOptimistic.onError(error, variables, context?.blocked);
+      // The save is two writes, so a failed phone update can follow a
+      // save_user that already committed. Re-read rather than leave the
+      // rolled-back values on screen as if nothing had been saved.
+      void queryClient.invalidateQueries({ queryKey: usersQueryKey });
+      void queryClient.invalidateQueries({ queryKey: blockedQueryKey });
+      invalidateProfileReaders();
       showToast(`השמירה נכשלה: ${errorMessage(error)}`, "error");
     },
   });
@@ -219,12 +242,13 @@ export default function UsersPage() {
     onMutate: deleteOptimistic.onMutate,
     onSuccess: () => {
       showToast("המשתמש נמחק.", "success");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
       void queryClient.invalidateQueries({ queryKey: usersQueryKey });
+      invalidateProfileReaders();
     },
     onError: mergeOnError(deleteOptimistic.onError, (error: { message?: string }) => {
       showToast(`המחיקה נכשלה: ${errorMessage(error)}`, "error");
-      setDeleteTargetId(null);
+      setDeleteTarget(null);
     }),
   });
 
@@ -247,7 +271,10 @@ export default function UsersPage() {
 
   function handleSave() {
     setSaving(true);
-    saveMutation.mutate(undefined, { onSettled: () => setSaving(false) });
+    saveMutation.mutate(
+      { storedPhone: selected?.phone_number ?? null },
+      { onSettled: () => setSaving(false) },
+    );
   }
 
   function toggleBlocked(id: string) {
@@ -299,7 +326,7 @@ export default function UsersPage() {
             aria-label="תפקיד"
             className="w-32"
             value={form.role}
-            onChange={(next) => setForm((current) => current && { ...current, role: next as UserRole })}
+            onChange={(next) => setForm((current) => current && { ...current, role: next })}
             options={(Object.keys(ROLE_LABEL) as UserRole[]).map((role) => ({
               value: role,
               label: ROLE_LABEL[role],
@@ -389,7 +416,7 @@ export default function UsersPage() {
             className="w-32"
             value={form.productCategory}
             onChange={(next) =>
-              setForm((current) => current && { ...current, productCategory: next as ProduceCategory })
+              setForm((current) => current && { ...current, productCategory: next })
             }
             options={PRODUCE_CATEGORIES.map((category) => ({
               value: category,
@@ -437,7 +464,10 @@ export default function UsersPage() {
         onEdit={handleEditRow}
         onSaveEdit={handleSave}
         onCancelEdit={handleCancel}
-        onDelete={(row) => setDeleteTargetId(row.user_id)}
+        onDelete={(row) => setDeleteTarget(row)}
+        // Not your own account, as on the password-reset page: deleting it
+        // would sign you out mid-flow.
+        canDelete={(row) => row.user_id !== user?.id}
         toolbarExtra={
           <>
             <Link to="/backoffice/users/import">
@@ -452,18 +482,22 @@ export default function UsersPage() {
             </Link>
           </>
         }
-        loading={usersQuery.isLoading || blockedQuery.isLoading}
+        loading={usersQuery.isLoading || blockedQuery.isLoading || catalogQuery.isLoading}
         // The blocked-product lists are a column too: without them every
-        // user would read as having nothing blocked.
+        // user would read as having nothing blocked. And the catalog names
+        // what is in them — without it the chips read as raw ids.
         loadError={
-          (usersQuery.isError && !usersQuery.data) || (blockedQuery.isError && !blockedQuery.data)
+          (usersQuery.isError && !usersQuery.data) ||
+          (blockedQuery.isError && !blockedQuery.data) ||
+          (catalogQuery.isError && catalogQuery.data === undefined)
             ? {
                 what: "רשימת המשתמשים",
                 onRetry: () => {
                   void usersQuery.refetch();
                   void blockedQuery.refetch();
+                  void catalogQuery.refetch();
                 },
-                retrying: usersQuery.isFetching || blockedQuery.isFetching,
+                retrying: usersQuery.isFetching || blockedQuery.isFetching || catalogQuery.isFetching,
               }
             : null
         }
@@ -471,18 +505,18 @@ export default function UsersPage() {
         emptyLabel="אין משתמשים עדיין."
       />
 
-      <Dialog open={deleteTargetId !== null} onClose={() => setDeleteTargetId(null)} title="מחיקת משתמש">
+      <Dialog open={deleteTarget !== null} onClose={() => setDeleteTarget(null)} title="מחיקת משתמש">
         <p className="mb-4 text-sm">
           האם למחוק את המשתמש &quot;{deleteTarget?.display_name}&quot;? פעולה זו אינה הפיכה — חשבון
           ההתחברות יימחק לחלוטין. ההזמנות וההיסטוריה שלו נשארות, בלי השם שלו.
         </p>
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setDeleteTargetId(null)}>
+          <Button variant="secondary" onClick={() => setDeleteTarget(null)}>
             ביטול
           </Button>
           <Button
             variant="danger"
-            onClick={() => deleteTargetId && deleteMutation.mutate({ targetUserId: deleteTargetId })}
+            onClick={() => deleteTarget && deleteMutation.mutate({ targetUserId: deleteTarget.user_id })}
             disabled={deleteMutation.isPending}
           >
             {deleteMutation.isPending ? "מוחק…" : "מחק"}

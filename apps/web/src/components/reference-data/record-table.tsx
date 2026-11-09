@@ -211,6 +211,7 @@ export function RecordTable<T>({
   onSaveEdit,
   onCancelEdit,
   onDelete,
+  canDelete,
   onAdd,
   addLabel,
   toolbarExtra,
@@ -245,6 +246,9 @@ export function RecordTable<T>({
   onSaveEdit: () => void;
   onCancelEdit: () => void;
   onDelete: (row: T) => void;
+  // Hides the delete action on rows it returns false for (the Users screen's
+  // own account). Omitted, every row can be deleted.
+  canDelete?: ((row: T) => boolean) | undefined;
   // Omitted on the one screen with no "create" flow of its own (Users —
   // accounts come from the bulk-import page instead); `toolbarExtra` is
   // where that screen puts its own links in the add button's place.
@@ -303,14 +307,18 @@ export function RecordTable<T>({
   // <dialog>'s own Escape handling. A cell popover that's open swallows the
   // keypress first (see cell-popover.tsx), so Escape closes that instead of
   // discarding the whole row.
+  //
+  // Ignored while the save is in flight, like the disabled × button: backing
+  // out then would unlock the other rows, and the save's late onSuccess (which
+  // closes "the" edit) would close whichever one the user had opened next.
   useEffect(() => {
     if (!editingId) return;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onCancelEdit();
+      if (event.key === "Escape" && !savingEdit) onCancelEdit();
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [editingId, onCancelEdit]);
+  }, [editingId, savingEdit, onCancelEdit]);
 
   const needle = query.trim().toLocaleLowerCase("he");
 
@@ -472,13 +480,15 @@ export function RecordTable<T>({
             </div>
           ) : (
             <div className="flex items-center gap-1.5">
-              <RowIconButton
-                icon="trash"
-                label="מחק"
-                tone="danger"
-                onClick={() => onDelete(row)}
-                disabled={editingId !== null}
-              />
+              {(canDelete?.(row) ?? true) && (
+                <RowIconButton
+                  icon="trash"
+                  label="מחק"
+                  tone="danger"
+                  onClick={() => onDelete(row)}
+                  disabled={editingId !== null}
+                />
+              )}
               <RowIconButton
                 icon="pencil"
                 label="ערוך"

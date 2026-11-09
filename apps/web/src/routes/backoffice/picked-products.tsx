@@ -36,11 +36,11 @@ export default function PickedProductsPage() {
   // A failure is reported as a failure, never as "nothing was picked today":
   // that sentence is operationally significant here — it is the one a
   // distributor would act on by assuming the growers have not submitted yet.
-  if (dayView.isError || pickedQuery.isError) {
+  if (dayView.isLoadError || (pickedQuery.isError && pickedQuery.data === undefined)) {
     return (
       <>
         <PageHeader title={TITLE} subtitle={SUBTITLE} />
-        {dayView.isError ? (
+        {dayView.isLoadError ? (
           <QueryError
             what="יום המסחר"
             onRetry={() => void dayView.refetch()}

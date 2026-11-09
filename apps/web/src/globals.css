@@ -188,8 +188,7 @@
   --font-display: var(--font-sans);
 
   /* ---- Motion ------------------------------------------------------- */
-  /* One curve per direction, mirrored in src/lib/motion.ts for components
-     animated with the Motion library — change one, change the other.
+  /* One curve per direction.
 
      Entering: ease-OUT (`settle`) — fast start, long settle. The element is
      already moving as it appears, so it reads as responsive, not sluggish.
@@ -1114,10 +1113,9 @@ dialog[open][data-closing]::backdrop {
  * meaning: the shimmer keeps its static placeholder color, and the accordion
  * still opens and closes, just instantly.
  *
- * This rule reaches CSS animations and transitions only. Components animated
- * with the Motion library are driven from JavaScript, which
- * `animation-duration` can't touch — those are governed instead by the
- * <MotionConfig reducedMotion="user"> in lib/providers.tsx.
+ * This rule reaches CSS animations and transitions only — which is every
+ * animation in the app: nothing animates from JavaScript (useExitAnimation
+ * only waits for the CSS ones to finish).
  */
 @media (prefers-reduced-motion: reduce) {
   *,

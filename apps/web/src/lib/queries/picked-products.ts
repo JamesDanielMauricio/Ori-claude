@@ -13,6 +13,15 @@ import { createClient } from "@/lib/supabase/client";
 // Exported so the screen's "still loading" fallback is this same object.
 export const NO_VARIETIES: ReadonlySet<string> = new Set<string>();
 
+// The queryFn returns a plain array and the Set is built here, in `select`:
+// React Query only structurally shares plain arrays and objects, so a Set
+// straight from the queryFn would be a new object on every live-update
+// refetch and re-filter the whole table even when nothing changed. A select
+// declared once is re-run only when the shared array itself changes.
+function toVarietySet(ids: readonly string[]): ReadonlySet<string> {
+  return ids.length === 0 ? NO_VARIETIES : new Set(ids);
+}
+
 // One grower's pick line for the day. Read through parsePallets below rather
 // than a bare `> 0`, the same reading every pallet total in the app uses.
 interface PickLine {
@@ -35,13 +44,13 @@ export const pickedProductsQueries = {
     return queryOptions({
       queryKey: ["picked-products", "varieties", dayId],
       enabled: !!dayId,
-      queryFn: async (): Promise<ReadonlySet<string>> => {
+      queryFn: async (): Promise<string[]> => {
         const supabase = createClient();
         const picks = await supabase.from("daily_picks").select("id").eq("trading_day_id", dayId!);
         if (picks.error) throw picks.error;
 
         const pickIds = picks.data.map((pick) => pick.id);
-        if (pickIds.length === 0) return NO_VARIETIES;
+        if (pickIds.length === 0) return [];
 
         const lines = await fetchAllRows<PickLine>((from, to) =>
           supabase
@@ -60,8 +69,9 @@ export const pickedProductsQueries = {
             picked.add(line.product_variety_id);
           }
         }
-        return picked;
+        return [...picked];
       },
+      select: toVarietySet,
     });
   },
 };

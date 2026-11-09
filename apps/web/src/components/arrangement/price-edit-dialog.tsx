@@ -10,12 +10,14 @@ import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { blockWheel } from "@/lib/integer-input";
 import { toInputText } from "@/lib/number-field";
-import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
+import { optimisticUpdate } from "@/lib/optimistic-mutation";
 import {
   arrangementKeys,
   arrangementQueries,
   type ProductVarietyRow,
 } from "@/lib/queries/arrangement";
+import { customerKeys } from "@/lib/queries/customer";
+import { referenceDataQueries } from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 import { formatVarietyName } from "@/lib/variety-label";
 
@@ -41,8 +43,6 @@ export function PriceEditDialog({
   const [priceRangeTo, setPriceRangeTo] = useState("");
   const [priceType, setPriceType] = useState("");
 
-  const varietyQueryKey = arrangementQueries.priceVariety(varietyId).queryKey;
-
   const varietyQuery = useQuery(arrangementQueries.priceVariety(varietyId));
 
   // Seeded once per variety, not on every change of varietyQuery.data.
@@ -53,48 +53,61 @@ export function PriceEditDialog({
   // in another window and came back found their entry replaced by the old
   // stored value, with no indication anything had been discarded. Seeding from
   // the id means a refetch can no longer overwrite what someone is typing.
-  const [seededVarietyId, setSeededVarietyId] = useState<string | null>(null);
+  //
+  // The version is kept from the same snapshot, and it is the one a save
+  // sends: the inputs show that row, so a newer one that a refetch brought
+  // meanwhile must be refused as a conflict (R7), not silently overwritten.
+  const [seeded, setSeeded] = useState<{ varietyId: string; version: number } | null>(null);
   useEffect(() => {
     // Closing clears the marker, so reopening the SAME variety seeds again
     // from the server rather than resurrecting the last thing typed into a
     // dialog that was dismissed. This component stays mounted between
     // openings — varietyId just goes back to null.
     if (varietyId === null) {
-      setSeededVarietyId(null);
+      setSeeded(null);
       return;
     }
-    if (!varietyQuery.data || seededVarietyId === varietyId) return;
-    setSeededVarietyId(varietyId);
+    if (!varietyQuery.data || seeded?.varietyId === varietyId) return;
+    setSeeded({ varietyId, version: varietyQuery.data.version });
     // The inputs hold text; the prices arrive as numbers.
     setPrice(toInputText(varietyQuery.data.price));
     setPriceRangeFrom(toInputText(varietyQuery.data.price_range_from));
     setPriceRangeTo(toInputText(varietyQuery.data.price_range_to));
     setPriceType(varietyQuery.data.price_type ?? "");
-  }, [varietyQuery.data, varietyId, seededVarietyId]);
+  }, [varietyQuery.data, varietyId, seeded]);
 
   type VarietyRow = ProductVarietyRow & { product_families: { name: string } | null };
 
-  const saveOptimistic = optimisticUpdate<VarietyRow, void>(
-    queryClient,
-    varietyQueryKey,
-    (row) =>
-      row
-        ? {
-            ...row,
-            price: price === "" ? null : Number(price),
-            price_range_from: priceRangeFrom === "" ? null : Number(priceRangeFrom),
-            price_range_to: priceRangeTo === "" ? null : Number(priceRangeTo),
-            price_type: priceType || null,
-          }
-        : row,
-  );
+  // Keyed by the variety a save was started for, never by the render: a
+  // mutation's callbacks run with the options of whichever render is latest
+  // when they fire, so a save still in flight after the dialog was closed and
+  // reopened on another product would otherwise roll back, re-version and
+  // re-read THAT product's cache instead of its own.
+  const optimisticFor = (savedVarietyId: string) =>
+    optimisticUpdate<VarietyRow, string>(
+      queryClient,
+      arrangementKeys.priceVariety(savedVarietyId),
+      (row) =>
+        row
+          ? {
+              ...row,
+              price: price === "" ? null : Number(price),
+              price_range_from: priceRangeFrom === "" ? null : Number(priceRangeFrom),
+              price_range_to: priceRangeTo === "" ? null : Number(priceRangeTo),
+              price_type: priceType || null,
+            }
+          : row,
+    );
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    // The variety the save is for: what every callback below keys off.
+    mutationFn: async (savedVarietyId: string) => {
       const row = varietyQuery.data;
       // The save button is disabled until the product has loaded; this is
       // the backstop behind it.
-      if (!row) throw new Error("נתוני המוצר עדיין לא נטענו");
+      if (!row || row.id !== savedVarietyId || seeded?.varietyId !== row.id) {
+        throw new Error("נתוני המוצר עדיין לא נטענו");
+      }
       const input = saveProductInputSchema.parse({
         id: row.id,
         familyId: row.family_id,
@@ -111,20 +124,40 @@ export function PriceEditDialog({
         // This dialog only edits price — passed through unchanged, same as
         // noOverbooking/isSeasonalAvailable above.
         numberOfOrdersPerCustomer: row.number_of_orders_per_customer,
-        expectedVersion: row.version,
+        expectedVersion: seeded.version,
       });
-      const { error } = await supabase.rpc("save_product", toSaveProductRpcArgs(input));
+      const { data, error } = await supabase.rpc("save_product", toSaveProductRpcArgs(input));
       if (error) throw error;
+      return data;
     },
-    onMutate: saveOptimistic.onMutate,
-    onSuccess: () => {
+    onMutate: (savedVarietyId) => optimisticFor(savedVarietyId).onMutate(savedVarietyId),
+    onSuccess: (saved, savedVarietyId) => {
       showToast("המחיר עודכן.", "success");
-      void queryClient.invalidateQueries({ queryKey: arrangementKeys.all });
-      onClose();
+      const savedKey = arrangementKeys.priceVariety(savedVarietyId);
+      // The version the server just agreed to, before the refetch lands: a
+      // reopening meanwhile seeds from this row, and with the old version its
+      // next save would be refused as a conflict with itself.
+      queryClient.setQueryData<VarietyRow>(
+        savedKey,
+        (row) => row && { ...row, version: saved.version },
+      );
+      // The caches that show this variety's price. Not the boards: their
+      // day tree carries record prices only, never the variety's.
+      void queryClient.invalidateQueries({ queryKey: savedKey });
+      void queryClient.invalidateQueries({ queryKey: referenceDataQueries.products().queryKey });
+      void queryClient.invalidateQueries({ queryKey: customerKeys.catalogAll });
+      // Only if it still shows this product — not one opened while saving.
+      if (varietyId === savedVarietyId) onClose();
     },
-    onError: mergeOnError(saveOptimistic.onError, (error: { message?: string }) => {
+    onError: (error: { message?: string }, savedVarietyId, context) => {
+      optimisticFor(savedVarietyId).onError(error, savedVarietyId, context);
       showToast(`עדכון המחיר נכשל: ${errorMessage(error)}`, "error");
-    }),
+      // Re-read on failure too: after a conflict the rollback above restores
+      // the row that lost, and the next opening must seed from the one that won.
+      void queryClient.invalidateQueries({
+        queryKey: arrangementKeys.priceVariety(savedVarietyId),
+      });
+    },
   });
 
   const title = varietyQuery.data
@@ -137,7 +170,7 @@ export function PriceEditDialog({
     <Dialog open={!!varietyId} onClose={onClose} title={title}>
       {varietyQuery.isLoading ? (
         <p className="text-sm text-ink-muted">טוען…</p>
-      ) : varietyQuery.isError ? (
+      ) : varietyQuery.isError && varietyQuery.data === undefined ? (
         <QueryError
           what="נתוני המוצר"
           onRetry={() => void varietyQuery.refetch()}
@@ -194,7 +227,9 @@ export function PriceEditDialog({
             </Button>
             <Button
               type="button"
-              onClick={() => saveMutation.mutate()}
+              onClick={() => {
+                if (varietyId) saveMutation.mutate(varietyId);
+              }}
               disabled={saveMutation.isPending || !varietyQuery.data}
             >
               {saveMutation.isPending ? "שומר…" : "שמור"}

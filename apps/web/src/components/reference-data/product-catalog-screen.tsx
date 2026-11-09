@@ -91,7 +91,9 @@ export function ProductCatalogScreen({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(blankForm(""));
   const [saving, setSaving] = useState(false);
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  // The rows themselves, not their ids: each optimistic delete takes its row
+  // out of the cache while the dialog is still naming it.
+  const [deleteTarget, setDeleteTarget] = useState<ProductVariety | null>(null);
 
   // The catalog's second editable level. Families are their own record with
   // their own form and their own save, deliberately kept apart from the
@@ -101,7 +103,7 @@ export function ProductCatalogScreen({
   const [editingFamilyId, setEditingFamilyId] = useState<string | null>(null);
   const [familyForm, setFamilyForm] = useState<FamilyFormState>(blankFamilyForm);
   const [savingFamily, setSavingFamily] = useState(false);
-  const [deleteFamilyTargetId, setDeleteFamilyTargetId] = useState<string | null>(null);
+  const [deleteFamilyTarget, setDeleteFamilyTarget] = useState<ProductFamily | null>(null);
 
   // A picked-but-not-yet-saved photo for the family form — see
   // useFamilyPhoto. Nothing is uploaded until the family is saved.
@@ -125,7 +127,6 @@ export function ProductCatalogScreen({
 
   const editingRowId = editingId !== null && editingId !== NEW_ROW_ID ? editingId : null;
   const selected = productsQuery.data?.find((row) => row.id === editingRowId) ?? null;
-  const deleteTarget = productsQuery.data?.find((row) => row.id === deleteTargetId) ?? null;
 
   const { saveMutation, deleteMutation } = useVarietyMutations({
     queryClient,
@@ -134,8 +135,8 @@ export function ProductCatalogScreen({
     setForm,
     editingRowId,
     setEditingId,
-    deleteTargetId,
-    setDeleteTargetId,
+    deleteTargetId: deleteTarget?.id ?? null,
+    setDeleteTarget,
   });
 
   const editingFamily = familyById.get(editingFamilyId ?? "") ?? null;
@@ -149,9 +150,8 @@ export function ProductCatalogScreen({
     editingFamily,
     pendingPhotoFile,
     setPendingPhotoFile,
-    deleteFamilyTargetId,
-    setDeleteFamilyTargetId,
-    familyById,
+    deleteFamilyTarget,
+    setDeleteFamilyTarget,
   });
 
   // A draft family's baseline is the blank form, so "שמור" lights up the
@@ -242,7 +242,8 @@ export function ProductCatalogScreen({
   //
   // `version` rides along inside FormState but can never differ between the
   // two sides: nothing in this form edits it, and a save that bumps it also
-  // re-seeds the form from the returned row. It is the optimistic-locking
+  // writes the returned version into the cached row the next edit is seeded
+  // from (see use-variety-mutations). It is the optimistic-locking
   // token (R7), not a field, so it neither can nor should make the form read
   // as changed.
   //
@@ -314,9 +315,8 @@ export function ProductCatalogScreen({
     return counts;
   }, [productsQuery.data]);
 
-  const deleteFamilyTarget = familyById.get(deleteFamilyTargetId ?? "") ?? null;
-  const deleteFamilyVarietyCount = deleteFamilyTargetId
-    ? (catalogCountByFamily.get(deleteFamilyTargetId) ?? 0)
+  const deleteFamilyVarietyCount = deleteFamilyTarget
+    ? (catalogCountByFamily.get(deleteFamilyTarget.id) ?? 0)
     : 0;
 
   // Only one form is live on this screen at a time. Handing RecordTable the
@@ -378,7 +378,7 @@ export function ProductCatalogScreen({
     handleSaveFamily,
     handleCancelFamily,
     handleEditFamily,
-    setDeleteFamilyTargetId,
+    setDeleteFamilyTarget,
   };
 
   function renderFamilyHeader(
@@ -402,12 +402,14 @@ export function ProductCatalogScreen({
         getRowId={(row) => row.id}
         searchText={(row) => `${row.name} ${familyById.get(row.family_id)?.name ?? ""}`}
         editingId={tableEditingId}
-        savingEdit={saving}
+        // The family form's flag while a family is the edit: it is what
+        // keeps Escape from backing out of a family save in flight.
+        savingEdit={editingFamilyId ? savingFamily : saving}
         dirtyEdit={dirty}
         onEdit={handleEditRow}
         onSaveEdit={handleSave}
         onCancelEdit={editingFamilyId ? handleCancelFamily : handleCancel}
-        onDelete={(row) => setDeleteTargetId(row.id)}
+        onDelete={(row) => setDeleteTarget(row)}
         // No `onAdd`: a variety is created from the "זן חדש" row inside an
         // open family, never from the toolbar. A variety cannot exist without
         // a family — product_varieties.family_id is a NOT NULL foreign key,
@@ -473,19 +475,19 @@ export function ProductCatalogScreen({
       />
 
       <DeleteVarietyDialog
-        open={deleteTargetId !== null}
+        open={deleteTarget !== null}
         target={deleteTarget}
         pending={deleteMutation.isPending}
-        onClose={() => setDeleteTargetId(null)}
+        onClose={() => setDeleteTarget(null)}
         onConfirm={() => deleteMutation.mutate()}
       />
 
       <DeleteFamilyDialog
-        open={deleteFamilyTargetId !== null}
+        open={deleteFamilyTarget !== null}
         familyName={deleteFamilyTarget?.name}
         varietyCount={deleteFamilyVarietyCount}
         pending={deleteFamilyMutation.isPending}
-        onClose={() => setDeleteFamilyTargetId(null)}
+        onClose={() => setDeleteFamilyTarget(null)}
         onConfirm={() => deleteFamilyMutation.mutate()}
       />
     </>

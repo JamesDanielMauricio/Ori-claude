@@ -96,9 +96,6 @@ export function useTradingDayView() {
     isLoadError: active.isLoadingError,
     isFetching: active.isFetching,
     refetch: active.refetch,
-    // For the picker's displayed value before the user has ever touched it,
-    // and for the "back to current" affordance's own label.
-    openDay: openDayQuery.data ?? null,
   };
 }
 

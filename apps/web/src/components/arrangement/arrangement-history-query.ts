@@ -25,12 +25,15 @@ type Client = ReturnType<typeof createClient>;
 
 /** Every row of one query, paged (see readAllPages). */
 function allRows<T>(
-  read: (from: number, to: number) => PromiseLike<{ data: unknown; error: PostgrestError | null }>,
+  read: (
+    from: number,
+    to: number,
+  ) => PromiseLike<{ data: T[] | null; error: PostgrestError | null }>,
 ): Promise<T[]> {
   return readAllPages(async (from, to) => {
     const { data, error } = await read(from, to);
     if (error) throw error;
-    return (data ?? []) as T[];
+    return data ?? [];
   });
 }
 
@@ -48,12 +51,12 @@ export async function readEngineHistory(
 
   const daysRead = await supabase
     .from("trading_days")
-    .select("id, trade_date, daily_arrangements(status)")
+    .select("id, trade_date")
     .gte("trade_date", from)
     .lt("trade_date", tradeDate)
     .order("trade_date");
   if (daysRead.error) throw daysRead.error;
-  const days = (daysRead.data ?? []) as unknown as HistoryRows["days"];
+  const days: HistoryRows["days"] = daysRead.data ?? [];
   const dayIds = days.map((day) => day.id);
 
   const [pickLines, orderLines, records, scores, customers] = await Promise.all([

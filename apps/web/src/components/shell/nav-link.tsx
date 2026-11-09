@@ -12,28 +12,16 @@ export function NavLink({
   href,
   children,
   className = "",
-  variant = "filled",
 }: {
   href: string;
   children: ReactNode;
   className?: string;
-  // "filled" is the original solid-accent active state every existing
-  // caller (RoleShell) still relies on. "outline" is additive, opted into
-  // only by BackofficeNav.
-  //
-  // A third variant, "primary", used to live here for the shells' one
-  // call-to-action row (RoleShell's `primaryAction`) — a NavLink that was
-  // solid accent whether or not it was the current route. It was removed
-  // along with `primaryAction` itself: on both shells that row pointed at
-  // the exact same destination as the first item in `navItems` right below
-  // it, so it was a second button for a link already on screen.
-  variant?: "filled" | "outline";
 }) {
   const { pathname } = useLocation();
   const active = pathname === href || pathname.startsWith(`${href}/`);
 
-  // The outline variant's active state is a soft tint plus a bar pinned to
-  // the inline-start edge (`start-0`, so it follows RTL without a flip).
+  // The active state is a soft tint plus a bar pinned to the inline-start
+  // edge (`start-0`, so it follows RTL without a flip).
   // In an eleven-item sidebar the bar is what the eye finds first — a tinted
   // pill alone is easy to lose in peripheral vision, and it also lets the
   // idle rows stay borderless instead of every row carrying an outline.
@@ -44,21 +32,10 @@ export function NavLink({
   // pseudo-element means the idle→active handoff is animated in both
   // directions without any JS tracking which row was previously selected.
   // The bar defaults to hidden in the base class below and is only switched
-  // on for the outline variant's active row. The filled variant never shows
-  // it: its active state is already a solid accent fill, so a bar of the same
-  // color would be invisible there and — worse — would be plainly visible on
-  // its *idle* rows, which is the opposite of what it means.
-  const activeClasses =
-    variant === "outline"
-      ? "bg-accent-soft font-semibold text-accent before:scale-y-100 before:opacity-100"
-      : "bg-accent font-semibold text-accent-ink shadow-accent";
-
-  const idleClasses =
-    variant === "outline"
-      ? "text-ink-muted hover:bg-accent-soft/50 hover:text-accent"
-      : "text-ink-muted hover:bg-accent-soft/60 hover:text-accent";
-
-  const stateClasses = active ? activeClasses : idleClasses;
+  // on for the active row.
+  const stateClasses = active
+    ? "bg-accent-soft font-semibold text-accent before:scale-y-100 before:opacity-100"
+    : "text-ink-muted hover:bg-accent-soft/50 hover:text-accent";
 
   return (
     <Link

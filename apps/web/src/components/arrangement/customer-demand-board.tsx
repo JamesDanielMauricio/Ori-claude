@@ -254,7 +254,6 @@ function CustomerCard({
           ordered: 0,
           previousOrdered: null,
           allocated: 0,
-          outstanding: 0,
           comment: null,
           allocations: [],
         }
@@ -713,14 +712,16 @@ function AllocationRow({
   }
 
   const parsed = Number(draft);
-  const dirty = draft !== String(allocation.quantity);
+  const dirty = parsed !== allocation.quantity;
   // Above zero, at most one decimal place (workbook Task 35).
   const valid = draft.trim() !== "" && isPalletQuantity(parsed) && parsed > 0;
 
   const revert = () => setDraft(String(allocation.quantity));
 
   const commit = async () => {
-    if (!dirty || !valid) return;
+    // `saving` too, as the ✓ is disabled by: Enter must not start a second
+    // write while another is in flight.
+    if (!dirty || !valid || saving) return;
     const saved = await onSave({
       id: allocation.recordId,
       quantityPallets: parsed,

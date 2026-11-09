@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 
 import { inputClassName } from "@/components/reference-data/form-field";
 import { Button } from "@/components/ui/button";
@@ -144,138 +144,15 @@ export function OrderProductList({
             <div className="accordion-panel" data-open={isOpen}>
               <div>
                 <ul className="border-t border-border bg-surface-muted/60" inert={!isOpen}>
-                  {family.varieties.map((variety) => {
-                    const limit = variety.limit;
-                    // More than this customer may have on the line now: the
-                    // box and the limit beside it turn red, and the send
-                    // stops until it is lowered (OrderLinesEditor).
-                    const overLimit = limit !== undefined && Number(variety.pallets || 0) > limit;
-                    const limitId = `order-limit-${variety.varietyId}`;
-                    return (
-                    <li
+                  {family.varieties.map((variety) => (
+                    <OrderVarietyItem
                       key={variety.varietyId}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/70 px-4 py-3 transition-colors duration-150 last:border-b-0 hover:bg-surface"
-                    >
-                      {/* `w-full` in the narrow layout takes a whole flex
-                          line, so the quantity control and comment button
-                          drop underneath the name instead of competing with
-                          it for the row. Neither of those two can shrink —
-                          the quantity pill is a fixed `w-32` and the button
-                          is `shrink-0` — so in a narrow container the name
-                          was the only flexible thing left and absorbed the
-                          entire shortfall. Measured across the real 133-row
-                          catalogue: this column came out 34px wide at 320px
-                          (46 rows overflowing their own box, names breaking
-                          into four and five lines) and 89px at 375px.
-
-                          `@md` (a 448px list) rather than the grower row's
-                          `@2xl`, because this row's controls are smaller:
-                          128 of quantity + 62 of button + 24 of gaps = 214,
-                          against the pick row's 388. At 448 this name still
-                          gets 202px, which is what it already had on a 768px
-                          tablet and reads fine — so the threshold is each
-                          row's own arithmetic, not a shared guess.
-
-                          A row that shows its limit ("מקסימום 2.6", 72px
-                          wide plus an 8px gap) waits for `@lg` (a 512px
-                          list) instead: 294 of controls leaves this name
-                          186px there, where `@md` would have left it 122. */}
-                      <div
-                        className={
-                          limit === undefined
-                            ? "w-full min-w-0 @md:w-auto @md:flex-1"
-                            : "w-full min-w-0 @lg:w-auto @lg:flex-1"
-                        }
-                      >
-                        {/* A wrapping flex row, not an inline badge after the
-                            name. Inline, a narrow row broke the badge's two
-                            words across lines and turned the pill into a
-                            two-line blob; as its own flex item it stays whole
-                            and drops under the name instead. */}
-                        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium">
-                          <span>{variety.varietyName}</span>
-                          {variety.outOfStock && <StatusPill tone="danger">אזל מהמלאי</StatusPill>}
-                        </p>
-                        {variety.priceLabel && (
-                          <p className="mt-0.5 text-xs font-medium text-ink-muted">
-                            {variety.priceLabel}
-                          </p>
-                        )}
-                      </div>
-                      {editable ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          // `min-h-10` lifts this one button from `sm`'s 36px
-                          // to 40px without touching the shared size scale.
-                          // Every other `sm` button in the app is an
-                          // occasional inline action; this one repeats once
-                          // per catalogue row — nine or more on screen at a
-                          // time on a phone — so it is the size that gets
-                          // mis-tapped. Width is fine at 62px: the miss that
-                          // matters here is vertical, between two stacked
-                          // rows.
-                          className="min-h-10"
-                          onClick={() => onOpenComment?.(variety.varietyId)}
-                        >
-                          {variety.comment ? "✎ הערה" : "+ הערה"}
-                        </Button>
-                      ) : (
-                        variety.comment && (
-                          <p className="w-full rounded-md bg-surface px-2.5 py-1.5 text-xs text-ink-muted ring-1 ring-inset ring-border">
-                            הערה: {variety.comment}
-                          </p>
-                        )
-                      )}
-                      {/* Quantity + pack type together, matching the reference
-                          design's single pill-shaped control, and — on the
-                          customer's own screen — the most they can have on
-                          the line beside it, tied to the box for screen
-                          readers. The box itself takes one decimal place:
-                          limitToOneDecimal cuts anything finer as it is
-                          typed or pasted. */}
-                      <div className="flex items-center gap-2">
-                        <div className="relative">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.1"
-                            inputMode="decimal"
-                            {...(limit === undefined ? {} : { max: limit })}
-                            disabled={!editable}
-                            aria-label={`כמות ${variety.packType ? PACK_TYPE_LABEL[variety.packType] : "פלטות"} — ${variety.varietyName}`}
-                            aria-describedby={limit === undefined ? undefined : limitId}
-                            aria-invalid={overLimit || undefined}
-                            className={`${inputClassName} w-32 ps-3 pe-14 font-semibold ${
-                              overLimit ? "ring-danger focus:ring-danger" : ""
-                            }`}
-                            value={variety.pallets}
-                            onWheel={blockWheel}
-                            onChange={(event) =>
-                              onChangePallets?.(variety.varietyId, limitToOneDecimal(event.target.value))
-                            }
-                          />
-                          {variety.packType && (
-                            <span className="pointer-events-none absolute inset-y-0 end-3 my-auto flex items-center text-xs font-medium text-ink-subtle">
-                              {PACK_TYPE_LABEL[variety.packType]}
-                            </span>
-                          )}
-                        </div>
-                        {limit !== undefined && (
-                          <span
-                            id={limitId}
-                            // A fixed width, so the box sits in the same place
-                          // on every row whatever the number's length.
-                          className={`min-w-[4.5rem] shrink-0 text-xs font-medium ${overLimit ? "text-danger" : "text-ink-muted"}`}
-                          >
-                            מקסימום {limit}
-                          </span>
-                        )}
-                      </div>
-                    </li>
-                    );
-                  })}
+                      {...variety}
+                      editable={editable}
+                      onChangePallets={onChangePallets}
+                      onOpenComment={onOpenComment}
+                    />
+                  ))}
                 </ul>
               </div>
             </div>
@@ -285,3 +162,144 @@ export function OrderProductList({
     </ul>
   );
 }
+
+// One variety's row. Memoized, and given only primitives and the host's
+// stable callbacks: the editor re-renders on every keystroke, and every
+// family's rows stay mounted (see the accordion note above), so without it
+// each digit re-rendered every row in the catalogue to change one.
+const OrderVarietyItem = memo(function OrderVarietyItem({
+  editable,
+  onChangePallets,
+  onOpenComment,
+  ...variety
+}: OrderVarietyRow & {
+  editable: boolean;
+  onChangePallets?: ((varietyId: string, value: string) => void) | undefined;
+  onOpenComment?: ((varietyId: string) => void) | undefined;
+}) {
+  const limit = variety.limit;
+  // More than this customer may have on the line now: the
+  // box and the limit beside it turn red, and the send
+  // stops until it is lowered (OrderLinesEditor).
+  const overLimit = limit !== undefined && Number(variety.pallets || 0) > limit;
+  const limitId = `order-limit-${variety.varietyId}`;
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/70 px-4 py-3 transition-colors duration-150 last:border-b-0 hover:bg-surface">
+      {/* `w-full` in the narrow layout takes a whole flex
+          line, so the quantity control and comment button
+          drop underneath the name instead of competing with
+          it for the row. Neither of those two can shrink —
+          the quantity pill is a fixed `w-32` and the button
+          is `shrink-0` — so in a narrow container the name
+          was the only flexible thing left and absorbed the
+          entire shortfall. Measured across the real 133-row
+          catalogue: this column came out 34px wide at 320px
+          (46 rows overflowing their own box, names breaking
+          into four and five lines) and 89px at 375px.
+
+          `@md` (a 448px list) rather than the grower row's
+          `@2xl`, because this row's controls are smaller:
+          128 of quantity + 62 of button + 24 of gaps = 214,
+          against the pick row's 388. At 448 this name still
+          gets 202px, which is what it already had on a 768px
+          tablet and reads fine — so the threshold is each
+          row's own arithmetic, not a shared guess.
+
+          A row that shows its limit ("מקסימום 2.6", 72px
+          wide plus an 8px gap) waits for `@lg` (a 512px
+          list) instead: 294 of controls leaves this name
+          186px there, where `@md` would have left it 122. */}
+      <div
+        className={
+          limit === undefined
+            ? "w-full min-w-0 @md:w-auto @md:flex-1"
+            : "w-full min-w-0 @lg:w-auto @lg:flex-1"
+        }
+      >
+        {/* A wrapping flex row, not an inline badge after the
+            name. Inline, a narrow row broke the badge's two
+            words across lines and turned the pill into a
+            two-line blob; as its own flex item it stays whole
+            and drops under the name instead. */}
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium">
+          <span>{variety.varietyName}</span>
+          {variety.outOfStock && <StatusPill tone="danger">אזל מהמלאי</StatusPill>}
+        </p>
+        {variety.priceLabel && (
+          <p className="mt-0.5 text-xs font-medium text-ink-muted">{variety.priceLabel}</p>
+        )}
+      </div>
+      {editable ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          // `min-h-10` lifts this one button from `sm`'s 36px
+          // to 40px without touching the shared size scale.
+          // Every other `sm` button in the app is an
+          // occasional inline action; this one repeats once
+          // per catalogue row — nine or more on screen at a
+          // time on a phone — so it is the size that gets
+          // mis-tapped. Width is fine at 62px: the miss that
+          // matters here is vertical, between two stacked
+          // rows.
+          className="min-h-10"
+          onClick={() => onOpenComment?.(variety.varietyId)}
+        >
+          {variety.comment ? "✎ הערה" : "+ הערה"}
+        </Button>
+      ) : (
+        variety.comment && (
+          <p className="w-full rounded-md bg-surface px-2.5 py-1.5 text-xs text-ink-muted ring-1 ring-inset ring-border">
+            הערה: {variety.comment}
+          </p>
+        )
+      )}
+      {/* Quantity + pack type together, matching the reference
+          design's single pill-shaped control, and — on the
+          customer's own screen — the most they can have on
+          the line beside it, tied to the box for screen
+          readers. The box itself takes one decimal place:
+          limitToOneDecimal cuts anything finer as it is
+          typed or pasted. */}
+      <div className="flex items-center gap-2">
+        <div className="relative">
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            inputMode="decimal"
+            {...(limit === undefined ? {} : { max: limit })}
+            disabled={!editable}
+            aria-label={`כמות ${variety.packType ? PACK_TYPE_LABEL[variety.packType] : "פלטות"} — ${variety.varietyName}`}
+            aria-describedby={limit === undefined ? undefined : limitId}
+            aria-invalid={overLimit || undefined}
+            className={`${inputClassName} w-32 ps-3 pe-14 font-semibold ${
+              overLimit ? "ring-danger focus:ring-danger" : ""
+            }`}
+            value={variety.pallets}
+            onWheel={blockWheel}
+            onChange={(event) =>
+              onChangePallets?.(variety.varietyId, limitToOneDecimal(event.target.value))
+            }
+          />
+          {variety.packType && (
+            <span className="pointer-events-none absolute inset-y-0 end-3 my-auto flex items-center text-xs font-medium text-ink-subtle">
+              {PACK_TYPE_LABEL[variety.packType]}
+            </span>
+          )}
+        </div>
+        {limit !== undefined && (
+          <span
+            id={limitId}
+            // A fixed width, so the box sits in the same place
+            // on every row whatever the number's length.
+            className={`min-w-[4.5rem] shrink-0 text-xs font-medium ${overLimit ? "text-danger" : "text-ink-muted"}`}
+          >
+            מקסימום {limit}
+          </span>
+        )}
+      </div>
+    </li>
+  );
+});

@@ -24,13 +24,21 @@ export function AlertsBell() {
 
   const unreadCount = alertsQuery.data?.filter((alert) => !alert.read).length ?? 0;
 
-  async function handleSelect(alert: AlertRow) {
-    if (!alert.read) {
-      const { error } = await supabase.from("alerts").update({ read: true }).eq("id", alert.id);
-      if (!error) {
-        void queryClient.invalidateQueries({ queryKey: alertsQueries.own().queryKey });
-      }
+  // The badge still clears only from the re-read after the server confirms
+  // the write (see e2e/alerts.spec.ts), never from local state.
+  async function markRead(ids: string[]) {
+    const { error } = await supabase.from("alerts").update({ read: true }).in("id", ids);
+    if (!error) {
+      void queryClient.invalidateQueries({ queryKey: alertsQueries.own().queryKey });
     }
+  }
+
+  // Closes and navigates first, marking read in the background: the
+  // navigation never depended on the write (a failure is ignored either way),
+  // and waiting for it left the click dead for a round trip, with the list
+  // still open to a second tap.
+  function handleSelect(alert: AlertRow) {
+    if (!alert.read) void markRead([alert.id]);
     setOpen(false);
     if (alert.alert_types) {
       const { app_screen, url_parameter } = alert.alert_types;
@@ -51,15 +59,12 @@ export function AlertsBell() {
     }
   }
 
-  async function handleMarkAllRead() {
+  function handleMarkAllRead() {
     const unreadIds = (alertsQuery.data ?? [])
       .filter((alert) => !alert.read)
       .map((alert) => alert.id);
     if (unreadIds.length === 0) return;
-    const { error } = await supabase.from("alerts").update({ read: true }).in("id", unreadIds);
-    if (!error) {
-      void queryClient.invalidateQueries({ queryKey: alertsQueries.own().queryKey });
-    }
+    void markRead(unreadIds);
   }
 
   return (

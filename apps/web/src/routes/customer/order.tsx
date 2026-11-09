@@ -117,7 +117,7 @@ function TodayOrderView() {
   // "There is no open trading day right now" is a claim about the business,
   // and a failed request cannot support it — a customer who reads that when
   // the shop is in fact open simply doesn't order.
-  if (openDayQuery.isError) {
+  if (openDayQuery.isError && openDayQuery.data === undefined) {
     return (
       <QueryError
         what="יום המסחר"
@@ -160,7 +160,7 @@ function SpecificOrderView({ orderId }: { orderId: string }) {
   // the "not found" message below honest: it deliberately does not distinguish
   // "doesn't exist" from "not yours", and folding transport failures into it
   // too would make it mean nothing at all.
-  if (orderQuery.isError) {
+  if (orderQuery.isError && orderQuery.data === undefined) {
     return (
       <QueryError
         what="ההזמנה"
@@ -228,7 +228,7 @@ function NoOrderView({ tradingDayId }: { tradingDayId: string }) {
     );
   }
 
-  if (dayQuery.isError) {
+  if (dayQuery.isError && dayQuery.data === undefined) {
     return (
       <QueryError what="יום המסחר" onRetry={() => void dayQuery.refetch()} retrying={dayQuery.isFetching} />
     );

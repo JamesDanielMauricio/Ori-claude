@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { inputClassName } from "@/components/reference-data/form-field";
@@ -17,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { referenceDataQueries } from "@/lib/queries/reference-data";
 import { usersAdminQueries } from "@/lib/queries/users-admin";
 import { trpc } from "@/lib/trpc-client";
 
@@ -43,7 +44,21 @@ const ROLE_LABEL: Record<DraftRow["role"], string> = {
 export default function BulkImportUsersPage() {
   const [rows, setRows] = useState<DraftRow[]>([emptyRow()]);
   const [missingCompany, setMissingCompany] = useState(false);
-  const bulkCreate = trpc.auth.bulkCreateUsers.useMutation();
+  const queryClient = useQueryClient();
+  const trpcUtils = trpc.useUtils();
+  // Every screen that lists accounts: the Users table, the contact-person
+  // picker, the password-reset page and the login emails all three join on.
+  // None is mounted here, so this only marks them stale — without it a user
+  // who goes straight back to the Users screen doesn't see who was imported.
+  const bulkCreate = trpc.auth.bulkCreateUsers.useMutation({
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: referenceDataQueries.users().queryKey });
+      void queryClient.invalidateQueries({
+        queryKey: referenceDataQueries.contactPersonProfiles().queryKey,
+      });
+      void trpcUtils.auth.listUserEmails.invalidate();
+    },
+  });
 
   // Picked by name rather than typed in as a UUID, which no screen shows.
   const companiesQuery = useQuery(usersAdminQueries.importCompanies());
@@ -84,7 +99,9 @@ export default function BulkImportUsersPage() {
   if (companiesQuery.isLoading) {
     return <Skeleton className="h-40 w-full rounded-xl" />;
   }
-  if (companiesQuery.isError) {
+  // Only while nothing was ever loaded: a failed background refetch must not
+  // replace a form the admin is filling in with the error screen.
+  if (companiesQuery.isError && companiesQuery.data === undefined) {
     return (
       <QueryError
         what="רשימת החברות"
@@ -156,7 +173,7 @@ export default function BulkImportUsersPage() {
                   <Select
                     aria-label="תפקיד"
                     value={row.role}
-                    onChange={(next) => updateRow(index, { role: next as DraftRow["role"] })}
+                    onChange={(next) => updateRow(index, { role: next })}
                     options={(Object.keys(ROLE_LABEL) as Array<DraftRow["role"]>).map((role) => ({
                       value: role,
                       label: ROLE_LABEL[role],

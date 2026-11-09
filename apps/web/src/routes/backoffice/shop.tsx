@@ -61,7 +61,7 @@ export default function ShopManagementPage() {
 
       {dayView.isLoading ? (
         <Skeleton className="h-40 w-full rounded-xl" />
-      ) : dayView.isError ? (
+      ) : dayView.isLoadError ? (
         <QueryError
           what="מצב יום המסחר"
           onRetry={() => void dayView.refetch()}
