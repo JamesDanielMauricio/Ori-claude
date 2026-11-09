@@ -39,6 +39,11 @@ export const saveGrowerInputSchema = z.object({
   // the system (see packages/db/migrations/0057). Nullable: most companies
   // have none set.
   contactPersonId: z.string().uuid().nullable(),
+  // Bubble's "Should not receive arrangement?" (migrations 0081/0082): true =
+  // this grower is not sent the arrangement sale message. Optional: a save
+  // that leaves it out (the "בשם מגדל" products dialog) keeps the current
+  // setting — save_grower treats a missing value as "unchanged".
+  noArrangementMessage: z.boolean().optional(),
 });
 export type SaveGrowerInput = z.infer<typeof saveGrowerInputSchema>;
 
@@ -52,6 +57,9 @@ export function toSaveGrowerRpcArgs(input: SaveGrowerInput) {
     p_product_variety_ids: input.productVarietyIds,
     p_transporter_company_id: input.transporterCompanyId,
     p_contact_person_id: input.contactPersonId,
+    // Left out of the request when not given, so the database keeps the
+    // grower's current setting.
+    ...(input.noArrangementMessage === undefined ? {} : { p_no_arrangement_message: input.noArrangementMessage }),
   };
 }
 

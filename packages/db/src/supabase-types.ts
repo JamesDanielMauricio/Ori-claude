@@ -62,6 +62,7 @@ export type Database = {
           name: string;
           type: Database["public"]["Enums"]["company_type"];
           status: Database["public"]["Enums"]["company_status"];
+          no_arrangement_message: boolean;
           default_pickup_time: string | null;
           transporter_company_id: string | null;
           can_see_product_prices: boolean | null;
@@ -77,6 +78,7 @@ export type Database = {
           name: string;
           type: Database["public"]["Enums"]["company_type"];
           status?: Database["public"]["Enums"]["company_status"];
+          no_arrangement_message?: boolean;
           default_pickup_time?: string | null;
           transporter_company_id?: string | null;
           can_see_product_prices?: boolean | null;
@@ -90,6 +92,7 @@ export type Database = {
           name?: string;
           type?: Database["public"]["Enums"]["company_type"];
           status?: Database["public"]["Enums"]["company_status"];
+          no_arrangement_message?: boolean;
           default_pickup_time?: string | null;
           transporter_company_id?: string | null;
           can_see_product_prices?: boolean | null;
@@ -515,6 +518,7 @@ export type Database = {
           submitted_at: string | null;
           pickup_time: string | null;
           reminder_sent_at: string | null;
+          completion_messaged_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -526,6 +530,7 @@ export type Database = {
           submitted_at?: string | null;
           pickup_time?: string | null;
           reminder_sent_at?: string | null;
+          completion_messaged_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -537,6 +542,7 @@ export type Database = {
           submitted_at?: string | null;
           pickup_time?: string | null;
           reminder_sent_at?: string | null;
+          completion_messaged_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -749,6 +755,8 @@ export type Database = {
           customer_company_id: string;
           quantity_pallets: number;
           price: number | null;
+          price_range_from: number | null;
+          price_range_to: number | null;
           price_type: string | null;
           created_at: string;
           updated_at: string;
@@ -761,6 +769,8 @@ export type Database = {
           customer_company_id: string;
           quantity_pallets: number;
           price?: number | null;
+          price_range_from?: number | null;
+          price_range_to?: number | null;
           price_type?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -773,6 +783,8 @@ export type Database = {
           customer_company_id?: string;
           quantity_pallets?: number;
           price?: number | null;
+          price_range_from?: number | null;
+          price_range_to?: number | null;
           price_type?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -1186,6 +1198,7 @@ export type Database = {
           p_product_variety_ids: string[];
           p_transporter_company_id?: string | null;
           p_contact_person_id?: string | null;
+          p_no_arrangement_message?: boolean | null;
         };
         Returns: Database["public"]["Tables"]["companies"]["Row"];
       };

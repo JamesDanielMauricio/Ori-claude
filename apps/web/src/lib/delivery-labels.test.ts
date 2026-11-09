@@ -21,6 +21,8 @@ describe("delivery labels", () => {
   it("tells the transporter's copy of the grower message apart, and falls back to the key", () => {
     expect(templateLabel("close_arrangement_grower", "grower")).toBe("סגירת סידור — למגדל");
     expect(templateLabel("close_arrangement_grower", "transporter")).toBe("סגירת סידור — למוביל");
+    // 0081: the transporter's own template.
+    expect(templateLabel("close_arrangement_grower_transporter", "transporter")).toBe("סגירת סידור — למוביל");
     expect(templateLabel("something_new", "customer")).toBe("something_new");
   });
 });

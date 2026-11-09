@@ -87,4 +87,15 @@ describe("errorMessage", () => {
     expect(errorMessage(null)).toBe("שגיאה לא ידועה");
     expect(errorMessage("text")).toBe("שגיאה לא ידועה");
   });
+
+  it("explains a delete refused because the record is in use, and only a delete", () => {
+    expect(
+      errorMessage({
+        code: "23503",
+        message: 'update or delete on table "companies" violates foreign key constraint "daily_orders_customer_company_id_fkey" on table "daily_orders"',
+      }),
+    ).toMatch(/^אי אפשר למחוק — הרשומה כבר בשימוש/);
+    const insert = 'insert or update on table "daily_orders" violates foreign key constraint "daily_orders_customer_company_id_fkey"';
+    expect(errorMessage({ code: "23503", message: insert })).toBe(insert);
+  });
 });

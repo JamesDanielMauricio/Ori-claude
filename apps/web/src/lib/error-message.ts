@@ -25,11 +25,21 @@ function validationMessage(issue: ValidationIssue | undefined): string {
   return "הנתונים שהוזנו אינם תקינים — בדוק את השדות ונסה שוב.";
 }
 
+// Deleting a record that other records still point to (a customer with
+// orders, a grower with picks, a product that was sold) is refused by the
+// database with Postgres's own English text (workbook Task 32). Only the
+// delete case is translated: the same code on an insert or update means a
+// missing reference, and keeps its own message.
+const IN_USE_ON_DELETE = "אי אפשר למחוק — הרשומה כבר בשימוש (בהזמנות, בליקוטים או בסידורים). אפשר להפוך אותה ללא פעילה במקום.";
+
 export function errorMessage(error: unknown): string {
   if (error && typeof error === "object") {
-    const { name, issues, message } = error as { name?: unknown; issues?: unknown; message?: unknown };
+    const { name, issues, message, code } = error as { name?: unknown; issues?: unknown; message?: unknown; code?: unknown };
     if (name === "ZodError" && Array.isArray(issues)) {
       return validationMessage(issues[0] as ValidationIssue | undefined);
+    }
+    if (code === "23503" && typeof message === "string" && message.startsWith("update or delete on table")) {
+      return IN_USE_ON_DELETE;
     }
     if (typeof message === "string" && message) return message;
   }

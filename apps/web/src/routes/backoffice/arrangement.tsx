@@ -436,13 +436,20 @@ export default function ArrangementPage() {
         dailyPickId: grower.pickId,
         closed: grower.status !== "closed",
       });
-      const { error } = await supabase.rpc("set_pick_closed", toSetPickClosedRpcArgs(input));
+      const { data, error } = await supabase.rpc("set_pick_closed", toSetPickClosedRpcArgs(input));
       if (error) throw error;
+      return data;
     },
     onMutate: toggleTruckOptimistic.onMutate,
-    onSuccess: (_data, grower) => {
+    onSuccess: (pick, grower) => {
+      // Closing a pick sends the grower's and transporter's messages when
+      // something has been arranged from it (0081 stamps completion_messaged_at).
       showToast(
-        grower.status === "closed" ? "הליקוט הוחזר למצב הקודם." : "הליקוט נסגר.",
+        grower.status === "closed"
+          ? "הליקוט הוחזר למצב הקודם."
+          : pick?.completion_messaged_at
+            ? "הליקוט נסגר והודעת הסידור נשלחה."
+            : "הליקוט נסגר.",
         "success",
       );
       void queryClient.invalidateQueries({ queryKey: boardDataQueryKey });

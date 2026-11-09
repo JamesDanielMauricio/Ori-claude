@@ -30,6 +30,18 @@
 // A --commit run first writes a JSON backup of everything it is about to
 // delete to packages/db/.bubble-export/backups/ (gitignored).
 //
+// Two guards (workbook Task 28):
+//   - IMPORT_STAFF_EMAILS (environment, comma-separated): the staff logins a
+//     person has reviewed. A --commit run refuses to start without it, and any
+//     run that has it stops if Bubble marks someone as staff who is not listed —
+//     Bubble's role field alone never makes anyone staff here.
+//   - public.bubble_import_lock (migration 0084): a database with a row there is
+//     the live system; the importer refuses to run against it at all.
+//
+// A repeat import keeps each company's id (read from the previous import's
+// _bubble_migration_id_map) and the customer scores entered in this app
+// (customer_scores), which Bubble does not have (workbook Task 20).
+//
 // Each rule for turning Bubble records into rows is explained where it is
 // applied; docs/DATA_MIGRATION_PLAN.md records the decisions behind them.
 // Anything that cannot be imported cleanly is written to
@@ -91,6 +103,19 @@ const MIN_PASSWORD_LENGTH = 6;
 if (TEMP_PASSWORD && TEMP_PASSWORD.length < MIN_PASSWORD_LENGTH) {
   throw new Error(`IMPORT_TEMP_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters — Supabase Auth's minimum.`);
 }
+
+// SECURITY (workbook Task 28): the staff (backoffice) logins a person has
+// reviewed, from the environment. ALLOWS exactly those Bubble users to arrive
+// as staff. PROTECTS AGAINST Bubble's role field alone granting backoffice —
+// full access to every company's data — to whoever it names, including a role
+// set by mistake or by someone who reached Bubble's data: an unlisted staff
+// user stops the import before anything is touched (main()).
+const STAFF_EMAILS = new Set(
+  (process.env.IMPORT_STAFF_EMAILS ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter((email) => email !== ""),
+);
 
 // Bubble's "No. of pallets per wholesaler" is the per-customer order cap
 // (product_varieties.number_of_orders_per_customer, migration 0042). The new
@@ -301,7 +326,7 @@ class Report {
 // ---------------------------------------------------------------------------
 
 const COLUMNS = {
-  companies: ["id", "name", "type", "status", "default_pickup_time", "can_see_product_prices", "whatsapp_group_id", "created_at", "updated_at"],
+  companies: ["id", "name", "type", "status", "default_pickup_time", "can_see_product_prices", "whatsapp_group_id", "no_arrangement_message", "created_at", "updated_at"],
   profiles: ["user_id", "company_id", "role", "display_name", "phone_number", "must_change_password", "created_at", "updated_at"],
   product_families: ["id", "name", "category", "image_url", "created_at", "updated_at"],
   product_varieties: [
@@ -410,7 +435,7 @@ interface ReferencePlan {
 
 const UNNAMED_COMPANY = "(ללא שם)";
 
-function planReference(data: ExportData, report: Report): ReferencePlan {
+function planReference(data: ExportData, report: Report, previousCompanyIds: Map<string, string> = new Map()): ReferencePlan {
   const idMap: Row[] = [];
   const appSettings = data.appsettings[0];
   if (!appSettings) throw new Error("The export has no appsettings record — it cannot identify the distributor.");
@@ -482,7 +507,9 @@ function planReference(data: ExportData, report: Report): ReferencePlan {
     }
 
     const pickupTime = text(company, "Default Pickup Time");
-    const id = randomUUID();
+    // A company imported before keeps its id, so what this app adds to it
+    // (customer_scores) survives a repeat import (Task 20).
+    const id = previousCompanyIds.get(company._id) ?? randomUUID();
     companies.push({
       id,
       name,
@@ -491,6 +518,8 @@ function planReference(data: ExportData, report: Report): ReferencePlan {
       default_pickup_time: pickupTime ? israelTime(pickupTime) : null,
       can_see_product_prices: booleanValue(company, "Can see product prices"),
       whatsapp_group_id: whatsappGroupId(company, "group id (whatsapp)"),
+      // Bubble's "Should not receive arrangement?" (migration 0081).
+      no_arrangement_message: booleanValue(company, "Should not receive arrangement?") === true,
       created_at: createdAt(company),
       updated_at: modifiedAt(company),
     });
@@ -517,7 +546,7 @@ function planReference(data: ExportData, report: Report): ReferencePlan {
 
   const shouldNotReceive = data.company.filter((company) => booleanValue(company, "Should not receive arrangement?") === true).length;
   if (shouldNotReceive > 0) {
-    report.note("warning", "company", null, "field_not_imported", `${shouldNotReceive} company(ies) have "Should not receive arrangement?" = yes — this schema has no such setting, so they will receive arrangement messages like everyone else.`);
+    report.note("info", "company", null, "company.no_arrangement_message", `${shouldNotReceive} company(ies) have "Should not receive arrangement?" = yes — imported as no_arrangement_message, so those growers are not sent the arrangement sale message.`);
   }
   report.fieldsNotImported(
     "company",
@@ -1584,9 +1613,9 @@ const WIPED_TABLES = [
   "profiles",
   // Not in Bubble — entered in this app only. Listed so it is in the backup
   // and in the deleted-rows count: `delete from companies` below would take
-  // it anyway, through the foreign key, and without a trace. Scores are NOT
-  // carried over to the re-imported companies (which get new ids); they have
-  // to be entered or loaded again after an import.
+  // it anyway, through the foreign key, and without a trace. Since Task 20 the
+  // scores are read first and put back for every customer imported again
+  // (companies keep their ids across imports).
   "customer_scores",
   "companies",
   "product_varieties",
@@ -1787,10 +1816,31 @@ async function main() {
   console.log(`${COMMIT ? "COMMIT RUN" : "DRY RUN (rolled back at the end — pass --commit to import for real)"}`);
   console.log(`Source: Bubble ${BUBBLE_ENV} export taken ${exportedAt}\n`);
 
+  const sql = postgres(DATABASE_URL, { max: 1, prepare: false, idle_timeout: 20, onnotice: () => undefined });
+
+  // SECURITY (workbook Task 28): ALLOWS an import only into a database that
+  // is not locked. PROTECTS AGAINST replacing the live system's data: after
+  // the cutover, public.bubble_import_lock (migration 0084) has a row, and
+  // this stops here — before planning, any write, or any login is created.
+  const [lockTable] = await sql<{ name: string | null }[]>`select to_regclass('public.bubble_import_lock')::text as name`;
+  if (lockTable?.name) {
+    const [lock] = await sql<{ locked_at: Date; locked_by: string }[]>`select locked_at, locked_by from public.bubble_import_lock order by locked_at limit 1`;
+    if (lock) {
+      await sql.end();
+      throw new Error(`The importer is locked on this database since ${lock.locked_at.toISOString()} (${lock.locked_by}). Ori is the live system here — an import would replace its data. Nothing was touched.`);
+    }
+  }
+
+  // The previous import's company ids (Task 20), by Bubble id.
+  const previousCompanyIds = new Map(
+    (await sql<{ bubble_id: string; new_id: string }[]>`select bubble_id, new_id::text as new_id from _bubble_migration_id_map where entity_type = 'company'`)
+      .map((row) => [row.bubble_id, row.new_id] as const),
+  );
+
   // Plan once with stand-in login ids: every check runs before anything is
   // written anywhere, including before any login is created.
   const referenceReport = new Report();
-  const reference = planReference(data, referenceReport);
+  const reference = planReference(data, referenceReport, previousCompanyIds);
   const standInIds = new Map(reference.users.map((user) => [user.bubbleId, randomUUID()]));
   const firstPassReport = new Report();
   planTrading(data, reference, standInIds, firstPassReport);
@@ -1799,11 +1849,22 @@ async function main() {
   for (const [label, values] of unknownOptionValues) {
     blockers.push(`Unmapped option value(s) for ${label}: ${[...values].map((value) => `"${value}"`).join(", ")}`);
   }
+  // The reviewed staff list (see STAFF_EMAILS).
+  const bubbleStaff = reference.users.filter((user) => user.role === "backoffice");
+  const unlistedStaff = bubbleStaff.filter((user) => !STAFF_EMAILS.has(user.email.toLowerCase()));
+  if (COMMIT && STAFF_EMAILS.size === 0) {
+    blockers.push("IMPORT_STAFF_EMAILS is not set: list the staff (backoffice) emails you have reviewed, comma-separated, before a --commit run.");
+  } else if (STAFF_EMAILS.size > 0 && unlistedStaff.length > 0) {
+    blockers.push(`Staff in Bubble but not on IMPORT_STAFF_EMAILS (review them, then list them or fix their role in Bubble): ${unlistedStaff.map((user) => user.email).join(", ")}`);
+  } else if (STAFF_EMAILS.size === 0) {
+    console.log(`Note: IMPORT_STAFF_EMAILS is not set — a --commit run needs it. Bubble marks ${bubbleStaff.length} login(s) as staff.\n`);
+  }
   if (blockers.length > 0) {
+    await sql.end();
     throw new Error(`Import stopped before touching anything:\n  - ${blockers.join("\n  - ")}`);
   }
-
-  const sql = postgres(DATABASE_URL, { max: 1, prepare: false, idle_timeout: 20, onnotice: () => undefined });
+  const keptIds = new Set(previousCompanyIds.values());
+  console.log(`Company ids kept from the previous import: ${reference.companies.filter((company) => keptIds.has(String(company.id))).length} of ${reference.companies.length}\n`);
   const createdLoginIds: string[] = [];
   const admin = COMMIT
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
@@ -1895,6 +1956,12 @@ async function main() {
         await tx`insert into auth.users (id, email) select id, email from jsonb_to_recordset(${tx.json(standIns)}) as x(id uuid, email text)`;
       }
 
+      // Customer scores are this app's own data (Task 20): read them before
+      // the wipe, put them back below for the customers imported again.
+      const keptScores = await tx<{ customer_company_id: string; general_score: string; created_at: Date; updated_at: Date }[]>`
+        select customer_company_id::text as customer_company_id, general_score::text as general_score, created_at, updated_at from public.customer_scores
+      `;
+
       // ---- replace: delete the current business data, children first
       console.log("\nDeleting current data:");
       const keepLoginIds = [...loginIds.values()];
@@ -1946,6 +2013,12 @@ async function main() {
           where companies.id = link.id
         `;
       }
+      const reimportedCustomers = new Set(reference.companies.filter((company) => company.type === "customer").map((company) => String(company.id)));
+      const scoresBack = keptScores.filter((score) => reimportedCustomers.has(score.customer_company_id));
+      if (scoresBack.length > 0) {
+        await tx`insert into public.customer_scores ${tx(scoresBack as unknown as SqlRow[], "customer_company_id", "general_score", "created_at", "updated_at")}`;
+      }
+      console.log(`Customer scores kept: ${scoresBack.length} of ${keptScores.length}`);
       await insertRows(tx, "profiles", plan.rows.profiles);
       await insertRows(tx, "product_families", reference.productFamilies);
       await insertRows(tx, "product_varieties", reference.productVarieties);

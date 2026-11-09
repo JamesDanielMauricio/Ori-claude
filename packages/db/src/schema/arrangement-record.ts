@@ -33,6 +33,11 @@ export const arrangementRecords = pgTable("arrangement_records", {
     .references(() => companies.id),
   quantityPallets: numeric("quantity_pallets", { precision: 10, scale: 2 }).notNull(),
   price: numeric("price", { precision: 10, scale: 2 }),
+  // The product's price range, kept as a range when the record is closed
+  // with one (no fixed price, none set on the record): price then stays
+  // empty — a range is never turned into one number (D8, migration 0083).
+  priceRangeFrom: numeric("price_range_from", { precision: 10, scale: 2 }),
+  priceRangeTo: numeric("price_range_to", { precision: 10, scale: 2 }),
   // Snapshot of which price type produced `price` — populated alongside
   // it by close_arrangement's price-population step (or by an explicit
   // override at create/update time). Free text, matching

@@ -38,6 +38,10 @@ export const dailyPicks = pgTable(
     // at"), not a fire-and-forget WhatsApp dispatch (that integration
     // doesn't exist yet — see the notifications module).
     reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
+    // When closing this pick with the truck icon (set_pick_closed) sent the
+    // grower's and transporter's messages; cleared when it is reopened. Null
+    // = the end of the day messages this grower (migration 0081).
+    completionMessagedAt: timestamp("completion_messaged_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

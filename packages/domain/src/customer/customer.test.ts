@@ -27,6 +27,7 @@ import {
   deleteTestGrowerWithProduct,
   deleteTestTradingDay,
 } from "@ori/domain/lifecycle-engine/testing";
+import { toSaveCustomerRpcArgs } from "@ori/domain/reference-data";
 import { createTestProductVariety, deleteTestProductVariety } from "@ori/domain/reference-data/testing";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { and, eq, sql } from "drizzle-orm";
@@ -1130,5 +1131,64 @@ describe("customer ordering module", () => {
     // Staff are unaffected: leaving the line out of their save removes it.
     expect((await send(admin.client, [[open.varietyId, 2]], customer.companyId)).error).toBeNull();
     expect(await saved(blocked.varietyId)).toBeNull();
+  }, 30000);
+
+  it("save_customer (migration 0080): a customer added — or made active again — after the shop opens can order that day and gets one 'shop is open' message", async () => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const day = await createOpenTestDay(admin.userId);
+    await pickLine(day.id, grower.companyId, grower.varietyId, 10);
+
+    const save = (id: string | null, status: "active" | "inactive") =>
+      admin.client.rpc(
+        "save_customer",
+        toSaveCustomerRpcArgs({
+          id,
+          name: `לקוח אמצע היום ${randomUUID()}`,
+          status,
+          canSeeProductPrices: true,
+          whatsappGroupId: null,
+          contactPersonId: null,
+        }),
+      );
+    const shopOpenMessages = async (companyId: string) =>
+      (
+        await db
+          .select({ id: notificationOutbox.id })
+          .from(notificationOutbox)
+          .where(and(eq(notificationOutbox.recipientCompanyId, companyId), eq(notificationOutbox.templateKey, "shop_open")))
+      ).length;
+
+    // Added mid-day, and a second one added inactive.
+    const added = await save(null, "active");
+    expect(added.error).toBeNull();
+    const addedId = added.data!.id;
+    cleanupFns.push(() => deleteTestCompany(addedId));
+    const later = await save(null, "inactive");
+    expect(later.error).toBeNull();
+    const laterId = later.data!.id;
+    cleanupFns.push(() => deleteTestCompany(laterId));
+    const client = await signedInCustomer(addedId);
+    // Last, so it runs first: the day goes before the companies it holds orders for.
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    expect(await getDailyOrderForCustomer(day.id, addedId)).toBeTruthy();
+    expect(await shopOpenMessages(addedId)).toBe(1);
+    const sent = await client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({
+        tradingDayId: day.id,
+        lines: [{ productVarietyId: grower.varietyId, palletsOrdered: 2, comment: null }],
+      }),
+    );
+    expect(sent.error).toBeNull();
+
+    // Saving again sends nothing new; an inactive customer gets nothing until made active.
+    expect((await save(addedId, "active")).error).toBeNull();
+    expect(await shopOpenMessages(addedId)).toBe(1);
+    expect(await getDailyOrderForCustomer(day.id, laterId)).toBeFalsy();
+    expect((await save(laterId, "active")).error).toBeNull();
+    expect(await getDailyOrderForCustomer(day.id, laterId)).toBeTruthy();
+    expect(await shopOpenMessages(laterId)).toBe(1);
   }, 30000);
 });

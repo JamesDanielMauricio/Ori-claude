@@ -71,6 +71,8 @@ export interface GrowerCompany {
   whatsapp_group_id: string | null;
   transporter_company_id: string | null;
   contact_person_id: string | null;
+  // Bubble's "Should not receive arrangement?" (migration 0081).
+  no_arrangement_message: boolean;
   created_at: string;
 }
 
@@ -233,7 +235,7 @@ export const referenceDataQueries = {
         const { data, error } = await createClient()
           .from("companies")
           .select(
-            "id, name, status, default_pickup_time, whatsapp_group_id, transporter_company_id, contact_person_id, created_at",
+            "id, name, status, default_pickup_time, whatsapp_group_id, transporter_company_id, contact_person_id, no_arrangement_message, created_at",
           )
           .eq("type", "grower")
           .order("name");

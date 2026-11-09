@@ -548,4 +548,45 @@ describe("reference-data save functions", () => {
       .eq("customer_company_id", customer.id);
     expect(left.data).toEqual([]);
   });
+
+  it("save_customer/save_grower (migration 0082): a WhatsApp group id another company already has is refused, naming that company", async () => {
+    const client = await signedInBackofficeClient();
+    const group = `test-${randomUUID()}@g.us`;
+    const first = await client.rpc(
+      "save_customer",
+      toSaveCustomerRpcArgs({ id: null, name: `לקוח קבוצה ${randomUUID()}`, status: "active", canSeeProductPrices: false, whatsappGroupId: group, contactPersonId: null }),
+    );
+    expect(first.error).toBeNull();
+    cleanupFns.push(() => deleteTestCompanyById(first.data!.id));
+
+    const second = await client.rpc(
+      "save_grower",
+      toSaveGrowerRpcArgs({ id: null, name: `מגדל קבוצה ${randomUUID()}`, status: "active", defaultPickupTime: null, whatsappGroupId: group, productVarietyIds: [], transporterCompanyId: null, contactPersonId: null }),
+    );
+    expect(second.error?.code).toBe("23505");
+    expect(second.error?.message).toContain(first.data!.name);
+
+    // The company that has it can be saved again.
+    const again = await client.rpc(
+      "save_customer",
+      toSaveCustomerRpcArgs({ id: first.data!.id, name: first.data!.name, status: "active", canSeeProductPrices: true, whatsappGroupId: group, contactPersonId: null }),
+    );
+    expect(again.error).toBeNull();
+  });
+
+  it("save_grower (migration 0082): sets 'no arrangement message', and a save that leaves it out keeps it", async () => {
+    const client = await signedInBackofficeClient();
+    const base = { name: `מגדל הודעה ${randomUUID()}`, status: "active" as const, defaultPickupTime: null, whatsappGroupId: null, productVarietyIds: [], transporterCompanyId: null, contactPersonId: null };
+    const created = await client.rpc("save_grower", toSaveGrowerRpcArgs({ ...base, id: null, noArrangementMessage: true }));
+    expect(created.error).toBeNull();
+    cleanupFns.push(() => deleteTestCompanyById(created.data!.id));
+    expect(created.data!.no_arrangement_message).toBe(true);
+
+    const kept = await client.rpc("save_grower", toSaveGrowerRpcArgs({ ...base, id: created.data!.id }));
+    expect(kept.error).toBeNull();
+    expect(kept.data!.no_arrangement_message).toBe(true);
+
+    const cleared = await client.rpc("save_grower", toSaveGrowerRpcArgs({ ...base, id: created.data!.id, noArrangementMessage: false }));
+    expect(cleared.data!.no_arrangement_message).toBe(false);
+  });
 });

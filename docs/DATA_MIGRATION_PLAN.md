@@ -44,7 +44,22 @@ Two scripts in `packages/db/scripts/`, run from `packages/db`. Both need the roo
 | 2. Import | `pnpm import:from-bubble` (dry run) / `pnpm import:from-bubble -- --commit` | Replaces the database's business data with the snapshot in **one transaction**. The dry run does everything, including verification, then rolls back. |
 
 Environment: `BUBBLE_API_TOKEN` (Bubble editor → Settings → API → API Tokens) for the export;
-`DATABASE_URL` for the import, plus `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` for `--commit`.
+`DATABASE_URL` for the import, plus `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and
+`IMPORT_STAFF_EMAILS` for `--commit`.
+
+**Guards added for the final cutover (release workbook Tasks 20 and 28, 2026-11-09):**
+
+- `IMPORT_STAFF_EMAILS` — the staff (backoffice) emails someone has reviewed, comma-separated. A
+  `--commit` run will not start without it, and any run that has it stops, before touching
+  anything, if Bubble marks a login as staff that is not on the list.
+- The lock — `public.bubble_import_lock` (migration 0084). Once Ori is the live system, run
+  `insert into public.bubble_import_lock (locked_by) values ('<name>, after the cutover');` on that
+  database. The importer then refuses to run there at all, dry run included.
+- A repeat import keeps each company's id (from the previous import's `_bubble_migration_id_map`)
+  and puts back the customer scores entered in this app (`customer_scores`).
+- Public sign-up must be off on the hosted project (Supabase dashboard → Authentication → Sign In /
+  Providers → "Allow new users to sign up"), so nobody can register a user's email before the import
+  reuses that login. `supabase/config.toml` has it off for the local and CI stack.
 
 **Why the export pages the way it does.** Bubble's Data API returns zero results past `cursor=50000`
 while still reporting records remaining — no error. `dailypickproduct` has ~100K rows, so a plain
@@ -195,9 +210,9 @@ groups worth knowing:
   nothing referenced.
 - **Created to hold arrangement records:** 57 zero-pallet order lines and 4 empty open orders.
 - **No column in this schema, so not carried over:** company address, city, tax id, phone,
-  accounting id, external code, main contact and logo; "Should not receive arrangement?" (set on
-  14 companies — they now receive arrangement messages like everyone else); order-level comments
-  (21, full text kept in the log); order and pick activity history; `productleftover`; app settings.
+  accounting id, external code, main contact and logo; order-level comments (21, full text kept in
+  the log); order and pick activity history; `productleftover`; app settings. ("Should not receive
+  arrangement?", set on 14 companies, is imported since migration 0081 as `no_arrangement_message`.)
 
 ## 7. Verification
 

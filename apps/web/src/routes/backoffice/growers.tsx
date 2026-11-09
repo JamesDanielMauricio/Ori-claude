@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { CellChipList } from "@/components/reference-data/cell-popover";
 import { ContactPersonEditCell, ContactPersonSummary } from "@/components/reference-data/contact-person-cell";
-import { inputClassName } from "@/components/reference-data/form-field";
+import { checkboxClassName, inputClassName } from "@/components/reference-data/form-field";
 import { ProductMultiSelectCell } from "@/components/reference-data/product-multi-select-cell";
 import { RecordTable, type RecordTableColumn } from "@/components/reference-data/record-table";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,7 @@ interface FormState {
   productVarietyIds: Set<string>;
   transporterCompanyId: string;
   contactPersonId: string;
+  noArrangementMessage: boolean;
 }
 
 // Sentinel row id for a not-yet-created record: the draft row prepended to
@@ -47,6 +48,7 @@ const BLANK_FORM: FormState = {
   productVarietyIds: new Set(),
   transporterCompanyId: "",
   contactPersonId: "",
+  noArrangementMessage: false,
 };
 
 function blankRow(): GrowerCompany {
@@ -58,6 +60,7 @@ function blankRow(): GrowerCompany {
     whatsapp_group_id: null,
     transporter_company_id: null,
     contact_person_id: null,
+    no_arrangement_message: false,
     created_at: "",
   };
 }
@@ -71,6 +74,7 @@ function toFormState(row: GrowerCompany, productVarietyIds: string[]): FormState
     productVarietyIds: new Set(productVarietyIds),
     transporterCompanyId: row.transporter_company_id ?? "",
     contactPersonId: row.contact_person_id ?? "",
+    noArrangementMessage: row.no_arrangement_message ?? false,
   };
 }
 
@@ -153,6 +157,7 @@ export default function GrowersPage() {
               whatsapp_group_id: form.whatsappGroupId || null,
               transporter_company_id: form.transporterCompanyId || null,
               contact_person_id: form.contactPersonId || null,
+              no_arrangement_message: form.noArrangementMessage,
             }
           : row,
       ),
@@ -183,6 +188,7 @@ export default function GrowersPage() {
         productVarietyIds: [...form.productVarietyIds],
         transporterCompanyId: form.transporterCompanyId || null,
         contactPersonId: form.contactPersonId || null,
+        noArrangementMessage: form.noArrangementMessage,
       });
       const { data, error } = await supabase.rpc("save_grower", toSaveGrowerRpcArgs(input));
       if (error) throw error;
@@ -358,6 +364,28 @@ export default function GrowersPage() {
             })) ?? []),
           ]}
         />
+      ),
+    },
+    {
+      // Bubble's "Should not receive arrangement?", the other way round: whether
+      // this grower is sent the arrangement message (what was sold from its
+      // stock, and to whom). Its transporter's pickup message goes out either way.
+      key: "arrangementMessage",
+      label: "הודעת סידור למגדל",
+      render: (row) => (row.no_arrangement_message ? "לא נשלחת" : "נשלחת"),
+      renderEdit: () => (
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-ink">
+          <input
+            type="checkbox"
+            className={checkboxClassName}
+            aria-label="הודעת סידור למגדל"
+            checked={!form.noArrangementMessage}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, noArrangementMessage: !event.target.checked }))
+            }
+          />
+          {form.noArrangementMessage ? "לא נשלחת" : "נשלחת"}
+        </label>
       ),
     },
     {

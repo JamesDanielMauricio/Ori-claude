@@ -1418,6 +1418,44 @@ describe("arrangement module", () => {
     });
   }, 30000);
 
+  it("close_arrangement (migration 0083) keeps a price range as a range — no midpoint — and shows it to a customer allowed to see prices", async () => {
+    const { day, grower, customer, pickProductId, orderProductId } =
+      await setUpDayWithSupplyAndDemand(5, 5);
+    await db
+      .update(productVarieties)
+      .set({ price: null, priceRangeFrom: "10", priceRangeTo: "12" })
+      .where(eq(productVarieties.id, grower.varietyId));
+    await db.update(companies).set({ canSeeProductPrices: true }).where(eq(companies.id, customer.id));
+
+    const created = await admin.client.rpc(
+      "create_arrangement_record",
+      toCreateArrangementRecordRpcArgs({ dailyPickProductId: pickProductId, dailyOrderProductId: orderProductId, quantityPallets: 5 }),
+    );
+    expect(created.error).toBeNull();
+    await db
+      .update(dailyOrders)
+      .set({ status: "submitted" })
+      .where(and(eq(dailyOrders.tradingDayId, day.id), eq(dailyOrders.customerCompanyId, customer.id)));
+    expect((await admin.client.rpc("close_shop")).error).toBeNull();
+    expect((await admin.client.rpc("close_arrangement")).error).toBeNull();
+
+    const { data: record } = await admin.client
+      .from("arrangement_records")
+      .select("price, price_range_from, price_range_to")
+      .eq("id", created.data!.id)
+      .single();
+    expect(record).toEqual({ price: null, price_range_from: 10, price_range_to: 12 });
+
+    const { data: rows } = await admin.client
+      .from("notification_outbox")
+      .select("payload")
+      .eq("trading_day_id", day.id)
+      .eq("template_key", "close_arrangement_customer")
+      .eq("recipient_company_id", customer.id);
+    const [line] = (rows?.[0]?.payload as { lines: Array<{ price: number | null; priceRangeFrom: number | null; priceRangeTo: number | null }> }).lines;
+    expect(line).toMatchObject({ price: null, priceRangeFrom: 10, priceRangeTo: 12 });
+  }, 30000);
+
   it("close_arrangement does not cc a transporter when the grower has none assigned", async () => {
     const { day, grower, customer, pickProductId, orderProductId } =
       await setUpDayWithSupplyAndDemand(5, 5);
@@ -1455,44 +1493,34 @@ describe("arrangement module", () => {
     expect(outboxRows?.filter((row) => row.recipient_type === "transporter")).toHaveLength(0);
   }, 30000);
 
-  it("close_arrangement ccs the grower's assigned transporter with the same close_arrangement_grower message — id 8", async () => {
+  // A transporter company assigned to the grower, with the cleanup it needs.
+  // Pushed after setUpDayWithSupplyAndDemand's own registrations, so LIFO
+  // runs it BEFORE the day itself is deleted — meaning the day's own
+  // notification_outbox rows (including those addressed to the transporter)
+  // still exist then, and notification_outbox.recipient_company_id has no ON
+  // DELETE action (RESTRICT). Deleting those rows directly first avoids the
+  // FK violation regardless of ordering — and avoids a thrown error aborting
+  // the REST of runCleanup's LIFO chain (it doesn't catch), which is what
+  // once left a trading day stuck.
+  async function assignTransporter(growerCompanyId: string) {
+    const transporter = await createTestCompany(`מוביל בדיקה ${crypto.randomUUID()}`, "transporter");
+    cleanupFns.push(async () => {
+      await db.delete(notificationOutbox).where(eq(notificationOutbox.recipientCompanyId, transporter.id));
+      await db.update(companies).set({ transporterCompanyId: null }).where(eq(companies.id, growerCompanyId));
+      await deleteTestCompany(transporter.id);
+    });
+    await db.update(companies).set({ transporterCompanyId: transporter.id }).where(eq(companies.id, growerCompanyId));
+    return transporter;
+  }
+
+  it("close_arrangement sends the grower's assigned transporter its own message, naming the grower — id 8, migration 0081", async () => {
     const { day, grower, customer, pickProductId, orderProductId } =
       await setUpDayWithSupplyAndDemand(5, 5);
     await db
       .update(productVarieties)
       .set({ price: "12.50" })
       .where(eq(productVarieties.id, grower.varietyId));
-
-    const transporter = await createTestCompany(
-      `מוביל בדיקה ${crypto.randomUUID()}`,
-      "transporter",
-    );
-    // Pushed after setUpDayWithSupplyAndDemand's own registrations, so
-    // LIFO runs this BEFORE the day itself is deleted — meaning the day's
-    // own notification_outbox rows (including the one this test creates,
-    // addressed to the transporter) still exist at this point, and
-    // notification_outbox.recipient_company_id has no ON DELETE action
-    // (RESTRICT). Deleting that specific row directly first, rather than
-    // relying on the day's later cascade, avoids the FK violation
-    // regardless of ordering relative to the day's own cleanup — and
-    // avoids a thrown error here aborting the REST of runCleanup's LIFO
-    // chain (it doesn't catch — one throw skips every cleanup queued
-    // before it), which is what actually left a trading day stuck the
-    // first time this test ran.
-    cleanupFns.push(async () => {
-      await db
-        .delete(notificationOutbox)
-        .where(eq(notificationOutbox.recipientCompanyId, transporter.id));
-      await db
-        .update(companies)
-        .set({ transporterCompanyId: null })
-        .where(eq(companies.id, grower.companyId));
-      await deleteTestCompany(transporter.id);
-    });
-    await db
-      .update(companies)
-      .set({ transporterCompanyId: transporter.id })
-      .where(eq(companies.id, grower.companyId));
+    const transporter = await assignTransporter(grower.companyId);
 
     const created = await admin.client.rpc(
       "create_arrangement_record",
@@ -1518,13 +1546,48 @@ describe("arrangement module", () => {
 
     const { data: outboxRows } = await admin.client
       .from("notification_outbox")
-      .select("recipient_type, recipient_company_id, template_key")
+      .select("recipient_type, recipient_company_id, template_key, payload")
       .eq("trading_day_id", day.id);
     const transporterRows = outboxRows?.filter((row) => row.recipient_type === "transporter") ?? [];
     expect(transporterRows).toHaveLength(1);
     expect(transporterRows[0]).toMatchObject({
       recipient_company_id: transporter.id,
-      template_key: "close_arrangement_grower",
+      template_key: "close_arrangement_grower_transporter",
     });
+    const [growerRow] = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, grower.companyId));
+    expect((transporterRows[0]!.payload as { companyName?: string }).companyName).toBe(growerRow!.name);
+  }, 30000);
+
+  it("set_pick_closed (migration 0081): completing a grower sends its and its transporter's messages at once, and closing the day does not send them again", async () => {
+    const { day, grower, customer, pickProductId, orderProductId } =
+      await setUpDayWithSupplyAndDemand(5, 5);
+    const transporter = await assignTransporter(grower.companyId);
+    const created = await admin.client.rpc(
+      "create_arrangement_record",
+      toCreateArrangementRecordRpcArgs({
+        dailyPickProductId: pickProductId,
+        dailyOrderProductId: orderProductId,
+        quantityPallets: 5,
+      }),
+    );
+    expect(created.error).toBeNull();
+    await db
+      .update(dailyOrders)
+      .set({ status: "submitted" })
+      .where(and(eq(dailyOrders.tradingDayId, day.id), eq(dailyOrders.customerCompanyId, customer.id)));
+    const [line] = await db.select({ pickId: dailyPickProducts.dailyPickId }).from(dailyPickProducts).where(eq(dailyPickProducts.id, pickProductId));
+
+    const sales = async () =>
+      ((await admin.client.from("notification_outbox").select("recipient_type, recipient_company_id, template_key").eq("trading_day_id", day.id)).data ?? [])
+        .filter((row) => row.template_key.startsWith("close_arrangement_grower"));
+
+    const completed = await admin.client.rpc("set_pick_closed", { p_daily_pick_id: line!.pickId, p_closed: true });
+    expect(completed.error).toBeNull();
+    expect(completed.data?.completion_messaged_at).toBeTruthy();
+    expect((await sales()).map((row) => row.recipient_company_id).sort()).toEqual([grower.companyId, transporter.id].sort());
+
+    expect((await admin.client.rpc("close_shop")).error).toBeNull();
+    expect((await admin.client.rpc("close_arrangement")).error).toBeNull();
+    expect(await sales()).toHaveLength(2);
   }, 30000);
 });

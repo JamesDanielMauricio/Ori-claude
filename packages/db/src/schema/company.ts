@@ -18,6 +18,9 @@ export const companies = pgTable("companies", {
   name: text("name").notNull(),
   type: companyTypeEnum("type").notNull(),
   status: companyStatusEnum("status").notNull().default("active"),
+  // Bubble's "Should not receive arrangement?" — true: this grower is not
+  // sent the arrangement sale message (migration 0081).
+  noArrangementMessage: boolean("no_arrangement_message").notNull().default(false),
   // Grower-only in practice (PRD: "Only meaningful for Grower companies").
   // Left nullable rather than split into a per-type table — the PRD's own
   // "meaningful for X only" fields are a real, if slightly awkward,

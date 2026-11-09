@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  createAnonClient,
   createTestCompany,
   createTestProfile,
   deleteTestCompany,
@@ -203,5 +204,14 @@ describe("Row Level Security", () => {
       .single();
     expect(read.error).toBeNull();
     expect(read.data).toMatchObject({ id: otherCompany.id });
+  });
+
+  // Workbook Task 28: nobody can register themselves (supabase/config.toml
+  // enable_signup = false). Accounts come only from staff, via the admin API.
+  it("self sign-up is refused and creates no user", async () => {
+    const email = `signup-${crypto.randomUUID()}@example.test`;
+    const result = await createAnonClient().auth.signUp({ email, password: `Correct-Horse-${crypto.randomUUID()}` });
+    expect(result.error).not.toBeNull();
+    expect(result.data.user).toBeNull();
   });
 });

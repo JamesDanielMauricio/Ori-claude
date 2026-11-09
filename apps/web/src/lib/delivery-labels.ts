@@ -26,12 +26,13 @@ export function canSendAgain(status: DeliveryStatus): boolean {
   return status === "failed" || status === "expired" || status === "retrying" || status === "waiting";
 }
 
-// Which message this is, in the office's words. Transporters get the
-// grower's closing template (build_notification_outbox), so the recipient
-// type tells the two apart.
+// Which message this is, in the office's words. Since 0081 transporters get
+// their own template; messages queued before that used the grower's, so the
+// recipient type still tells those apart.
 const TEMPLATE_LABELS: Record<string, string> = {
   close_arrangement_customer: "סגירת סידור — ללקוח",
   close_arrangement_grower: "סגירת סידור — למגדל",
+  close_arrangement_grower_transporter: "סגירת סידור — למוביל",
   order_reminder: "תזכורת להזמנה",
   pick_reminder: "תזכורת לקטיף",
   pick_updated: "מגדל עדכן קטיף",

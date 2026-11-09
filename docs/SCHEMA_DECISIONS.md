@@ -5,7 +5,61 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-09 (latest) — Every WhatsApp message goes out right after it is queued (`0079`)
+## 2026-11-09 (latest) — Release workbook tasks 24–29, 37 and 20: `0080`–`0084`
+
+James asked for "the rest" of the release workbook, without over-engineering. His decisions
+(2026-11-09): Bubble stays live until a later switch-over (so the final import is still ahead);
+completing a grower sends its messages at once (Task 25); price ranges show as ranges, like Bubble
+(D8, Task 27); the shared temporary password stays (D9). No change is made on the Bubble side.
+
+- **`0080` — a customer added after the shop opens can order that day (Task 24).** Only `open_shop`
+  created the day's order headers, so a customer added or made active later was refused
+  ("no daily order"). `save_customer` now adds the header when an active customer is saved after
+  the shop opened, and one `shop_open` message while it is still open — only if the header is new,
+  so it never repeats. Done in the save function, not a trigger: test fixtures and the importer
+  insert companies directly and must not get headers or messages.
+- **`0081` — completing a grower sends its messages; the transporter gets its own (Tasks 25, 26,
+  part of 29).** The truck icon (`set_pick_closed`) queues the grower's sale message and the
+  transporter's pickup message through one shared step (`queue_grower_sale_messages`) and stamps
+  `daily_picks.completion_messaged_at`; the end of the day skips stamped picks; reopening clears the
+  stamp, so the next completion or the day's end sends an up-to-date message. The transporter
+  template `close_arrangement_grower_transporter` names the grower and the pickup time; its key
+  keeps the grower switch in the dispatcher with no redeploy. Bubble's "Should not receive
+  arrangement?" returns as `companies.no_arrangement_message` (stops only the grower's sale message,
+  as Bubble's Main alert 8 does; imported from Bubble).
+- **`0082` — WhatsApp groups, the opt-out on the Growers screen, a cap on office messages (Task 29).**
+  A group id another company already has is refused on save (app saves only — the importer and
+  migrations are not checked, so a cutover import of Bubble's data as it is cannot fail on it;
+  ids already shared stay until changed). `save_grower` takes the opt-out as an optional last
+  argument; left out, it keeps the setting (the "בשם מגדל" products dialog leaves it out). Office
+  messages are capped at 5 of one kind about one company or product per 10 minutes.
+- **`0083` — price ranges and prices in the closing message (Tasks 27, 37).** At the end of the day
+  a record with no price of its own whose product has a range keeps the range
+  (`arrangement_records.price_range_from/to`) instead of the midpoint, and the closing message
+  writes it "₪10–₪12" (the shop already did). The message shows prices only when the day's shop
+  shows them AND the customer's company may see them — the rule the shop has followed since `0072`.
+  Days already closed keep their prices.
+- **`0084` — the importer lock (Task 28).** `bubble_import_lock`: a row there and the importer refuses
+  to run against that database. Created empty; to be locked after the cutover. The importer also
+  needs `IMPORT_STAFF_EMAILS` (the reviewed staff list) for a `--commit` run, and a repeat import
+  keeps company ids and the customer scores (Task 20). Public sign-up is off in
+  `supabase/config.toml`; the hosted project has its own switch.
+
+**Not built, and why.** Task 23 and the Bubble parts of 31 are Bubble changes (James: none). Task 35
+(one decimal place) waits on how a customer should enter a fraction. Tasks 36 and 38 wait on the
+client (D21; the sample file and the screen). Task 34 needs the review's test backlog, which is not
+in the repo. Parts of 30 and 32 need a ruling (see the release workbook).
+
+**How it was checked.** Each migration on a copy built from every migration (PostgreSQL 17 in
+WASM): `0080` 20 checks, `0081` 26, `0082` 21, `0083` 13, including the old behaviour failing where
+it should. A whole trading day replayed with and without `0080`–`0083`: every table identical
+except the expected messages (transporters' new template, customers' price rule), with the same
+number of messages. The importer's guards on a real PostgreSQL 17 against the 12 October live
+export (dry runs). CI tests added for each.
+
+---
+
+## 2026-11-09 — Every WhatsApp message goes out right after it is queued (`0079`)
 
 **Context.** James's rule (2026-11-09): every WhatsApp message is sent right after it is queued.
 Only the office's reminder bells and the delivery screen's "send again" started the dispatcher at
