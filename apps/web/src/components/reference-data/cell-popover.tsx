@@ -7,7 +7,7 @@ import { useExitAnimation } from "@/lib/use-exit-animation";
 
 // A trigger button plus a panel that opens over the page, for the one kind
 // of field a table cell can't hold inline: a list (a grower's in-season
-// varieties, a user's blocked products, a product's per-customer caps).
+// varieties, a user's blocked products).
 //
 // Portaled to <body> and positioned with `fixed`, not absolutely inside the
 // cell — the record table is a horizontally scrolling `overflow-auto`

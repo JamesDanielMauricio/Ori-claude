@@ -9,11 +9,7 @@ import type { Dispatch, SetStateAction } from "react";
 import type { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
-import {
-  referenceDataQueries,
-  type PalletCap,
-  type ProductVariety,
-} from "@/lib/queries/reference-data";
+import { referenceDataQueries, type ProductVariety } from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 
 import { toFormState, type FormState } from "./catalog-form";
@@ -42,7 +38,6 @@ export function useVarietyMutations({
 }) {
   const supabase = createClient();
   const productsQueryKey = referenceDataQueries.products().queryKey;
-  const capsQueryKey = referenceDataQueries.productCustomerCaps().queryKey;
 
   // Patches every field the form edits except `version` — that's a real
   // optimistic-concurrency column, bumped by the server only. Leaving it
@@ -78,17 +73,6 @@ export function useVarietyMutations({
       ),
   );
 
-  const saveCapsOptimistic = optimisticUpdate<Map<string, PalletCap[]>, void>(
-    queryClient,
-    capsQueryKey,
-    (byVariety) => {
-      if (!byVariety || !editingRowId) return byVariety;
-      const next = new Map(byVariety);
-      next.set(editingRowId, form.customerPalletCaps);
-      return next;
-    },
-  );
-
   const saveMutation = useMutation({
     mutationFn: async (): Promise<ProductVariety> => {
       const input = saveProductInputSchema.parse({
@@ -107,7 +91,6 @@ export function useVarietyMutations({
         numberOfOrdersPerCustomer:
           form.numberOfOrdersPerCustomer === "" ? null : Number(form.numberOfOrdersPerCustomer),
         expectedVersion: form.version,
-        customerPalletCaps: form.customerPalletCaps,
       });
       const { data, error } = await supabase.rpc("save_product", toSaveProductRpcArgs(input));
       if (error) throw error;
@@ -115,14 +98,12 @@ export function useVarietyMutations({
     },
     onMutate: async (variables) => {
       const rows = await saveOptimistic.onMutate(variables);
-      const caps = await saveCapsOptimistic.onMutate(variables);
-      return { rows, caps };
+      return { rows };
     },
     onSuccess: () => {
       showToast("הנתונים נשמרו.", "success");
       setEditingId(null);
       void queryClient.invalidateQueries({ queryKey: productsQueryKey });
-      void queryClient.invalidateQueries({ queryKey: capsQueryKey });
     },
     onError: async (
       error: { message?: string; code?: string },
@@ -130,12 +111,10 @@ export function useVarietyMutations({
       context:
         | {
             rows: { previous: ProductVariety[] | undefined } | undefined;
-            caps: { previous: Map<string, PalletCap[]> | undefined } | undefined;
           }
         | undefined,
     ) => {
       saveOptimistic.onError(error, variables, context?.rows);
-      saveCapsOptimistic.onError(error, variables, context?.caps);
 
       if (error.code !== PRODUCT_VERSION_CONFLICT_ERROR_CODE) {
         showToast(`השמירה נכשלה: ${errorMessage(error)}`, "error");
@@ -147,10 +126,7 @@ export function useVarietyMutations({
       // won, so the next save carries THEIR version rather than retrying
       // against a version the server has already moved past.
       showToast("המוצר עודכן על ידי משתמש אחר בינתיים. הנתונים רועננו — בדוק ושמור שוב.", "error");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: productsQueryKey }),
-        queryClient.invalidateQueries({ queryKey: capsQueryKey }),
-      ]);
+      await queryClient.invalidateQueries({ queryKey: productsQueryKey });
       if (!editingRowId) return;
       const fresh = queryClient
         .getQueryData<ProductVariety[]>(productsQueryKey)
@@ -159,8 +135,7 @@ export function useVarietyMutations({
         setEditingId(null);
         return;
       }
-      const caps = queryClient.getQueryData<Map<string, PalletCap[]>>(capsQueryKey)?.get(fresh.id);
-      setForm(toFormState(fresh, caps ?? []));
+      setForm(toFormState(fresh));
     },
   });
 

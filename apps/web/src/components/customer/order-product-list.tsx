@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
 import { ProductThumbnail } from "@/components/ui/product-thumbnail";
-import { Select } from "@/components/ui/select";
-import { blockDecimalKey, blockWheel, stripDecimal } from "@/lib/integer-input";
+import { blockWheel } from "@/lib/integer-input";
+import { limitToOneDecimal } from "@/lib/pallet-input";
 
 export interface OrderVarietyRow {
   varietyId: string;
@@ -16,37 +16,19 @@ export interface OrderVarietyRow {
   pallets: string;
   comment: string;
   outOfStock?: boolean;
-  // This customer's own ceiling for this row (get_orderable_catalog_for_
-  // customer's max_orderable_for_customer, migration 0042) — the highest
-  // number the quantity dropdown offers. Omitted for rows with no such
-  // ceiling to offer (the read-only historical view builds its rows from
-  // already-submitted lines, which carry no live stock figure).
-  maxOrderable?: number;
+  // The most this customer can have on this line right now (order-draft.ts's
+  // orderLimit), shown beside the quantity box as "מקסימום". Given only on
+  // the customer's own order screen: staff ordering on a customer's behalf
+  // may deliberately go past it (submit_order never holds them to it), and
+  // the read-only historical view builds its rows from already-submitted
+  // lines, which carry no live stock figure.
+  limit?: number;
 }
 
 const PACK_TYPE_LABEL: Record<"pallets" | "crates", string> = {
   pallets: "משטחים",
   crates: "ארגזים",
 };
-
-// Every whole number from 0 up to maxOrderable, plus the row's current
-// value even if it exceeds that ceiling — stock can drop out from under an
-// already-chosen quantity between page loads, and a <select> whose value
-// matches no <option> silently falls back to the first one, which would
-// quietly zero out a real order line the moment its family re-renders.
-// Surfacing the too-high figure as its own option instead leaves the
-// existing quantity visibly selected (and still change-able downward) until
-// the customer acts on it themselves.
-function dropdownOptions(maxOrderable: number, currentValue: string): number[] {
-  const safeMax = Number.isFinite(maxOrderable) ? Math.max(0, Math.floor(maxOrderable)) : 0;
-  const options = new Set<number>();
-  for (let n = 0; n <= safeMax; n++) options.add(n);
-  const current = Number(currentValue);
-  if (currentValue.trim() !== "" && Number.isInteger(current) && current > safeMax) {
-    options.add(current);
-  }
-  return [...options].sort((a, b) => a - b);
-}
 
 export interface OrderFamilyRow {
   familyId: string;
@@ -65,23 +47,21 @@ export interface OrderFamilyRow {
 // read-only historical order view (past, closed trading days);
 // `onChangePallets`/`onOpenComment` are omitted in the read-only case.
 //
-// quantityMode: "dropdown" on the customer's own order screen — the shared
-// Select capped at each row's own maxOrderable, so a customer can never pick
-// more than they're actually allowed. "number" (the default) is a free-typed
-// number input, used for the backoffice on-behalf-of editor (staff may
-// deliberately exceed a customer's cap) and the read-only historical view.
-// This is the one place that distinction is drawn — never a second,
-// divergent quantity control.
+// The quantity is one typed number box everywhere, in steps of 0.1 (workbook
+// Task 35: a fraction of a pallet can be ordered). It replaced a dropdown on
+// the customer's own screen, which would have needed ten options per pallet.
+// What the dropdown did there — keep a customer from asking for more than
+// they may have — is now the row's `limit`: shown beside the box, the box
+// turned red when it is passed, and the send stopped until it is lowered
+// (OrderLinesEditor). A row without a `limit` has no ceiling to show.
 export function OrderProductList({
   families,
   editable,
-  quantityMode = "number",
   onChangePallets,
   onOpenComment,
 }: {
   families: OrderFamilyRow[];
   editable: boolean;
-  quantityMode?: "dropdown" | "number";
   onChangePallets?: (varietyId: string, value: string) => void;
   onOpenComment?: (varietyId: string) => void;
 }) {
@@ -164,7 +144,14 @@ export function OrderProductList({
             <div className="accordion-panel" data-open={isOpen}>
               <div>
                 <ul className="border-t border-border bg-surface-muted/60" inert={!isOpen}>
-                  {family.varieties.map((variety) => (
+                  {family.varieties.map((variety) => {
+                    const limit = variety.limit;
+                    // More than this customer may have on the line now: the
+                    // box and the limit beside it turn red, and the send
+                    // stops until it is lowered (OrderLinesEditor).
+                    const overLimit = limit !== undefined && Number(variety.pallets || 0) > limit;
+                    const limitId = `order-limit-${variety.varietyId}`;
+                    return (
                     <li
                       key={variety.varietyId}
                       className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/70 px-4 py-3 transition-colors duration-150 last:border-b-0 hover:bg-surface"
@@ -187,8 +174,19 @@ export function OrderProductList({
                           against the pick row's 388. At 448 this name still
                           gets 202px, which is what it already had on a 768px
                           tablet and reads fine — so the threshold is each
-                          row's own arithmetic, not a shared guess. */}
-                      <div className="w-full min-w-0 @md:w-auto @md:flex-1">
+                          row's own arithmetic, not a shared guess.
+
+                          A row that shows its limit ("מקסימום 2.6", 72px
+                          wide plus an 8px gap) waits for `@lg` (a 512px
+                          list) instead: 294 of controls leaves this name
+                          186px there, where `@md` would have left it 122. */}
+                      <div
+                        className={
+                          limit === undefined
+                            ? "w-full min-w-0 @md:w-auto @md:flex-1"
+                            : "w-full min-w-0 @lg:w-auto @lg:flex-1"
+                        }
+                      >
                         {/* A wrapping flex row, not an inline badge after the
                             name. Inline, a narrow row broke the badge's two
                             words across lines and turned the pill into a
@@ -231,64 +229,53 @@ export function OrderProductList({
                         )
                       )}
                       {/* Quantity + pack type together, matching the reference
-                          design's single pill-shaped control. On the
-                          customer's own order screen (quantityMode="dropdown")
-                          the quantity itself is the shared Select
-                          (ui/select.tsx), capped at this row's own remaining
-                          stock — see dropdownOptions above, with
-                          `showChevron={false}` and the leading chevron drawn
-                          here instead, so it sits centered against the pack-
-                          type label rather than off to the Select's own edge.
-                          Every other caller (backoffice on-behalf-of, the
-                          read-only historical view) keeps the free-typed
-                          number input — which does NOT draw that chevron: a
-                          plain number field with a select-style affordance on
-                          it reads as a dropdown it isn't, and backoffice staff
-                          need to see they can type any value, not just pick
-                          from a capped list. */}
-                      <div className="relative">
-                        {quantityMode === "dropdown" ? (
-                          <Select
-                            disabled={!editable}
-                            showChevron={false}
-                            aria-label={`כמות ${variety.packType ? PACK_TYPE_LABEL[variety.packType] : "פלטות"} — ${variety.varietyName}`}
-                            className="w-32 ps-7 pe-14 font-semibold"
-                            value={variety.pallets === "" ? "0" : variety.pallets}
-                            onChange={(next) => onChangePallets?.(variety.varietyId, next)}
-                            options={dropdownOptions(variety.maxOrderable ?? 0, variety.pallets).map(
-                              (n) => ({ value: String(n), label: String(n) }),
-                            )}
-                          />
-                        ) : (
+                          design's single pill-shaped control, and — on the
+                          customer's own screen — the most they can have on
+                          the line beside it, tied to the box for screen
+                          readers. The box itself takes one decimal place:
+                          limitToOneDecimal cuts anything finer as it is
+                          typed or pasted. */}
+                      <div className="flex items-center gap-2">
+                        <div className="relative">
                           <input
                             type="number"
                             min="0"
-                            step="1"
+                            step="0.1"
+                            inputMode="decimal"
+                            {...(limit === undefined ? {} : { max: limit })}
                             disabled={!editable}
                             aria-label={`כמות ${variety.packType ? PACK_TYPE_LABEL[variety.packType] : "פלטות"} — ${variety.varietyName}`}
-                            className={`${inputClassName} w-32 ps-3 pe-14 font-semibold`}
+                            aria-describedby={limit === undefined ? undefined : limitId}
+                            aria-invalid={overLimit || undefined}
+                            className={`${inputClassName} w-32 ps-3 pe-14 font-semibold ${
+                              overLimit ? "ring-danger focus:ring-danger" : ""
+                            }`}
                             value={variety.pallets}
-                            onKeyDown={blockDecimalKey}
                             onWheel={blockWheel}
                             onChange={(event) =>
-                              onChangePallets?.(variety.varietyId, stripDecimal(event.target.value))
+                              onChangePallets?.(variety.varietyId, limitToOneDecimal(event.target.value))
                             }
                           />
-                        )}
-                        {quantityMode === "dropdown" && (
-                          <Icon
-                            name="chevronDown"
-                            className="pointer-events-none absolute inset-y-0 start-2 my-auto h-3.5 w-3.5 text-ink-subtle"
-                          />
-                        )}
-                        {variety.packType && (
-                          <span className="pointer-events-none absolute inset-y-0 end-3 my-auto flex items-center text-xs font-medium text-ink-subtle">
-                            {PACK_TYPE_LABEL[variety.packType]}
+                          {variety.packType && (
+                            <span className="pointer-events-none absolute inset-y-0 end-3 my-auto flex items-center text-xs font-medium text-ink-subtle">
+                              {PACK_TYPE_LABEL[variety.packType]}
+                            </span>
+                          )}
+                        </div>
+                        {limit !== undefined && (
+                          <span
+                            id={limitId}
+                            // A fixed width, so the box sits in the same place
+                          // on every row whatever the number's length.
+                          className={`min-w-[4.5rem] shrink-0 text-xs font-medium ${overLimit ? "text-danger" : "text-ink-muted"}`}
+                          >
+                            מקסימום {limit}
                           </span>
                         )}
                       </div>
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               </div>
             </div>

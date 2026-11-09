@@ -1,3 +1,4 @@
+import { isPalletQuantity, PALLET_QUANTITY_MESSAGE, roundPallets } from "@ori/shared/pallets";
 import { z } from "zod";
 
 // One schema + `toRpcArgs` mapper per customer-ordering Postgres function
@@ -32,8 +33,14 @@ export function toOrderableCatalogRpcArgs(input: OrderableCatalogInput) {
 // blocked list is never pruned (nor changed, if sent) — migration 0072.
 export const orderLineInputSchema = z.object({
   productVarietyId: z.string().uuid(),
-  // Pallets are always whole units — never a fractional pallet.
-  palletsOrdered: z.number().int().nonnegative(),
+  // At most one decimal place — 0.4, not 0.14 (workbook Task 35; the
+  // database refuses the same, migration 0085). Rounded on the way out so
+  // the server compares 0.3 and not 0.30000000000000004 with its limits.
+  palletsOrdered: z
+    .number()
+    .nonnegative()
+    .refine(isPalletQuantity, PALLET_QUANTITY_MESSAGE)
+    .transform(roundPallets),
   comment: z.string().nullable().optional(),
 });
 export type OrderLineInput = z.infer<typeof orderLineInputSchema>;

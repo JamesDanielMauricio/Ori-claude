@@ -1,5 +1,6 @@
 import { toInputText } from "@/lib/number-field";
-import type { PalletCap, ProductFamily, ProductVariety } from "@/lib/queries/reference-data";
+import type { ProduceCategory } from "@/lib/produce-categories";
+import type { ProductFamily, ProductVariety } from "@/lib/queries/reference-data";
 
 // The Products screen's form state, constants and pure helpers — no React
 // state, no queries. Shared by the screen and its split-out parts.
@@ -23,7 +24,6 @@ export interface FormState {
   // form field is: an <input> can't hold `null`.
   numberOfOrdersPerCustomer: string;
   version: number | null;
-  customerPalletCaps: PalletCap[];
 }
 
 // Sentinel row id for a not-yet-created record: the draft row prepended to
@@ -108,7 +108,6 @@ export function blankForm(defaultFamilyId: string): FormState {
     isSeasonalAvailable: true,
     numberOfOrdersPerCustomer: "",
     version: null,
-    customerPalletCaps: [],
   };
 }
 
@@ -139,7 +138,8 @@ export function blankRow(familyId: string): ProductVariety {
 
 export interface FamilyFormState {
   name: string;
-  category: string;
+  // "" = no category (migration 0090: fruit, vegetable or both).
+  category: ProduceCategory | "";
   imageUrl: string;
 }
 
@@ -177,7 +177,7 @@ export function blankFamily(): ProductFamily {
 // numbers. Converting here also keeps both sides of `hasChanges` the same
 // shape — a number baseline against a typed string read as "changed" even
 // when the same value was typed back in.
-export function toFormState(row: ProductVariety, caps: PalletCap[]): FormState {
+export function toFormState(row: ProductVariety): FormState {
   return {
     familyId: row.family_id,
     name: row.name,
@@ -193,6 +193,5 @@ export function toFormState(row: ProductVariety, caps: PalletCap[]): FormState {
     numberOfOrdersPerCustomer:
       row.number_of_orders_per_customer == null ? "" : String(row.number_of_orders_per_customer),
     version: row.version,
-    customerPalletCaps: caps,
   };
 }

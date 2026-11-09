@@ -1,9 +1,9 @@
 import type { KeyboardEvent, WheelEvent } from "react";
 
-// Shared by every pallet/quantity number input in the app (grower picks,
-// customer orders, arrangement records, the arrangement board's allocation
-// cells) — none of them take fractional pallets, so none of them should
-// accept a decimal point at all.
+// For the grower's pick boxes, which take whole pallets only, and so should
+// not accept a decimal point at all. Orders and arrangements take one
+// decimal place since workbook Task 35 — their boxes use pallet-input.ts —
+// and picks stay whole until the client says otherwise (decision D18).
 //
 // `step="1"` on its own doesn't do this: a browser's number input still
 // lets someone type "8.5" while focused, and only flags it as :invalid on

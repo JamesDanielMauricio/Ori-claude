@@ -18,6 +18,11 @@ import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
 import { phoneForDisplay, phoneToSave } from "@/lib/phone-to-save";
+import {
+  PRODUCE_CATEGORIES,
+  PRODUCE_CATEGORY_LABEL,
+  type ProduceCategory,
+} from "@/lib/produce-categories";
 import { referenceDataQueries, type ProfileRow } from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 import { formatVarietyName } from "@/lib/variety-label";
@@ -39,6 +44,9 @@ interface FormState {
   companyId: string;
   phoneNumber: string;
   blockedProductVarietyIds: Set<string>;
+  // A customer user's category (migration 0090). No category and "both"
+  // both mean everything, so a user with none is shown — and saved — as both.
+  productCategory: ProduceCategory;
 }
 
 function toFormState(row: ProfileRow, blocked: string[]): FormState {
@@ -48,6 +56,7 @@ function toFormState(row: ProfileRow, blocked: string[]): FormState {
     companyId: row.company_id,
     phoneNumber: row.phone_number ?? "",
     blockedProductVarietyIds: new Set(blocked),
+    productCategory: row.product_category ?? "both",
   };
 }
 
@@ -121,6 +130,9 @@ export default function UsersPage() {
               role: form.role,
               company_id: form.companyId,
               phone_number: phoneForDisplay(form.phoneNumber),
+              // What the save sends: a customer's chosen category; anyone
+              // else's is left as it is.
+              product_category: form.role === "customer" ? form.productCategory : row.product_category,
             }
           : row,
       ),
@@ -153,6 +165,9 @@ export default function UsersPage() {
         role: form.role,
         companyId: form.companyId,
         blockedProductVarietyIds: [...form.blockedProductVarietyIds],
+        // Only a customer's category means anything (it filters their shop);
+        // for anyone else it is left out, and save_user keeps what is there.
+        productCategory: form.role === "customer" ? form.productCategory : undefined,
       });
       const { data, error } = await supabase.rpc("save_user", toSaveUserRpcArgs(input));
       if (error) throw error;
@@ -353,6 +368,33 @@ export default function UsersPage() {
             options={catalogOptions}
             selectedIds={form.blockedProductVarietyIds}
             onToggle={toggleBlocked}
+          />
+        );
+      },
+    },
+    {
+      // A customer user's category (migration 0090, Bubble's "default
+      // product category"): they see only that category's products and the
+      // "both" ones. Meaningless for anyone else, so shown only for customers.
+      key: "category",
+      label: "קטגוריה",
+      render: (row) =>
+        row.role === "customer" ? PRODUCE_CATEGORY_LABEL[row.product_category ?? "both"] : "—",
+      renderEdit: () => {
+        if (!form) return null;
+        if (form.role !== "customer") return "—";
+        return (
+          <Select
+            aria-label="קטגוריה"
+            className="w-32"
+            value={form.productCategory}
+            onChange={(next) =>
+              setForm((current) => current && { ...current, productCategory: next as ProduceCategory })
+            }
+            options={PRODUCE_CATEGORIES.map((category) => ({
+              value: category,
+              label: PRODUCE_CATEGORY_LABEL[category],
+            }))}
           />
         );
       },

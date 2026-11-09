@@ -210,11 +210,11 @@ describe("resolveProposal", () => {
     });
   });
 
-  it("cannot place a quantity that is not a whole number of pallets above zero", () => {
+  it("cannot place a quantity that is not above zero with at most one decimal place", () => {
     const result = resolve([
       line(GROWER_A, LYCHEE, CUSTOMER_1, 0),
       line(GROWER_A, LYCHEE, CUSTOMER_1, -2),
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 1.5),
+      line(GROWER_A, LYCHEE, CUSTOMER_1, 1.55),
     ]);
 
     expect(result).toEqual({
@@ -223,6 +223,26 @@ describe("resolveProposal", () => {
       unplaceable: 3,
       heldToOrder: 0,
     });
+  });
+
+  it("places a part of a pallet, to one decimal place (Task 35)", () => {
+    const { allocations, unplaceable } = resolve([line(GROWER_A, LYCHEE, CUSTOMER_1, 0.4)]);
+
+    expect(unplaceable).toBe(0);
+    expect(allocations).toEqual([
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 0.4 },
+    ]);
+  });
+
+  it("adds up tenths in the same cell without JavaScript's rounding noise", () => {
+    const { allocations } = resolve([
+      line(GROWER_A, LYCHEE, CUSTOMER_1, 0.1),
+      line(GROWER_A, LYCHEE, CUSTOMER_1, 0.2),
+    ]);
+
+    expect(allocations).toEqual([
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 0.3 },
+    ]);
   });
 
   it("adds up lines that land in the same cell", () => {
@@ -411,7 +431,7 @@ describe("a suggested line whose order has changed since", () => {
     expect(resolved.heldToOrder).toBe(0);
   });
 
-  it("is cut to whole pallets when what is left of the order is part of a pallet over", () => {
+  it("is cut to what is left of the order, to the tenth (Task 35)", () => {
     const resolved = resolveProposal({
       lines: [suggested(GROWER_A, LYCHEE, CUSTOMER_1, 3)],
       picks,
@@ -420,7 +440,7 @@ describe("a suggested line whose order has changed since", () => {
     });
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, forOrder: true },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2.5, forOrder: true },
     ]);
     expect(resolved.heldToOrder).toBe(1);
   });
@@ -1082,8 +1102,8 @@ describe("setProposalCell", () => {
     ]);
   });
 
-  it("leaves the proposal alone when the quantity is not a whole number of pallets", () => {
-    for (const quantity of [2.5, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+  it("leaves the proposal alone when the quantity has more than one decimal place, or is no quantity", () => {
+    for (const quantity of [2.55, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(setProposalCell(offered, lychees1, quantity, false)).toEqual(offered);
     }
   });

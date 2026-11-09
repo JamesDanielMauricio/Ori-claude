@@ -1,4 +1,5 @@
 import { todayIsoDate } from "@ori/shared/dates";
+import { roundPallets } from "@ori/shared/pallets";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
@@ -83,8 +84,11 @@ export default function ArrangedOrderHistoryPage() {
 
   const linesQuery = useQuery(orderHistoryQueries.lines(selectedOrderId));
 
+  // Rounded to the database's two decimals before it is compared with the
+  // order: in JavaScript 0.7 + 0.3 need not come out as exactly 1, and the line
+  // would read as arranged differently from what was ordered (Task 35).
   function arrangedTotal(line: HistoryOrderLineRow): number {
-    return line.arrangement_records.reduce((sum, record) => sum + record.quantity_pallets, 0);
+    return roundPallets(line.arrangement_records.reduce((sum, record) => sum + record.quantity_pallets, 0));
   }
 
   const listItems = useMemo(

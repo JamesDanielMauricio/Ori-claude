@@ -122,7 +122,8 @@ export type Database = {
         Row: {
           id: string;
           name: string;
-          category: string | null;
+          // Fruit, vegetable or both (migration 0090).
+          category: Database["public"]["Enums"]["produce_category"] | null;
           // The family photo (migration 0036). Null until a real photo is set.
           image_url: string | null;
           created_at: string;
@@ -131,7 +132,7 @@ export type Database = {
         Insert: {
           id?: string;
           name: string;
-          category?: string | null;
+          category?: Database["public"]["Enums"]["produce_category"] | null;
           image_url?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -139,7 +140,7 @@ export type Database = {
         Update: {
           id?: string;
           name?: string;
-          category?: string | null;
+          category?: Database["public"]["Enums"]["produce_category"] | null;
           image_url?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -244,45 +245,6 @@ export type Database = {
           },
         ];
       };
-      product_customer_caps: {
-        Row: {
-          product_variety_id: string;
-          customer_company_id: string;
-          pallet_cap: number;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: {
-          product_variety_id: string;
-          customer_company_id: string;
-          pallet_cap: number;
-          created_at?: string;
-          updated_at?: string;
-        };
-        Update: {
-          product_variety_id?: string;
-          customer_company_id?: string;
-          pallet_cap?: number;
-          created_at?: string;
-          updated_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "product_customer_caps_customer_company_id_fkey";
-            columns: ["customer_company_id"];
-            isOneToOne: false;
-            referencedRelation: "companies";
-            referencedColumns: ["id"];
-          },
-          {
-            foreignKeyName: "product_customer_caps_product_variety_id_fkey";
-            columns: ["product_variety_id"];
-            isOneToOne: false;
-            referencedRelation: "product_varieties";
-            referencedColumns: ["id"];
-          },
-        ];
-      };
       // The distributor's ranking score per customer (migration 0067).
       // Backoffice-only: it has no "select own" policy, so a customer's own
       // session reads no rows from it. Hand-added alongside that migration —
@@ -356,6 +318,8 @@ export type Database = {
           display_name: string;
           must_change_password: boolean;
           phone_number: string | null;
+          // A customer user's category (migration 0090). Null = everything.
+          product_category: Database["public"]["Enums"]["produce_category"] | null;
           role: Database["public"]["Enums"]["user_role"];
           updated_at: string;
           user_id: string;
@@ -366,6 +330,7 @@ export type Database = {
           display_name: string;
           must_change_password?: boolean;
           phone_number?: string | null;
+          product_category?: Database["public"]["Enums"]["produce_category"] | null;
           role: Database["public"]["Enums"]["user_role"];
           updated_at?: string;
           user_id: string;
@@ -376,6 +341,7 @@ export type Database = {
           display_name?: string;
           must_change_password?: boolean;
           phone_number?: string | null;
+          product_category?: Database["public"]["Enums"]["produce_category"] | null;
           role?: Database["public"]["Enums"]["user_role"];
           updated_at?: string;
           user_id?: string;
@@ -1247,7 +1213,9 @@ export type Database = {
           p_is_seasonal_available: boolean;
           p_number_of_orders_per_customer: number | null;
           p_expected_version: number | null;
-          p_customer_pallet_caps: Json;
+          // Ignored since migration 0087 (the per-customer cap was removed);
+          // kept so a client that still sends it keeps working.
+          p_customer_pallet_caps?: Json;
         };
         Returns: Database["public"]["Tables"]["product_varieties"]["Row"];
       };
@@ -1258,6 +1226,8 @@ export type Database = {
           p_role: Database["public"]["Enums"]["user_role"];
           p_company_id: string;
           p_blocked_product_variety_ids: string[];
+          // Left out = keep the user's category (migration 0090).
+          p_product_category?: Database["public"]["Enums"]["produce_category"];
         };
         Returns: Database["public"]["Tables"]["profiles"]["Row"];
       };
@@ -1403,6 +1373,33 @@ export type Database = {
       // (migration 0056) — how a customer's closed-order screen reads them,
       // since customers can no longer read product_varieties directly.
       // Returns rows only to the order's own customer and to backoffice.
+      // A pick's lines with each product's name, size, family and photo — no
+      // prices (migration 0086): growers read their pick lines through this
+      // once product_varieties is closed to them (0091).
+      get_pick_lines: {
+        Args: {
+          p_daily_pick_id: string;
+        };
+        Returns: {
+          id: string;
+          pallets_picked: number;
+          leftover_pallets: number;
+          comment: string | null;
+          product_variety_id: string;
+          variety_name: string;
+          variety_sizes: string | null;
+          family_id: string;
+          family_name: string;
+          family_image_url: string | null;
+        }[];
+      };
+      // True when the signed-in user may use the app — staff always, anyone
+      // else while their company is not inactive (migration 0088); null for an
+      // account with no profile.
+      my_account_is_active: {
+        Args: Record<PropertyKey, never>;
+        Returns: boolean | null;
+      };
       get_customer_order_lines: {
         Args: {
           p_daily_order_id: string;
@@ -1596,6 +1593,7 @@ export type Database = {
       company_type: "backoffice" | "grower" | "customer" | "transporter";
       company_status: "active" | "inactive";
       pack_type: "pallets" | "crates";
+      produce_category: "fruit" | "vegetable" | "both";
       trading_day_phase: "initiated" | "shop_open" | "shop_closed" | "closed";
       daily_shop_status: "open" | "closed";
       daily_arrangement_status: "open" | "closed";

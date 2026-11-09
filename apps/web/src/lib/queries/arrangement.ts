@@ -29,8 +29,6 @@ export const arrangementKeys = {
   companies: ["arrangement", "companies"] as const,
   priceVariety: (varietyId: string | null) =>
     ["arrangement", "product-variety", varietyId] as const,
-  priceCaps: (varietyId: string | null) =>
-    ["arrangement", "product-customer-caps", varietyId] as const,
 };
 
 export const newArrangementKeys = {
@@ -234,26 +232,6 @@ export const arrangementQueries = {
           .single();
         if (error) throw error;
         return data;
-      },
-    });
-  },
-
-  // That variety's per-customer pallet caps — save_product rewrites them
-  // with every save, so the dialog has to send them back unchanged.
-  priceCaps(varietyId: string | null) {
-    return queryOptions({
-      queryKey: arrangementKeys.priceCaps(varietyId),
-      enabled: !!varietyId,
-      queryFn: async () => {
-        const { data, error } = await createClient()
-          .from("product_customer_caps")
-          .select("customer_company_id, pallet_cap")
-          .eq("product_variety_id", varietyId!);
-        if (error) throw error;
-        return data.map((row) => ({
-          customerCompanyId: row.customer_company_id,
-          palletCap: row.pallet_cap,
-        }));
       },
     });
   },

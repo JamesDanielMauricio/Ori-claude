@@ -227,9 +227,7 @@ export function buildVarietyColumns({
       // The customer order screen's dropdown (order-product-list.tsx) reads
       // this as its own ceiling — never applied to a backoffice
       // on-behalf-of edit, where staff may deliberately exceed it. Empty
-      // means uncapped. See product-variety.ts's schema comment for how it
-      // differs from the per-customer caps column (one default for every
-      // customer vs. an override for one).
+      // means uncapped.
       render: (row) => orDash(row.number_of_orders_per_customer),
       renderEdit: () => (
         <input
@@ -251,9 +249,8 @@ export function buildVarietyColumns({
     },
     // No "תקרות ללקוח" (per-customer caps) column: nothing ever enforced
     // them, and the one per-customer limit is number_of_orders_per_customer
-    // above (James, 2026-11-05). Caps already stored are still loaded and
-    // sent back unchanged on save (see FormState.customerPalletCaps), because
-    // save_product replaces a product's caps with whatever it is sent.
+    // above (James, 2026-11-05). The caps themselves were removed on
+    // 2026-11-09 (migrations 0087, 0091).
     {
       key: "seasonal",
       label: "בעונה",

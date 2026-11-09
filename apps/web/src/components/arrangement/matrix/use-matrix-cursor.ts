@@ -153,12 +153,6 @@ export function useMatrixCursor({
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>, row: number, col: number) {
     const input = event.currentTarget;
 
-    // Whole pallets only — a decimal point or comma never reaches the field.
-    if (event.key === "." || event.key === ",") {
-      event.preventDefault();
-      return;
-    }
-
     if (event.key === "Escape") {
       event.preventDefault();
       setDraft(null);

@@ -26,7 +26,6 @@ import {
 import { createTestProductVariety, deleteTestProductVariety } from "@ori/domain/reference-data/testing";
 import { expect, test } from "@playwright/test";
 
-import { chooseOption } from "./choose-option";
 
 // Drives the customer's browse/order/history screens end to end. The
 // trading day, shop, and grower supply are all bootstrapped headlessly via
@@ -140,23 +139,24 @@ test.describe("Customer — order + history", () => {
     const familyToggle = familyItem.locator("button[aria-expanded]").first();
     await expect(familyToggle).toBeVisible();
 
-    // Rows render collapsed (image + name + chevron); the quantity dropdown
-    // and comment control only exist once a row is expanded. The customer's
-    // own order screen renders quantity as a dropdown capped to remaining
-    // stock (order-product-list.tsx's quantityMode="dropdown"), not a typed
-    // number input.
+    // Rows render collapsed (image + name + chevron); the quantity box and
+    // comment control only exist once a row is expanded. The quantity is a
+    // typed number in steps of 0.1 (workbook Task 35), with the most the
+    // customer can order shown beside it.
     await familyToggle.click();
-    // One dropdown = one variety row under this family. That IS the
-    // assertion the row count used to make: the depleted sibling is absent.
-    const quantitySelect = familyItem.getByRole("combobox");
-    await expect(quantitySelect).toHaveCount(1);
+    // One box = one variety row under this family. That IS the assertion the
+    // row count used to make: the depleted sibling is absent.
+    const quantityBox = familyItem.getByRole("spinbutton");
+    await expect(quantityBox).toHaveCount(1);
+    await expect(familyItem.getByText(/^מקסימום \d/)).toBeVisible();
 
     // No "ערוך" gate: the shop is open, so the order is editable, full stop
-    // (routes/customer/order.tsx's isOrderEditable). The dropdown is live
-    // immediately and "שמור" is already on screen.
+    // (routes/customer/order.tsx's isOrderEditable). The box is live
+    // immediately and "שמור" is already on screen. Part of a pallet, as the
+    // client asked for.
     await expect(page.getByRole("button", { name: "ערוך", exact: true })).toHaveCount(0);
-    await expect(quantitySelect).toBeEnabled();
-    await chooseOption(quantitySelect, "4");
+    await expect(quantityBox).toBeEnabled();
+    await quantityBox.fill("2.5");
 
     // Scoped to this family: every other family in the catalog renders its
     // own comment buttons too (the accordion panels stay mounted while
@@ -167,20 +167,20 @@ test.describe("Customer — order + history", () => {
 
     await page.getByRole("button", { name: "שמור" }).click();
     await expect(page.getByText("אישור הזמנה")).toBeVisible();
-    await expect(page.getByText("4 פלטות")).toBeVisible();
+    await expect(page.getByText("2.5 פלטות")).toBeVisible();
 
     await page.getByRole("button", { name: "שלח הזמנה" }).click();
     await expect(page.getByText("ההזמנה נשלחה.")).toBeVisible();
 
     // Optimistic UI update: no reload needed to see the submitted state.
-    await expect(quantitySelect).toHaveText("4");
+    await expect(quantityBox).toHaveValue("2.5");
 
     // A fresh reload confirms it actually persisted server-side, not just
     // in local draft state. The row collapses again on remount, so expand
     // it before reading the value back.
     await page.reload();
     await familyToggle.click();
-    await expect(quantitySelect).toHaveText("4");
+    await expect(quantityBox).toHaveValue("2.5");
 
     await page.goto("/customer/history");
     const historyRow = page.getByRole("button", { name: "נשלח" });
@@ -192,7 +192,7 @@ test.describe("Customer — order + history", () => {
     // with what was just submitted — rather than a read-only view.
     await expect(page).toHaveURL(/\/customer\/order\?orderId=/);
     await familyToggle.click();
-    await expect(familyItem.getByRole("combobox")).toHaveText("4");
+    await expect(familyItem.getByRole("spinbutton")).toHaveValue("2.5");
     // "הערה: <text>" is the READ-ONLY rendering. This view is the live
     // editable one (the comment two lines up says so — the day is still
     // open), where a comment shows as the "✎ הערה" button that opens it, so

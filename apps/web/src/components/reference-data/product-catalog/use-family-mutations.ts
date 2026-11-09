@@ -54,7 +54,7 @@ export function useFamilyMutations({
           ? {
               ...family,
               name: familyForm.name.trim(),
-              category: familyForm.category.trim() || null,
+              category: familyForm.category || null,
               image_url: familyForm.imageUrl.trim() || null,
             }
           : family,
@@ -101,7 +101,7 @@ export function useFamilyMutations({
 
       const values = {
         name: familyForm.name.trim(),
-        category: familyForm.category.trim() || null,
+        category: familyForm.category || null,
         image_url: imageUrl,
       };
       // Create and update are the same three columns, so they're the same

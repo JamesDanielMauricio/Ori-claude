@@ -27,7 +27,14 @@ import {
   weekdayDateLabel,
   type CatalogRow,
 } from "./catalog-grouping";
-import { mergeServerRows, toDraft, toSubmittedLines, type DraftLine } from "./order-draft";
+import {
+  linesOverLimit,
+  mergeServerRows,
+  orderLimit,
+  toDraft,
+  toSubmittedLines,
+  type DraftLine,
+} from "./order-draft";
 import { OrderProductList, type OrderFamilyRow } from "./order-product-list";
 import { SubmissionConfirmationDialog } from "./submission-confirmation-dialog";
 
@@ -138,13 +145,13 @@ export function OrderLinesEditor({
   // has to be reachable without scrolling past everything they haven't
   // touched — see that function's own comment for why the split is keyed
   // off the server row, not `draft`.
-  // A dropdown capped to remaining stock only makes sense as a promise to
-  // the person it constrains — the customer ordering for themselves.
-  // Backoffice editing a customer's order on their behalf (customerCompanyId
-  // supplied) keeps the free-typed number input: staff may deliberately
-  // exceed the customer's own cap, same as submit_order never enforces it
-  // on that path either (see 0042_customer-order-cap.sql).
-  const quantityMode = customerCompanyId ? "number" : "dropdown";
+  // The most a customer can have on each line (order-draft.ts's orderLimit)
+  // is shown, and held to, only on the customer's own screen — it is a
+  // promise to the person it constrains. Backoffice editing a customer's
+  // order on their behalf (customerCompanyId supplied) may deliberately go
+  // past the customer's own cap, same as submit_order never enforces it on
+  // that path either (see 0042_customer-order-cap.sql).
+  const showsLimit = !customerCompanyId;
 
   const families: OrderFamilyRow[] = useMemo(
     () =>
@@ -160,10 +167,10 @@ export function OrderLinesEditor({
           pallets: draft[row.variety_id]?.pallets ?? "",
           comment: draft[row.variety_id]?.comment ?? "",
           outOfStock: !row.is_orderable,
-          maxOrderable: row.max_orderable_for_customer,
+          ...(showsLimit ? { limit: orderLimit(row) } : {}),
         })),
       })),
-    [catalogQuery.data, draft],
+    [catalogQuery.data, draft, showsLimit],
   );
 
   // How many varieties this draft actually asks for. Shown in the pinned
@@ -299,6 +306,22 @@ export function OrderLinesEditor({
     editedIds.current = new Set();
   }
 
+  // "שמור" on the customer's own screen first checks every line against the
+  // limit shown beside it. A line over it would have the server refuse the
+  // whole send, losing every other change in it; the customer is told which
+  // lines to lower instead, and the confirmation does not open.
+  function handleSave() {
+    if (showsLimit) {
+      const over = linesOverLimit(catalogQuery.data ?? [], draft);
+      if (over.length > 0) {
+        const names = over.map((row) => formatVarietyName(row.variety_name, row.sizes)).join(", ");
+        showToast(`הכמות גדולה מהמקסימום שאפשר להזמין כרגע: ${names}.`, "error");
+        return;
+      }
+    }
+    setConfirmOpen(true);
+  }
+
   function handleConfirmSubmit() {
     setSubmitting(true);
     submitMutation.mutate(undefined, { onSettled: () => setSubmitting(false) });
@@ -348,7 +371,6 @@ export function OrderLinesEditor({
         <OrderProductList
           families={families}
           editable={editing}
-          quantityMode={quantityMode}
           onChangePallets={(varietyId, value) => updateLine(varietyId, { pallets: value })}
           onOpenComment={(varietyId) => setCommentPopupVarietyId(varietyId)}
         />
@@ -370,7 +392,7 @@ export function OrderLinesEditor({
           // top.
           sticky
           onDiscard={handleDiscard}
-          onSave={() => setConfirmOpen(true)}
+          onSave={handleSave}
           // `ms-auto` rather than a `justify-between` on the bar itself:
           // the buttons are ActionBar's own direct children, so spacing the
           // whole row would push them apart from each other too.

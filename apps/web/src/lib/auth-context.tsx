@@ -20,6 +20,23 @@ export interface AuthProfile {
   companyId: string;
   companyName: string | null;
   mustChangePassword: boolean;
+  // False when the user's company is inactive (migration 0088): the database
+  // then refuses them everything, and the route guard signs them out with
+  // INACTIVE_ACCOUNT_MESSAGE rather than show screens that cannot load.
+  accountActive: boolean;
+}
+
+// What a user of an inactive company is told when they are signed out.
+export const INACTIVE_ACCOUNT_MESSAGE =
+  "החברה שלך מסומנת כלא פעילה, ולכן אין גישה למערכת. לפרטים פנו למשרד.";
+
+// Whether the signed-in user's company is active (migration 0088). Only a
+// definite "no" counts: a failed read, or a database the migration has not
+// reached yet, must not lock anyone out — the database refuses an inactive
+// company's users by itself either way.
+export async function readAccountActive(): Promise<boolean> {
+  const { data } = await retryOnClockSkew(() => createClient().rpc("my_account_is_active"));
+  return data !== false;
 }
 
 export interface AuthState {
@@ -127,13 +144,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // otherwise ignored here, so a refusal left `data` empty and the guard
     // sent a signed-in user back to an empty /login with no message — at
     // sign-in, or in the middle of a session after a refresh.
-    const { data } = await retryOnClockSkew(() =>
-      createClient()
-        .from("profiles")
-        .select("role, display_name, company_id, must_change_password, companies!company_id(name)")
-        .eq("user_id", user.id)
-        .single(),
-    );
+    //
+    // Read beside it, not after it, so it costs no extra wait: whether the
+    // user's company is still active (readAccountActive).
+    const [{ data }, accountActive] = await Promise.all([
+      retryOnClockSkew(() =>
+        createClient()
+          .from("profiles")
+          .select(
+            "role, display_name, company_id, must_change_password, companies!company_id(name)",
+          )
+          .eq("user_id", user.id)
+          .single(),
+      ),
+      readAccountActive(),
+    ]);
 
     // A newer auth event has superseded this read — drop it rather than
     // overwriting whatever that newer event already decided.
@@ -151,6 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             companyId: data.company_id,
             companyName: data.companies?.name ?? null,
             mustChangePassword: data.must_change_password,
+            accountActive,
           }
         : null,
       loading: false,

@@ -596,6 +596,55 @@
       "when": 1791406800000,
       "tag": "0084_bubble-import-lock",
       "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1791493200000,
+      "tag": "0085_pallets-in-tenths-on-orders-and-arrangements",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1791579600000,
+      "tag": "0086_pick-lines-without-prices",
+      "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1791666000000,
+      "tag": "0087_remove-per-customer-pallet-caps",
+      "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1791752400000,
+      "tag": "0088_inactive-companies-lose-access-messages-and-todays-pick",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1791838800000,
+      "tag": "0089_closed-pick-blocks-arranging",
+      "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1791925200000,
+      "tag": "0090_customer-product-categories",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1792011600000,
+      "tag": "0091_after-web-deploy-close-prices-to-growers-drop-caps",
+      "breakpoints": true
     }
   ]
 }

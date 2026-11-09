@@ -9,6 +9,12 @@ import {
 import { StatusPill } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
 import { ProductThumbnail } from "@/components/ui/product-thumbnail";
+import { Select } from "@/components/ui/select";
+import {
+  PRODUCE_CATEGORIES,
+  PRODUCE_CATEGORY_LABEL,
+  type ProduceCategory,
+} from "@/lib/produce-categories";
 import type { ProductFamily } from "@/lib/queries/reference-data";
 
 import {
@@ -287,14 +293,23 @@ export function buildFamilyHeader(
               setFamilyForm((current) => ({ ...current, name: event.target.value }))
             }
           />
-          <input
+          {/* One of Bubble's three categories, not free text (migration
+              0090): a customer user set to fruit or vegetable sees only the
+              families of that category and the "both" ones. */}
+          <Select
             aria-label="קטגוריית המשפחה"
-            placeholder="קטגוריה"
-            className={`${inputClassName} w-32`}
+            className="w-32"
             value={familyForm.category}
-            onChange={(event) =>
-              setFamilyForm((current) => ({ ...current, category: event.target.value }))
+            onChange={(next) =>
+              setFamilyForm((current) => ({ ...current, category: next as ProduceCategory | "" }))
             }
+            options={[
+              { value: "", label: "ללא קטגוריה" },
+              ...PRODUCE_CATEGORIES.map((category) => ({
+                value: category,
+                label: PRODUCE_CATEGORY_LABEL[category],
+              })),
+            ]}
           />
           {/* File picker for the family's photo, opened by clicking the
               thumbnail itself (renderPhotoButton, inside `toggle` above) —
@@ -349,7 +364,9 @@ export function buildFamilyHeader(
     ),
     cells: {
       name: toggle,
-      family: family.category ? <StatusPill tone="neutral">{family.category}</StatusPill> : null,
+      family: family.category ? (
+        <StatusPill tone="neutral">{PRODUCE_CATEGORY_LABEL[family.category]}</StatusPill>
+      ) : null,
       sizes: (
         // ink-muted, not ink-subtle: this sits on the family row's tinted
         // band, where ink-subtle measures under 4.5:1 (4.1:1 light, 4.0:1

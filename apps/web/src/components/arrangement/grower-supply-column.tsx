@@ -1,3 +1,4 @@
+import { roundPallets } from "@ori/shared/pallets";
 import { useMemo } from "react";
 
 import { Icon } from "@/components/ui/icon";
@@ -161,7 +162,7 @@ function GrowerRow({
   const time = formatPickupTime(grower.pickupTime);
   // Free stock is picked + leftover minus allocated — carried-forward
   // leftover counts as real supply the same as a fresh pick (see board-data.ts).
-  const free = grower.picked + grower.leftover - grower.allocated;
+  const free = roundPallets(grower.picked + grower.leftover - grower.allocated);
   const holdsSelection = selection?.growerId === grower.growerId;
   // Only the lines with supply are listed (see hasSupply): every in-season
   // product has a blank line from the moment the day starts, and a card of

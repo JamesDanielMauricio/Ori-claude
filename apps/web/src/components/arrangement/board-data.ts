@@ -11,6 +11,7 @@
 // — which is what a distributor is trusting when they decide whether a
 // customer's order is covered — can be read and tested on its own.
 import type { Json } from "@ori/db/supabase-types";
+import { roundPallets } from "@ori/shared/pallets";
 
 import { formatVarietyName } from "@/lib/variety-label";
 
@@ -343,11 +344,11 @@ export function buildBoard({
 
     allocatedByPickLine.set(
       record.daily_pick_product_id,
-      (allocatedByPickLine.get(record.daily_pick_product_id) ?? 0) + quantity,
+      roundPallets((allocatedByPickLine.get(record.daily_pick_product_id) ?? 0) + quantity),
     );
     allocatedByOrderLine.set(
       record.daily_order_product_id,
-      (allocatedByOrderLine.get(record.daily_order_product_id) ?? 0) + quantity,
+      roundPallets((allocatedByOrderLine.get(record.daily_order_product_id) ?? 0) + quantity),
     );
 
     // A record whose pick line didn't come back still counts against the
@@ -358,7 +359,7 @@ export function buildBoard({
 
     allocatedByVariety.set(
       pickLine.product_variety_id,
-      (allocatedByVariety.get(pickLine.product_variety_id) ?? 0) + quantity,
+      roundPallets((allocatedByVariety.get(pickLine.product_variety_id) ?? 0) + quantity),
     );
 
     const growerId = growerIdByPickId.get(pickLine.daily_pick_id);
@@ -394,13 +395,13 @@ export function buildBoard({
   for (const line of pickLines) {
     const entry = touch(line.product_varieties);
     if (entry) {
-      entry.picked += num(line.pallets_picked);
-      entry.leftover += num(line.leftover_pallets);
+      entry.picked = roundPallets(entry.picked + num(line.pallets_picked));
+      entry.leftover = roundPallets(entry.leftover + num(line.leftover_pallets));
     }
   }
   for (const line of orderLines) {
     const entry = touch(line.product_varieties);
-    if (entry) entry.ordered += num(line.pallets_ordered);
+    if (entry) entry.ordered = roundPallets(entry.ordered + num(line.pallets_ordered));
   }
 
   const products: BoardProduct[] = [...productAcc.values()]
@@ -416,8 +417,8 @@ export function buildBoard({
         leftover,
         ordered,
         allocated,
-        remaining: picked + leftover - allocated,
-        outOfStock: ordered > picked + leftover,
+        remaining: roundPallets(picked + leftover - allocated),
+        outOfStock: ordered > roundPallets(picked + leftover),
       };
     })
     // Family first, then variety — so the picker reads as a catalog rather
@@ -443,9 +444,9 @@ export function buildBoard({
         const linePicked = num(line.pallets_picked);
         const lineLeftover = num(line.leftover_pallets);
         const lineAllocated = allocatedByPickLine.get(line.id) ?? 0;
-        picked += linePicked;
-        leftover += lineLeftover;
-        allocated += lineAllocated;
+        picked = roundPallets(picked + linePicked);
+        leftover = roundPallets(leftover + lineLeftover);
+        allocated = roundPallets(allocated + lineAllocated);
 
         let group = families.get(variety.family_id);
         if (!group) {
@@ -464,7 +465,7 @@ export function buildBoard({
           picked: linePicked,
           leftover: lineLeftover,
           allocated: lineAllocated,
-          remaining: linePicked + lineLeftover - lineAllocated,
+          remaining: roundPallets(linePicked + lineLeftover - lineAllocated),
           comment: line.comment,
         });
       }
@@ -530,14 +531,14 @@ export function buildBoard({
         if (!variety) continue;
         const lineOrdered = num(line.pallets_ordered);
         const lineAllocated = allocatedByOrderLine.get(line.id) ?? 0;
-        ordered += lineOrdered;
+        ordered = roundPallets(ordered + lineOrdered);
         // Capped at what this line ordered — a promoted line is created with
         // ordered=0 (see the CustomerDemandBoard comment on `+`), so pallets
         // arranged onto surplus a customer never asked for must not count as
         // progress on what they did. Uncapped, this total (and the "חסר"
         // outstanding pill derived from it) would read as more fulfilled than
         // the customer's actual order is.
-        allocated += Math.min(lineAllocated, lineOrdered);
+        allocated = roundPallets(allocated + Math.min(lineAllocated, lineOrdered));
         // Absent from the previous submission reads as 0 pallets — the same
         // "not included means not ordered" rule submit_order itself applies
         // when pruning — rather than as "no history," which is reserved for
@@ -556,7 +557,7 @@ export function buildBoard({
               ? previousLineOrdered
               : null,
           allocated: lineAllocated,
-          outstanding: lineOrdered - lineAllocated,
+          outstanding: roundPallets(lineOrdered - lineAllocated),
           comment: line.comment,
           allocations: (recordsByOrderLine.get(line.id) ?? []).sort((a, b) =>
             a.growerName.localeCompare(b.growerName, "he"),

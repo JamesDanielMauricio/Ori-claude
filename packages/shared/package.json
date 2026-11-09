@@ -10,6 +10,7 @@
     "./roles": "./src/roles.ts",
     "./dates": "./src/dates.ts",
     "./phone": "./src/phone.ts",
+    "./pallets": "./src/pallets.ts",
     "./test-targets": "./src/test-targets.ts"
   },
   "scripts": {

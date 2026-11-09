@@ -1061,7 +1061,7 @@ describe("proposeArrangement — rules pinned after review", () => {
     expect(given(lines)).toEqual({ "לא מדורג": 1 });
   });
 
-  it("deals whole pallets only, out of a lot with half a pallet over", () => {
+  it("deals the half pallet a lot has over too, to the next in line (Task 35)", () => {
     const lines = propose(
       oneLotDay(1.5, [
         ["א", 1],
@@ -1069,7 +1069,9 @@ describe("proposeArrangement — rules pinned after review", () => {
       ]),
     );
 
-    expect(lines.reduce((sum, line) => sum + line.quantity, 0)).toBe(1);
+    // Equal ranks, equal times: the lower id first. A pallet for א, and the
+    // half that is left for ב.
+    expect(given(lines)).toEqual({ א: 1, ב: 0.5 });
   });
 
   it("counts a customer as new for fewer than 30 days, and not when the day they joined is unknown", () => {
@@ -1405,9 +1407,9 @@ describe("proposeArrangement — saved cells and order lines, counted per custom
     expect(given(lines)).toEqual({ יחיד: 1 });
   });
 
-  it("deals whole pallets when an order or a saved cell is a fraction", () => {
-    // 2.5 ordered: two whole pallets.
-    expect(given(propose(oneLotDay(10, [["א", 2.5]])))).toEqual({ א: 2 });
+  it("deals what is owed to the tenth when an order or a saved cell is a fraction (Task 35)", () => {
+    // 2.5 ordered: two and a half pallets.
+    expect(given(propose(oneLotDay(10, [["א", 2.5]])))).toEqual({ א: 2.5 });
 
     // 3.5 ordered with half a pallet already saved: three more.
     const today: DayToPropose = {
@@ -1439,8 +1441,9 @@ describe("proposeArrangement — the stock, the ranking, and a customer shut out
     expect(lines).toEqual([{ growerId: "מלא", varietyId: PRODUCT, customerId: "א", quantity: 3 }]);
   });
 
-  it("deals only the whole pallets the lots hold, to the best ranked, when each has half a pallet over", () => {
-    // 1.5 + 1.5 is three pallets on paper and two whole ones.
+  it("uses the half pallet each lot has over (Task 35)", () => {
+    // 1.5 + 1.5 is three pallets: one each for three orders of one. One of
+    // them is put together from the two halves.
     const lines = propose(
       {
         date: "2026-10-20",
@@ -1459,7 +1462,13 @@ describe("proposeArrangement — the stock, the ranking, and a customer shut out
       { scores: { א: 2.0, ב: 3.0, ג: 4.0 } },
     );
 
-    expect(given(lines)).toEqual({ ב: 1, ג: 1 });
+    expect(given(lines)).toEqual({ א: 1, ב: 1, ג: 1 });
+    const offLot = (growerId: string) =>
+      lines
+        .filter((line) => line.growerId === growerId)
+        .reduce((sum, line) => sum + line.quantity, 0);
+    expect(offLot("A")).toBe(1.5);
+    expect(offLot("B")).toBe(1.5);
   });
 
   it("does not rank a customer with no score above one scored 1", () => {
@@ -1535,5 +1544,80 @@ describe("proposeArrangement — the stock, the ranking, and a customer shut out
     };
 
     expect(given(propose(today, { scores: { X: 1.0, Y: 4.0, Z: 3.0 } }))).toEqual({ Y: 1, Z: 1 });
+  });
+});
+
+// Workbook Task 35: orders and arrangements may be a part of a pallet, to one
+// decimal place. The engine counts in tenths, and keeps the owner's rounds.
+describe("proposeArrangement — tenths of a pallet", () => {
+  const onGrid = (quantity: number) => Math.abs(quantity * 10 - Math.round(quantity * 10)) < 1e-9;
+
+  it("gives every part-pallet order exactly what was ordered when there is enough", () => {
+    expect(
+      given(
+        propose(
+          oneLotDay(5, [
+            ["א", 0.4],
+            ["ב", 2.5],
+          ]),
+        ),
+      ),
+    ).toEqual({ א: 0.4, ב: 2.5 });
+  });
+
+  it("still deals one pallet each before anyone gets a second", () => {
+    // Two pallets, two orders of one and a half: a pallet each, and nobody
+    // the half beyond it.
+    expect(
+      given(
+        propose(
+          oneLotDay(2, [
+            ["א", 1.5],
+            ["ב", 1.5],
+          ]),
+        ),
+      ),
+    ).toEqual({ א: 1, ב: 1 });
+  });
+
+  it("gives a part-pallet order its part in the first round", () => {
+    // 1.4 pallets: a pallet for א and, in the same round, the 0.4 ב ordered.
+    expect(
+      given(
+        propose(
+          oneLotDay(1.4, [
+            ["א", 2],
+            ["ב", 0.4],
+          ]),
+        ),
+      ),
+    ).toEqual({ א: 1, ב: 0.4 });
+  });
+
+  it("never offers more than a lot holds or than was ordered, each cut down to a tenth", () => {
+    expect(given(propose(oneLotDay(2.35, [["א", 3]])))).toEqual({ א: 2.3 });
+    expect(given(propose(oneLotDay(5, [["א", 0.45]])))).toEqual({ א: 0.4 });
+  });
+
+  it("proposes only quantities with at most one decimal place, and deals all the stock", () => {
+    const lines = propose({
+      date: "2026-10-20",
+      lots: [
+        { growerId: "A", varietyId: PRODUCT, available: 1.7 },
+        { growerId: "B", varietyId: PRODUCT, available: 2.3 },
+        { growerId: "C", varietyId: PRODUCT, available: 0.6 },
+      ],
+      orders: [
+        { customerId: "א", varietyId: PRODUCT, quantity: 1.3, orderedAt: "2026-10-20T05:00:00Z" },
+        { customerId: "ב", varietyId: PRODUCT, quantity: 2.2, orderedAt: "2026-10-20T05:01:00Z" },
+        { customerId: "ג", varietyId: PRODUCT, quantity: 1.9, orderedAt: "2026-10-20T05:02:00Z" },
+      ],
+      arranged: [{ growerId: "C", varietyId: PRODUCT, customerId: "ב", quantity: 0.1 }],
+    });
+
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) expect(onGrid(line.quantity), String(line.quantity)).toBe(true);
+    // 4.6 in stock against 5.3 still owed: all of it is dealt, once.
+    expect(Math.round(lines.reduce((sum, line) => sum + line.quantity, 0) * 10)).toBe(46);
   });
 });

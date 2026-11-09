@@ -129,19 +129,32 @@ export const growerQueries = {
   },
 
   // One pick's lines, with each line's variety and family for display.
+  //
+  // Through get_pick_lines (migration 0086), not by embedding
+  // product_varieties: that table holds the selling prices, which growers may
+  // not see (workbook Task 30), so it is closed to them (0091) and the
+  // function returns the names without prices. Reshaped here into the nested
+  // form the editor was written against, so nothing downstream changes.
   pickLines(dailyPickId: string) {
     return queryOptions({
       queryKey: ["grower", "pick-lines", dailyPickId],
       queryFn: async (): Promise<PickProductLineRow[]> => {
-        const { data, error } = await createClient()
-          .from("daily_pick_products")
-          .select(
-            "id, pallets_picked, leftover_pallets, comment, product_varieties(name, sizes, family_id, product_families(name, image_url))",
-          )
-          .eq("daily_pick_id", dailyPickId)
-          .order("product_variety_id");
+        const { data, error } = await createClient().rpc("get_pick_lines", {
+          p_daily_pick_id: dailyPickId,
+        });
         if (error) throw error;
-        return data;
+        return data.map((line) => ({
+          id: line.id,
+          pallets_picked: line.pallets_picked,
+          leftover_pallets: line.leftover_pallets,
+          comment: line.comment,
+          product_varieties: {
+            name: line.variety_name,
+            sizes: line.variety_sizes,
+            family_id: line.family_id,
+            product_families: { name: line.family_name, image_url: line.family_image_url },
+          },
+        }));
       },
     });
   },

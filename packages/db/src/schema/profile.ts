@@ -2,7 +2,7 @@ import { boolean, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 import { authUsers } from "./auth-users";
 import { companies } from "./company";
-import { userRoleEnum } from "./enums";
+import { produceCategoryEnum, userRoleEnum } from "./enums";
 
 // The "ours" extension of a Supabase Auth identity. One row per
 // login-capable user, keyed by (and cascade-deleted with) the
@@ -30,6 +30,10 @@ export const profiles = pgTable("profiles", {
   // apps/web's change-password page and the "profiles_update_own" RLS
   // policy that permits that self-write.
   mustChangePassword: boolean("must_change_password").notNull().default(false),
+  // A customer user's product category (migration 0090; Bubble's "default
+  // product category"): fruit or vegetable limits their shop to that category
+  // and "both". Null or both = everything. Read only for customers.
+  productCategory: produceCategoryEnum("product_category"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

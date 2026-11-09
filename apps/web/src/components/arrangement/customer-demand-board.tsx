@@ -1,9 +1,11 @@
+import { isPalletQuantity, roundPallets } from "@ori/shared/pallets";
 import { useState } from "react";
 
 import { inputClassName } from "@/components/reference-data/form-field";
 import { StatusPill, type StatusTone } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
-import { blockDecimalKey, blockWheel, stripDecimal } from "@/lib/integer-input";
+import { blockWheel } from "@/lib/integer-input";
+import { limitToOneDecimal } from "@/lib/pallet-input";
 
 import {
   allocationFor,
@@ -233,7 +235,7 @@ function CustomerCard({
     });
 
   const status = ORDER_STATUS[customer.status] ?? { label: customer.status, tone: "neutral" };
-  const outstanding = customer.ordered - customer.allocated;
+  const outstanding = roundPallets(customer.ordered - customer.allocated);
   const inOrderingSection = section === "ordering";
 
   // A promoted customer has no order line for the selected variety yet — by
@@ -606,8 +608,8 @@ function ArrangementCell({
   }
 
   const parsed = Number(draft);
-  // Pallets are always whole units — never a fractional pallet.
-  const valid = draft.trim() !== "" && Number.isInteger(parsed) && parsed > 0;
+  // Above zero, at most one decimal place (workbook Task 35).
+  const valid = draft.trim() !== "" && isPalletQuantity(parsed) && parsed > 0;
   const invalidDraft = editing && draft.trim() !== "" && !valid;
   // Compared as the number that would be SENT, not as typed, so re-entering
   // the same figure ("5" over a stored 5, or "05") is correctly nothing to
@@ -630,8 +632,9 @@ function ArrangementCell({
     <span className="flex shrink-0 items-center gap-1.5">
       <input
         type="number"
-        step="1"
+        step="0.1"
         min={0}
+        inputMode="decimal"
         disabled={!editing || saving}
         aria-label={`כמות לסידור עבור ${customerName}`}
         aria-invalid={invalidDraft}
@@ -639,10 +642,9 @@ function ArrangementCell({
           invalidDraft ? "ring-danger focus:ring-danger" : ""
         }`}
         value={draft}
-        onChange={(event) => setDraft(stripDecimal(event.target.value))}
+        onChange={(event) => setDraft(limitToOneDecimal(event.target.value))}
         onWheel={blockWheel}
         onKeyDown={(event) => {
-          blockDecimalKey(event);
           if (event.key === "Enter") {
             event.preventDefault();
             void commit();
@@ -712,8 +714,8 @@ function AllocationRow({
 
   const parsed = Number(draft);
   const dirty = draft !== String(allocation.quantity);
-  // Pallets are always whole units — never a fractional pallet.
-  const valid = draft.trim() !== "" && Number.isInteger(parsed) && parsed > 0;
+  // Above zero, at most one decimal place (workbook Task 35).
+  const valid = draft.trim() !== "" && isPalletQuantity(parsed) && parsed > 0;
 
   const revert = () => setDraft(String(allocation.quantity));
 
@@ -751,15 +753,16 @@ function AllocationRow({
         <>
           <input
             type="number"
-            step="1"
+            step="0.1"
             min={0}
+            inputMode="decimal"
             aria-label={`כמות משטחים מ${allocation.growerName}`}
             aria-invalid={!valid}
             className={`${inputClassName} h-9 w-24 px-2 text-xs ${
               !valid ? "ring-danger focus:ring-danger" : ""
             }`}
             value={draft}
-            onChange={(event) => setDraft(stripDecimal(event.target.value))}
+            onChange={(event) => setDraft(limitToOneDecimal(event.target.value))}
             onWheel={blockWheel}
             onKeyDown={(event) => {
               // Enter commits, Escape abandons. Never saved on blur: tabbing
@@ -767,7 +770,6 @@ function AllocationRow({
               // per stop, and each of those can be rejected for
               // over-allocation mid-way through a change that would have been
               // valid once finished.
-              blockDecimalKey(event);
               if (event.key === "Enter") {
                 event.preventDefault();
                 void commit();

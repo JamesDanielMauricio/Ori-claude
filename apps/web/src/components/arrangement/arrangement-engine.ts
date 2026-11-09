@@ -15,6 +15,13 @@
 //   not enough      one pallet each before anyone gets a second, round after
 //                   round, in RANK order, until the stock runs out.
 //
+// Quantities are counted in tenths of a pallet (workbook Task 35: an order
+// or an arrangement may be 0.4 of a pallet, never finer). A round gives a
+// customer one pallet, or what is left of their order if that is less, and
+// when the stock runs out part-way through a pallet, the next in line gets
+// the part that is left. On a day of whole pallets that is exactly the
+// whole-pallet rounds above, pallet for pallet.
+//
 // A customer's rank for a product, compared left to right:
 //
 //   1. how they fared the last SHORTAGE_MEMORY times this exact product ran
@@ -46,6 +53,17 @@ export const SHORTAGE_MEMORY = 3;
 export const NEWCOMER_DAYS = 30;
 /** The general score of a customer the owner has not scored — "nothing known", not "bad". */
 export const UNRANKED_SCORE = 1;
+/** A pallet, in the tenths proposeArrangement counts in. */
+const PALLET_IN_TENTHS = 10;
+
+/**
+ * A quantity in whole tenths of a pallet, rounded down: never more than there
+ * is. The small allowance keeps JavaScript's 0.7 − 0.4 (0.29999999999999993)
+ * at 3 tenths rather than 2.
+ */
+function inTenths(pallets: number): number {
+  return Math.floor(pallets * 10 + 1e-6);
+}
 
 // The owner's bands: the share of a family's selling days on which the
 // customer ordered or was given it → his 1–5 product score.
@@ -140,6 +158,14 @@ export function ownerPriority(general: number, product: number): number {
  * 3.5 filled first): measured over October, the single round was closer to
  * what he does — his worked peach example comes out differently for exactly
  * that reason (see the test).
+ *
+ * Quantities are whole numbers of some unit, and `pallet` is how many of
+ * them make a pallet: 1 when they are pallets, 10 when proposeArrangement
+ * passes tenths. A round gives a customer one pallet, or the rest of their
+ * order if that is less; when a whole pallet will not fit, the customer is
+ * given the largest part of one that does — the last of the stock — and
+ * drops out of the rounds. In pallets (the default) there is no smaller
+ * part, so that is simply "drops out".
  */
 export function dealInRounds(
   supply: number,
@@ -151,6 +177,7 @@ export function dealInRounds(
    */
   canPlace: (granted: Readonly<Record<string, number>>) => boolean = (granted) =>
     Object.values(granted).reduce((sum, pallets) => sum + pallets, 0) <= supply,
+  pallet = 1,
 ): Record<string, number> {
   const granted: Record<string, number> = {};
   for (const order of orders) granted[order.customerId] = 0;
@@ -170,20 +197,38 @@ export function dealInRounds(
 
   // One pallet at a time, round after round. A customer who cannot be given
   // one more — no lot open to them has room for it beside everyone else's —
-  // drops out of the rounds, and the pallet goes to the next in line.
+  // is given the largest part of one that fits, if any, and drops out of the
+  // rounds; the next pallet goes to the next in line.
   const out = new Set<string>();
+  const withMore = (customerId: string, more: number) => ({
+    ...granted,
+    [customerId]: (granted[customerId] ?? 0) + more,
+  });
   for (;;) {
     let gave = false;
     for (const order of ranked) {
       const now = granted[order.customerId] ?? 0;
       if (out.has(order.customerId) || now >= order.quantity) continue;
-      const next = { ...granted, [order.customerId]: now + 1 };
-      if (!canPlace(next)) {
-        out.add(order.customerId);
+      const step = Math.min(pallet, order.quantity - now);
+      if (canPlace(withMore(order.customerId, step))) {
+        granted[order.customerId] = now + step;
+        gave = true;
         continue;
       }
-      granted[order.customerId] = now + 1;
-      gave = true;
+      out.add(order.customerId);
+      // The largest part that still fits: if a part fits, so does any
+      // smaller one, so it can be searched for by halving.
+      let fits = 0;
+      let tooMany = step;
+      while (tooMany - fits > 1) {
+        const middle = Math.floor((fits + tooMany) / 2);
+        if (canPlace(withMore(order.customerId, middle))) fits = middle;
+        else tooMany = middle;
+      }
+      if (fits > 0) {
+        granted[order.customerId] = now + fits;
+        gave = true;
+      }
     }
     if (!gave) return granted;
   }
@@ -411,7 +456,11 @@ function sortedLots(lots: readonly LotToFill[]): LotToFill[] {
 }
 
 /**
- * The proposal for a day: one line per cell, in whole pallets.
+ * The proposal for a day: one line per cell, in pallets with at most one
+ * decimal place. Worked out in whole tenths of a pallet throughout — stock,
+ * orders and what is already arranged are each rounded DOWN to a tenth on
+ * the way in, so a proposal never offers more than there is or than was
+ * ordered — and turned back into pallets on the way out.
  *
  * Works on what is still open. A customer is dealt only what they are still
  * owed (ordered, less what is already arranged to them), and only as much as
@@ -469,7 +518,7 @@ export function proposeArrangement({
       .filter((lot) => lot.available > 0)
       .map((lot) => ({
         growerId: lot.growerId,
-        available: Math.floor(lot.available),
+        available: inTenths(lot.available),
         takenBy: takenOn.get(lotKey(lot.growerId, varietyId)) ?? new Set<string>(),
       }));
     const supply = lots.reduce((sum, lot) => sum + lot.available, 0);
@@ -477,7 +526,7 @@ export function proposeArrangement({
 
     const wanting: RankedOrder[] = [];
     for (const [customerId, order] of byCustomer) {
-      const owed = Math.floor(order.quantity - (arrangedTo.get(varietyId)?.get(customerId) ?? 0));
+      const owed = inTenths(order.quantity - (arrangedTo.get(varietyId)?.get(customerId) ?? 0));
       const reachable = lots
         .filter((lot) => !lot.takenBy.has(customerId))
         .reduce((sum, lot) => sum + lot.available, 0);
@@ -498,15 +547,20 @@ export function proposeArrangement({
     // stands.
     const shutOut = lots.some((lot) => wanting.some((order) => lot.takenBy.has(order.customerId)));
     const dealt = shutOut
-      ? dealInRounds(supply, wanting, (granted) => {
-          const shares = Object.entries(granted).map(([customerId, quantity]) => ({
-            customerId,
-            quantity,
-          }));
-          const wantedNow = shares.reduce((sum, share) => sum + share.quantity, 0);
-          return maximumPlacement(lots, shares).placed >= wantedNow;
-        })
-      : dealInRounds(supply, wanting);
+      ? dealInRounds(
+          supply,
+          wanting,
+          (granted) => {
+            const shares = Object.entries(granted).map(([customerId, quantity]) => ({
+              customerId,
+              quantity,
+            }));
+            const wantedNow = shares.reduce((sum, share) => sum + share.quantity, 0);
+            return maximumPlacement(lots, shares).placed >= wantedNow;
+          },
+          PALLET_IN_TENTHS,
+        )
+      : dealInRounds(supply, wanting, undefined, PALLET_IN_TENTHS);
     const shares = wanting
       .map((order) => ({ customerId: order.customerId, quantity: dealt[order.customerId] ?? 0 }))
       .filter((share) => share.quantity > 0);
@@ -515,7 +569,7 @@ export function proposeArrangement({
         growerId: cell.growerId,
         varietyId,
         customerId: cell.customerId,
-        quantity: cell.quantity,
+        quantity: cell.quantity / PALLET_IN_TENTHS,
       });
     }
   }

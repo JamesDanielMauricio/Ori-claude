@@ -16,8 +16,6 @@ import {
 } from "@ori/domain/lifecycle-engine/testing";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { chooseOption } from "./choose-option";
-
 // The customer's order history lists 60 trading days at a time, newest first
 // (routes/customer/history.tsx). On a database with more days than that, a
 // seeded day can sit behind one or more "הצג עוד" clicks — click until the
@@ -282,8 +280,8 @@ test.describe("Performance verification — measured against the source's docume
     // Rows render collapsed; expand this fixture's own product row before it
     // has a quantity control to set. No "ערוך" click in between — the shop is
     // open, so the order is editable on arrival (routes/customer/order.tsx's
-    // isOrderEditable) — and the control is the customer screen's capped
-    // dropdown, not a typed number input.
+    // isOrderEditable) — and the control is a typed number box (workbook
+    // Task 35).
     //
     // Addressed by family name rather than "the collapsed row in main":
     // initiate_business_day bootstraps a pick for every eligible grower, so
@@ -292,7 +290,7 @@ test.describe("Performance verification — measured against the source's docume
     const familyName = grower.familyName;
     await page.getByRole("button", { name: familyName, exact: true }).click();
     const familyItem = page.locator("main li").filter({ hasText: familyName });
-    await chooseOption(familyItem.getByRole("combobox"), "2");
+    await familyItem.getByRole("spinbutton").fill("2");
     await page.getByRole("button", { name: "שמור" }).click();
     await expect(page.getByText("אישור הזמנה")).toBeVisible();
 

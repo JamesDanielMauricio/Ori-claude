@@ -1,19 +1,32 @@
 import { resolveHomeRoute } from "@ori/shared/roles";
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { AuthCard } from "@/components/auth/auth-card";
 import { PasswordInput } from "@/components/auth/password-input";
 import { FormField, inputClassName } from "@/components/reference-data/form-field";
 import { Button } from "@/components/ui/button";
+import { INACTIVE_ACCOUNT_MESSAGE, readAccountActive } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase/client";
 import { retryOnClockSkew } from "@/lib/supabase/retry-clock-skew";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // The route guard sends a user of an inactive company here with
+  // ?inactive=1 after signing them out (require-role.tsx), so the page opens
+  // with the reason rather than an empty form.
+  const [error, setError] = useState<string | null>(() =>
+    searchParams.get("inactive") === "1" ? INACTIVE_ACCOUNT_MESSAGE : null,
+  );
+  // ...and ends the session here, not in the guard — see require-role.tsx.
+  // Signing out when there is no session left does nothing.
+  const arrivedInactive = searchParams.get("inactive") === "1";
+  useEffect(() => {
+    if (arrivedInactive) void createClient().auth.signOut();
+  }, [arrivedInactive]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   async function handleSubmit(event: React.FormEvent) {
@@ -44,9 +57,18 @@ export default function LoginPage() {
     // disabled on "מתחבר…". Every other error reaches the branch below
     // exactly as before.
     const userId = data.user.id;
-    const { data: profile, error: profileError } = await retryOnClockSkew(() =>
-      supabase.from("profiles").select("role, must_change_password").eq("user_id", userId).single(),
-    );
+    // Beside it, for no extra wait: whether the user's company is active
+    // (migration 0088) — see the check below.
+    const [{ data: profile, error: profileError }, accountActive] = await Promise.all([
+      retryOnClockSkew(() =>
+        supabase
+          .from("profiles")
+          .select("role, must_change_password")
+          .eq("user_id", userId)
+          .single(),
+      ),
+      readAccountActive(),
+    ]);
 
     // A failed READ and a genuinely missing row are different problems and no
     // longer collapse into the same silent outcome. Previously both ended in
@@ -73,6 +95,15 @@ export default function LoginPage() {
       // rather than leaving the form looking unresponsive.
       await supabase.auth.signOut();
       setError("החשבון אינו מקושר לפרופיל במערכת. פנה למנהל המערכת.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    // A correct password, but the user's company is inactive: the database
+    // refuses them everything, so say why instead of opening empty screens.
+    if (!accountActive) {
+      await supabase.auth.signOut();
+      setError(INACTIVE_ACCOUNT_MESSAGE);
       setIsSubmitting(false);
       return;
     }

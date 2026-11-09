@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveAuthDecision, type AuthDecisionInput } from "./require-role";
+import {
+  INACTIVE_ACCOUNT_LOGIN,
+  resolveAuthDecision,
+  type AuthDecisionInput,
+} from "./require-role";
 
 // The route guard's decision order is security-adjacent and was inverted
 // once during the migration off Next.js (role checked before forced password
@@ -12,7 +16,7 @@ const signedIn = (over: Partial<AuthDecisionInput> = {}): AuthDecisionInput => (
   role: "backoffice",
   loading: false,
   hasUser: true,
-  profile: { role: "backoffice", mustChangePassword: false },
+  profile: { role: "backoffice", mustChangePassword: false, accountActive: true },
   ...over,
 });
 
@@ -45,13 +49,19 @@ describe("resolveAuthDecision", () => {
 
   it("hard signs out on a role mismatch, per the PRD access-gating rule", () => {
     expect(
-      resolveAuthDecision(signedIn({ profile: { role: "customer", mustChangePassword: false } })),
+      resolveAuthDecision(
+        signedIn({ profile: { role: "customer", mustChangePassword: false, accountActive: true } }),
+      ),
     ).toEqual({ kind: "redirect", to: "/login", signOut: true });
   });
 
   it("forces a password change before letting a matching role in", () => {
     expect(
-      resolveAuthDecision(signedIn({ profile: { role: "backoffice", mustChangePassword: true } })),
+      resolveAuthDecision(
+        signedIn({
+          profile: { role: "backoffice", mustChangePassword: true, accountActive: true },
+        }),
+      ),
     ).toEqual({ kind: "redirect", to: "/change-password", signOut: false });
   });
 
@@ -60,7 +70,9 @@ describe("resolveAuthDecision", () => {
   // session instead of being signed out.
   it("prefers /change-password over a hard sign-out when BOTH apply", () => {
     expect(
-      resolveAuthDecision(signedIn({ profile: { role: "customer", mustChangePassword: true } })),
+      resolveAuthDecision(
+        signedIn({ profile: { role: "customer", mustChangePassword: true, accountActive: true } }),
+      ),
     ).toEqual({ kind: "redirect", to: "/change-password", signOut: false });
   });
 
@@ -68,7 +80,10 @@ describe("resolveAuthDecision", () => {
     it("admits any authenticated user regardless of role", () => {
       expect(
         resolveAuthDecision(
-          signedIn({ role: undefined, profile: { role: "grower", mustChangePassword: false } }),
+          signedIn({
+            role: undefined,
+            profile: { role: "grower", mustChangePassword: false, accountActive: true },
+          }),
         ),
       ).toEqual({ kind: "allow" });
     });
@@ -76,7 +91,10 @@ describe("resolveAuthDecision", () => {
     it("does NOT force a password change, matching requireSession()", () => {
       expect(
         resolveAuthDecision(
-          signedIn({ role: undefined, profile: { role: "grower", mustChangePassword: true } }),
+          signedIn({
+            role: undefined,
+            profile: { role: "grower", mustChangePassword: true, accountActive: true },
+          }),
         ),
       ).toEqual({ kind: "allow" });
     });
@@ -85,6 +103,48 @@ describe("resolveAuthDecision", () => {
       expect(
         resolveAuthDecision(signedIn({ role: undefined, hasUser: false, profile: null })),
       ).toEqual({ kind: "redirect", to: "/login", signOut: false });
+    });
+  });
+
+  // Migration 0088: a user whose company is inactive is refused everything by
+  // the database, so the guard sends them to sign-in with the reason — from every
+  // area, the unroled /profile included, and before the password check.
+  describe("a user of an inactive company", () => {
+    const inactive = { accountActive: false, mustChangePassword: false } as const;
+
+    it("is sent to sign-in with the reason (the sign-in page signs them out)", () => {
+      expect(
+        resolveAuthDecision(
+          signedIn({ role: "customer", profile: { role: "customer", ...inactive } }),
+        ),
+      ).toEqual({
+        kind: "redirect",
+        to: INACTIVE_ACCOUNT_LOGIN,
+        signOut: false,
+      });
+    });
+
+    it("is sent away from /profile too", () => {
+      expect(
+        resolveAuthDecision(
+          signedIn({ role: undefined, profile: { role: "grower", ...inactive } }),
+        ),
+      ).toEqual({
+        kind: "redirect",
+        to: INACTIVE_ACCOUNT_LOGIN,
+        signOut: false,
+      });
+    });
+
+    it("is sent away even while owing a password change", () => {
+      expect(
+        resolveAuthDecision(
+          signedIn({
+            role: "customer",
+            profile: { role: "customer", accountActive: false, mustChangePassword: true },
+          }),
+        ),
+      ).toEqual({ kind: "redirect", to: INACTIVE_ACCOUNT_LOGIN, signOut: false });
     });
   });
 });

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { StatusPill } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
 import { Select } from "@/components/ui/select";
-import { blockDecimalKey, stripDecimal } from "@/lib/integer-input";
+import { limitToOneDecimal } from "@/lib/pallet-input";
 
 import { formatPallets } from "./board-data";
 import {
@@ -404,18 +404,17 @@ function MatrixMobileInput({
   return (
     <input
       type="text"
-      inputMode="numeric"
+      inputMode="decimal"
       // Digits read left-to-right inside an RTL page, the same rule every
       // number input in this app follows (see globals.css).
       dir="ltr"
       autoComplete="off"
       aria-label={label}
       value={draft}
-      onChange={(event) => setDraft(stripDecimal(event.target.value))}
+      onChange={(event) => setDraft(limitToOneDecimal(event.target.value))}
       onFocus={(event) => event.currentTarget.select()}
       onBlur={() => void commit()}
       onKeyDown={(event) => {
-        blockDecimalKey(event);
         if (event.key === "Enter") {
           event.preventDefault();
           // Blurring is what actually commits (onBlur above) — Enter's only

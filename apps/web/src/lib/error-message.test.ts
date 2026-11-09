@@ -31,7 +31,6 @@ const validProduct = {
   isSeasonalAvailable: true,
   numberOfOrdersPerCustomer: null,
   expectedVersion: null,
-  customerPalletCaps: [],
 };
 
 describe("errorMessage", () => {
@@ -70,6 +69,19 @@ describe("errorMessage", () => {
         ),
       ),
     ).toBe("המספר שהוזן קטן מדי.");
+  });
+
+  it("says a quantity takes one decimal place at most (Task 35)", () => {
+    expect(
+      errorMessage(
+        thrownBy(() =>
+          updateArrangementRecordInputSchema.parse({
+            id: "11111111-1111-4111-8111-111111111111",
+            quantityPallets: 0.14,
+          }),
+        ),
+      ),
+    ).toBe("כמות משטחים יכולה לכלול ספרה אחת לכל היותר אחרי הנקודה (למשל 0.4).");
   });
 
   it("asks for a choice when an id is missing", () => {

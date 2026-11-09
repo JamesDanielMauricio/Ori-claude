@@ -381,6 +381,19 @@ describe("cellTarget", () => {
   it("refuses a column that does not exist", () => {
     expect(cellTarget(rowFor(lychee.id), 99, columns)).toBeNull();
   });
+
+  // Migration 0089: a closed pick (the truck icon) is not arranged from.
+  it("refuses a closed pick's lot, from its grower row and from a single-grower product row", () => {
+    const growerB = { ...rowFor(lemon.id).growers[1]!, closed: true };
+    expect(cellTarget(growerB, 1, columns)).toBeNull();
+    const lycheeRow = rowFor(lychee.id);
+    const closedLychee = { ...lycheeRow, growers: lycheeRow.growers.map((g) => ({ ...g, closed: true })) };
+    expect(cellTarget(closedLychee, 0, columns)).toBeNull();
+  });
+
+  it("marks a grower row closed when its pick is", () => {
+    expect(rowFor(lemon.id).growers.every((grower) => grower.closed === false)).toBe(true);
+  });
 });
 
 describe("flattenMatrixRows", () => {

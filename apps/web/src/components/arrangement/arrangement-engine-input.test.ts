@@ -500,6 +500,30 @@ describe("dayToPropose", () => {
   ];
   const day = dayToPropose({ tradeDate: "2026-10-12", picks, orders, records });
 
+  // Migration 0089: a closed pick (the truck icon) is not arranged from, so
+  // its lots offer nothing to a proposal.
+  it("offers nothing off a closed pick's lots, and everything off an open one's", () => {
+    const day = dayToPropose({
+      tradeDate: "2026-10-12",
+      picks: picks.map((pick, index) => (index === 0 ? { ...pick, status: "closed" } : pick)),
+      orders,
+      records: [],
+    });
+    const closedLines = new Set(
+      picks[0]!.daily_pick_products.map((line) => line.product_varieties?.id),
+    );
+    const fromClosed = day.lots.filter((lot) => lot.growerId === picks[0]!.grower_company_id);
+    expect(fromClosed.length).toBeGreaterThan(0);
+    expect(fromClosed.every((lot) => lot.available === 0)).toBe(true);
+    expect(closedLines.size).toBeGreaterThan(0);
+    const open = dayToPropose({ tradeDate: "2026-10-12", picks, orders, records: [] });
+    expect(
+      open.lots
+        .filter((lot) => lot.growerId === picks[0]!.grower_company_id)
+        .some((lot) => lot.available > 0),
+    ).toBe(true);
+  });
+
   it("offers what is free on each lot — picked plus carried-in leftover, less what is arranged — as the grid's זמין does", () => {
     expect(day.lots).toEqual([
       { growerId: "grower-a", varietyId: LEMON, available: 8 },
@@ -862,7 +886,9 @@ describe("proposeForDay", () => {
     expect(lines.map((line) => line.forOrder)).toEqual(["suggested", "suggested"]);
   });
 
-  it("proposes no more than a lot holds when what it holds is part of a pallet", () => {
+  // Workbook Task 35: the half pallet is proposed too, now that an
+  // arrangement may be part of a pallet — and still nothing beyond the lot.
+  it("proposes all a lot holds and no more when what it holds is part of a pallet", () => {
     const partOfAPallet: BoardPick[] = [
       {
         ...picks[0]!,
@@ -884,7 +910,7 @@ describe("proposeForDay", () => {
       learnedFrom,
     });
 
-    expect(lines.reduce((sum, line) => sum + line.quantity, 0)).toBe(2);
+    expect(lines.reduce((sum, line) => sum + line.quantity, 0)).toBe(2.5);
   });
 
   it("ranks customers by the owner's scores when a product is short", () => {

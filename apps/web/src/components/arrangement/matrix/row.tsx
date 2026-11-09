@@ -2,7 +2,7 @@ import type { KeyboardEvent } from "react";
 
 import { CellPopover } from "@/components/reference-data/cell-popover";
 import { Icon } from "@/components/ui/icon";
-import { stripDecimal } from "@/lib/integer-input";
+import { limitToOneDecimal } from "@/lib/pallet-input";
 
 import { formatPallets } from "../board-data";
 import { cellTarget, cellTone, type Matrix, type MatrixRow } from "../matrix-data";
@@ -225,7 +225,7 @@ export function MatrixRowCells({
                 <input
                   data-cell={`${rowIndex}-${colIndex}`}
                   type="text"
-                  inputMode="numeric"
+                  inputMode="decimal"
                   // Digits read left-to-right inside an RTL page — the same
                   // rule globals.css applies to every number input.
                   dir="ltr"
@@ -258,7 +258,7 @@ export function MatrixRowCells({
                       row: rowIndex,
                       col: colIndex,
                       key: row.key,
-                      value: stripDecimal(event.target.value),
+                      value: limitToOneDecimal(event.target.value),
                     })
                   }
                   onKeyDown={(event) => onKeyDown(event, rowIndex, colIndex)}

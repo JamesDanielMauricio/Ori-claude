@@ -327,7 +327,7 @@ class Report {
 
 const COLUMNS = {
   companies: ["id", "name", "type", "status", "default_pickup_time", "can_see_product_prices", "whatsapp_group_id", "no_arrangement_message", "created_at", "updated_at"],
-  profiles: ["user_id", "company_id", "role", "display_name", "phone_number", "must_change_password", "created_at", "updated_at"],
+  profiles: ["user_id", "company_id", "role", "display_name", "phone_number", "must_change_password", "product_category", "created_at", "updated_at"],
   product_families: ["id", "name", "category", "image_url", "created_at", "updated_at"],
   product_varieties: [
     "id", "family_id", "name", "sizes", "price", "price_range_from", "price_range_to", "price_type", "no_overbooking",
@@ -408,6 +408,27 @@ async function loadExport(): Promise<{ data: ExportData; exportedAt: string }> {
 // generated here and reused by part 2.
 // ---------------------------------------------------------------------------
 
+// Bubble's "Product Categories" option set, by the words it shows — פרי, ירק,
+// פרי / ירק — as this app's produce_category (migration 0090). Spacing around
+// the slash is ignored; anything else is no category.
+type ProduceCategory = "fruit" | "vegetable" | "both";
+function produceCategory(label: string | null): ProduceCategory | null {
+  const word = (label ?? "").replace(/\s+/g, "");
+  if (word === "פרי") return "fruit";
+  if (word === "ירק") return "vegetable";
+  if (word === "פרי/ירק" || word === "ירק/פרי") return "both";
+  return null;
+}
+
+// A family's list of categories as one: fruit and vegetable together are both.
+function familyCategory(labels: ReadonlyArray<string | null>): ProduceCategory | null {
+  const categories = new Set(labels.map(produceCategory).filter((category) => category !== null));
+  if (categories.has("both") || (categories.has("fruit") && categories.has("vegetable"))) return "both";
+  if (categories.has("fruit")) return "fruit";
+  if (categories.has("vegetable")) return "vegetable";
+  return null;
+}
+
 interface PlannedUser {
   bubbleId: string;
   email: string;
@@ -418,6 +439,9 @@ interface PlannedUser {
   createdAt: string;
   updatedAt: string;
   blockedVarietyIds: string[];
+  // Bubble's "default product category" on the User (migration 0090): a
+  // customer user's shop shows only that category and "both".
+  productCategory: ProduceCategory | null;
 }
 
 interface ReferencePlan {
@@ -564,16 +588,20 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
       report.note("warning", "productfamily", family._id, "family.no_name", "No name — not imported.");
       continue;
     }
-    const categories = idList(family, "Product Categories");
-    if (categories.length > 1) {
-      report.note("info", "productfamily", family._id, "family.several_categories", `"${name}" has ${categories.length} categories — kept the first, "${categories[0]}".`);
+    // Bubble's list: ["פרי"], ["ירק"], or both — which is the "both" category
+    // here (migration 0090). Before Task 32 only the first was kept, so a
+    // family Bubble has as both came across as fruit.
+    const categoryLabels = idList(family, "Product Categories");
+    const category = familyCategory(categoryLabels.length > 0 ? categoryLabels : [text(family, "Product category")]);
+    if (category === null && categoryLabels.length > 0) {
+      report.note("warning", "productfamily", family._id, "family.unknown_category", `"${name}" has a category this app does not know (${categoryLabels.join(", ")}) — imported without one.`);
     }
     const image = text(family, "image");
     const id = randomUUID();
     productFamilies.push({
       id,
       name,
-      category: categories[0] ?? text(family, "Product category"),
+      category,
       // Bubble serves uploads from a protocol-relative CDN URL ("//...").
       image_url: image?.startsWith("//") ? `https:${image}` : image,
       created_at: createdAt(family),
@@ -755,6 +783,7 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
       createdAt: createdAt(user),
       updatedAt: modifiedAt(user),
       blockedVarietyIds: [...blockedVarietyIds],
+      productCategory: produceCategory(text(user, "default product category")),
     });
   }
   if (!users.some((user) => user.bubbleId === distributorBubbleUserId)) {
@@ -763,7 +792,7 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
   report.fieldsNotImported(
     "user",
     data.user,
-    ["Phone number prefix", "Comments", "default product category", "Developer?", "email_display", "company name", "Type"],
+    ["Phone number prefix", "Comments", "Developer?", "email_display", "company name", "Type"],
     "no column for it in profiles",
   );
 
@@ -874,6 +903,7 @@ function planTrading(data: ExportData, reference: ReferencePlan, loginIds: Map<s
       display_name: user.displayName,
       phone_number: user.phoneNumber,
       must_change_password: true,
+      product_category: user.productCategory,
       created_at: user.createdAt,
       updated_at: user.updatedAt,
     });
@@ -1607,7 +1637,6 @@ const WIPED_TABLES = [
   "daily_arrangements",
   "trading_days",
   "alerts",
-  "product_customer_caps",
   "profile_blocked_products",
   "grower_products",
   "profiles",

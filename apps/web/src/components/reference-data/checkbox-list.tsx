@@ -1,9 +1,8 @@
 import { checkboxClassName } from "./form-field";
 
-// The shared shape behind three different business rules that are all,
-// mechanically, "pick a subset of the product catalog": a grower's
-// in-season selection, a user's product blacklist, and (rendered
-// differently, so not reused here) a product's per-customer pallet caps.
+// The shared shape behind business rules that are, mechanically, "pick a
+// subset of the product catalog": a grower's in-season selection and a
+// user's product blacklist.
 export function CheckboxList({
   options,
   selectedIds,

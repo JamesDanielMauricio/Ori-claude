@@ -60,6 +60,18 @@ Environment: `BUBBLE_API_TOKEN` (Bubble editor → Settings → API → API Toke
 - Public sign-up must be off on the hosted project (Supabase dashboard → Authentication → Sign In /
   Providers → "Allow new users to sign up"), so nobody can register a user's email before the import
   reuses that login. `supabase/config.toml` has it off for the local and CI stack.
+- **Categories (Task 32, migration 0090).** A product family's Bubble "Product Categories" list
+  becomes one category: ["פרי"] fruit, ["ירק"] vegetable, both together "both" (until 2026-11-09
+  only the first was kept, so the families Bubble has as both — watermelon, the melons — came
+  across as fruit). Each user's own "default product category" now comes across too
+  (`profiles.product_category`): a customer user set to fruit or vegetable sees only that category
+  and "both" in the shop.
+
+**Backups and exports hold personal data — who owns them (Task 30, James 2026-11-09).** The
+importer's backups (`packages/db/.bubble-export/backups/`, password hashes included) and the
+Bubble exports (`packages/db/.bubble-export/<env>/`, emails and phone numbers) are owned by the
+distributors / system admins. They decide who may hold a copy and delete them when they are no
+longer needed; none of them is ever committed (the folder is gitignored).
 
 **Why the export pages the way it does.** Bubble's Data API returns zero results past `cursor=50000`
 while still reporting records remaining — no error. `dailypickproduct` has ~100K rows, so a plain

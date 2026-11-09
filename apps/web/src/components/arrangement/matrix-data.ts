@@ -27,6 +27,8 @@
 // Kept free of React and of the network so the arithmetic — which is what a
 // distributor is trusting when they decide a customer is covered — can be
 // read and tested on its own, exactly as board-data.ts is.
+import { isPalletQuantity, roundPallets } from "@ori/shared/pallets";
+
 import { formatVarietyName } from "@/lib/variety-label";
 
 import {
@@ -109,6 +111,12 @@ export interface MatrixGrowerRow {
   allocated: number;
   /** זמין — (inStock + leftover) minus allocated: what is still free to give away from this line. */
   available: number;
+  /**
+   * The grower's pick is closed (the truck icon): nothing on this line can be
+   * arranged until it is reopened (migration 0089), so its cells are read-only
+   * — see cellTarget.
+   */
+  closed: boolean;
   cells: MatrixCell[];
 }
 
@@ -291,7 +299,7 @@ export function buildMatrix({
       const key = `${varietyId}${SEP}${order.customer_company_id}`;
       orderedByVarietyCustomer.set(
         key,
-        (orderedByVarietyCustomer.get(key) ?? 0) + parsePallets(line.pallets_ordered),
+        roundPallets((orderedByVarietyCustomer.get(key) ?? 0) + parsePallets(line.pallets_ordered)),
       );
       // A note of nothing but whitespace is no note: marking the cell for it
       // would send the distributor looking for something that isn't there.
@@ -324,7 +332,7 @@ export function buildMatrix({
     const quantity = parsePallets(record.quantity_pallets);
     allocatedByPickLine.set(
       record.daily_pick_product_id,
-      (allocatedByPickLine.get(record.daily_pick_product_id) ?? 0) + quantity,
+      roundPallets((allocatedByPickLine.get(record.daily_pick_product_id) ?? 0) + quantity),
     );
 
     const customerId =
@@ -339,7 +347,7 @@ export function buildMatrix({
     const key = `${record.daily_pick_product_id}${SEP}${customerId}`;
     const existing = cellByPickLineCustomer.get(key);
     cellByPickLineCustomer.set(key, {
-      allocated: (existing?.allocated ?? 0) + quantity,
+      allocated: roundPallets((existing?.allocated ?? 0) + quantity),
       proposed: 0,
       recordId: record.id,
       price: record.price === null ? null : parsePallets(record.price),
@@ -354,14 +362,14 @@ export function buildMatrix({
   for (const allocation of proposal) {
     allocatedByPickLine.set(
       allocation.pickLineId,
-      (allocatedByPickLine.get(allocation.pickLineId) ?? 0) + allocation.quantity,
+      roundPallets((allocatedByPickLine.get(allocation.pickLineId) ?? 0) + allocation.quantity),
     );
 
     const key = `${allocation.pickLineId}${SEP}${allocation.customerId}`;
     const existing = cellByPickLineCustomer.get(key);
     cellByPickLineCustomer.set(key, {
-      allocated: (existing?.allocated ?? 0) + allocation.quantity,
-      proposed: (existing?.proposed ?? 0) + allocation.quantity,
+      allocated: roundPallets((existing?.allocated ?? 0) + allocation.quantity),
+      proposed: roundPallets((existing?.proposed ?? 0) + allocation.quantity),
       recordId: existing?.recordId ?? null,
       price: existing?.price ?? null,
       priceType: existing?.priceType ?? null,
@@ -426,7 +434,8 @@ export function buildMatrix({
         inStock,
         leftover,
         allocated,
-        available: inStock + leftover - allocated,
+        available: roundPallets(inStock + leftover - allocated),
+        closed: pick.status === "closed",
         cells,
       });
     }
@@ -446,17 +455,23 @@ export function buildMatrix({
         summed[index] = {
           ordered: orderedByVarietyCustomer.get(`${varietyId}${SEP}${customerId}`) ?? 0,
           comment: commentByVarietyCustomer.get(`${varietyId}${SEP}${customerId}`) ?? null,
-          allocated: growers.reduce((sum, grower) => sum + (grower.cells[index]?.allocated ?? 0), 0),
-          proposed: growers.reduce((sum, grower) => sum + (grower.cells[index]?.proposed ?? 0), 0),
+          allocated: roundPallets(
+            growers.reduce((sum, grower) => sum + (grower.cells[index]?.allocated ?? 0), 0),
+          ),
+          proposed: roundPallets(
+            growers.reduce((sum, grower) => sum + (grower.cells[index]?.proposed ?? 0), 0),
+          ),
           recordId: null,
           price: null,
           priceType: null,
         };
       }
 
-      const inStock = growers.reduce((sum, grower) => sum + grower.inStock, 0);
-      const leftover = growers.reduce((sum, grower) => sum + grower.leftover, 0);
-      const allocated = growers.reduce((sum, grower) => sum + grower.allocated, 0);
+      // Rounded to the database's two decimals: in JavaScript 0.1 + 0.2 is
+      // 0.30000000000000004, and זמין would show a sliver of stock left.
+      const inStock = roundPallets(growers.reduce((sum, grower) => sum + grower.inStock, 0));
+      const leftover = roundPallets(growers.reduce((sum, grower) => sum + grower.leftover, 0));
+      const allocated = roundPallets(growers.reduce((sum, grower) => sum + grower.allocated, 0));
       // Present only when this variety came from exactly one lot — the case
       // where the product row and the grower row are the same row.
       const soleGrower = growers.length === 1 ? growers[0] : undefined;
@@ -469,9 +484,9 @@ export function buildMatrix({
         familyName: entry.familyName,
         inStock,
         leftover,
-        ordered: summed.reduce((sum, cell) => sum + cell.ordered, 0),
+        ordered: roundPallets(summed.reduce((sum, cell) => sum + cell.ordered, 0)),
         allocated,
-        available: inStock + leftover - allocated,
+        available: roundPallets(inStock + leftover - allocated),
         expandable: growers.length > 1,
         growers,
         // With one lot the product row IS the grower row, so it takes that
@@ -609,19 +624,19 @@ export interface CellTarget {
  * presentations (the desktop spreadsheet and the mobile card list) so a
  * quantity is accepted or rejected by the same rule wherever it's typed.
  *
- * Whole pallets only — the cell's own `onKeyDown` already blocks a decimal
- * point or comma from being typed, and `stripDecimal` cleans up anything
- * that lands via paste before it gets here; `Math.trunc` is a last line of
- * defense against either being missed. An empty box means "nothing is
- * arranged here", which is a deletion (quantity 0), not a no-op or an
- * invalid entry.
+ * At most one decimal place (workbook Task 35) — the cell's own `onChange`
+ * (limitToOneDecimal) already cuts anything finer as it is typed or pasted,
+ * so a finer value that still arrives here is refused rather than rounded:
+ * nothing is written that the person did not type. An empty box means
+ * "nothing is arranged here", which is a deletion (quantity 0), not a no-op
+ * or an invalid entry.
  */
 export function parseMatrixQuantity(raw: string): number | null {
   const trimmed = raw.trim().replace(",", ".");
   if (trimmed === "") return 0;
   const value = Number(trimmed);
-  if (!Number.isFinite(value) || value < 0) return null;
-  return Math.trunc(value);
+  if (!isPalletQuantity(value)) return null;
+  return roundPallets(value);
 }
 
 /**
@@ -646,7 +661,9 @@ export function cellTarget(
       : row.expandable
         ? null
         : (row.growers[0]?.pickLineId ?? null);
-  if (!pickLineId) return null;
+  // A closed pick is read-only (migration 0089 refuses arranging from it).
+  const closed = row.kind === "grower" ? row.closed : (row.growers[0]?.closed ?? false);
+  if (!pickLineId || closed) return null;
 
   return {
     pickLineId,

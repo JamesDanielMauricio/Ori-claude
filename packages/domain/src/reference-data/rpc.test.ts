@@ -86,7 +86,6 @@ describe("reference-data save functions", () => {
         isSeasonalAvailable: true,
         numberOfOrdersPerCustomer: null,
         expectedVersion: 1,
-        customerPalletCaps: [],
       }),
     );
     expect(firstWriter.error).toBeNull();
@@ -111,7 +110,6 @@ describe("reference-data save functions", () => {
         isSeasonalAvailable: true,
         numberOfOrdersPerCustomer: null,
         expectedVersion: 1,
-        customerPalletCaps: [],
       }),
     );
 
@@ -406,7 +404,6 @@ describe("reference-data save functions", () => {
         isSeasonalAvailable: true,
         numberOfOrdersPerCustomer: null,
         expectedVersion: 1,
-        customerPalletCaps: [],
       }),
     );
 

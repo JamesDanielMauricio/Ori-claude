@@ -141,11 +141,6 @@ export function toSaveTransporterRpcArgs(input: SaveTransporterInput) {
   };
 }
 
-export const customerPalletCapSchema = z.object({
-  customerCompanyId: z.string().uuid(),
-  palletCap: z.number().int().nonnegative(),
-});
-
 export const saveProductInputSchema = z.object({
   id: z.string().uuid().nullable(),
   familyId: z.string().uuid(),
@@ -161,14 +156,12 @@ export const saveProductInputSchema = z.object({
   highlightPriceFluctuations: z.boolean(),
   isSeasonalAvailable: z.boolean(),
   // The customer order screen's per-line ceiling (migration 0042). Null
-  // means no variety-level cap — see product-variety.ts's own comment for
-  // how this differs from customerPalletCaps below (one default for every
-  // customer vs. an override for one).
+  // means no cap. The only per-customer limit: a separate cap for one
+  // customer was removed (migration 0087).
   numberOfOrdersPerCustomer: z.number().int().positive().nullable(),
   // Required when updating (the version the client last read); ignored by
   // the function on create. Null only ever legitimately occurs on create.
   expectedVersion: z.number().int().nullable(),
-  customerPalletCaps: z.array(customerPalletCapSchema),
 });
 export type SaveProductInput = z.infer<typeof saveProductInputSchema>;
 
@@ -188,12 +181,11 @@ export function toSaveProductRpcArgs(input: SaveProductInput) {
     p_is_seasonal_available: input.isSeasonalAvailable,
     p_number_of_orders_per_customer: input.numberOfOrdersPerCustomer,
     p_expected_version: input.expectedVersion,
-    p_customer_pallet_caps: input.customerPalletCaps.map((cap) => ({
-      customerCompanyId: cap.customerCompanyId,
-      palletCap: cap.palletCap,
-    })),
   };
 }
+
+// A product family's category, and a customer user's (migration 0090).
+export const produceCategorySchema = z.enum(["fruit", "vegetable", "both"]);
 
 export const saveUserInputSchema = z.object({
   userId: z.string().uuid(),
@@ -201,6 +193,10 @@ export const saveUserInputSchema = z.object({
   role: userRoleSchema,
   companyId: z.string().uuid(),
   blockedProductVarietyIds: z.array(z.string().uuid()),
+  // A customer user's category (Bubble's "default product category"): they
+  // see only that category's products and "both" ones. Optional: left out,
+  // save_user keeps the user's current category (migration 0090).
+  productCategory: produceCategorySchema.optional(),
 });
 export type SaveUserInput = z.infer<typeof saveUserInputSchema>;
 
@@ -211,6 +207,8 @@ export function toSaveUserRpcArgs(input: SaveUserInput) {
     p_role: input.role,
     p_company_id: input.companyId,
     p_blocked_product_variety_ids: input.blockedProductVarietyIds,
+    // Left out of the request when not given, so the user keeps their category.
+    ...(input.productCategory === undefined ? {} : { p_product_category: input.productCategory }),
   };
 }
 

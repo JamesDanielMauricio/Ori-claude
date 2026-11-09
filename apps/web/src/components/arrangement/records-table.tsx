@@ -12,7 +12,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { hasChanges } from "@/lib/has-changes";
-import { blockDecimalKey, blockWheel, stripDecimal } from "@/lib/integer-input";
+import { blockWheel } from "@/lib/integer-input";
+import { limitToOneDecimal } from "@/lib/pallet-input";
 
 import { type FlatRecord } from "./board-data";
 import { type AllocationPatch } from "./customer-demand-board";
@@ -250,15 +251,15 @@ function ArrangementRecordRow({
       <TableCell>
         <input
           type="number"
-          step="1"
+          step="0.1"
           min={0}
+          inputMode="decimal"
           disabled={!editable}
           aria-label="כמות משטחים"
           className={`${inputClassName} w-24`}
           value={quantity}
-          onKeyDown={blockDecimalKey}
           onWheel={blockWheel}
-          onChange={(event) => setQuantity(stripDecimal(event.target.value))}
+          onChange={(event) => setQuantity(limitToOneDecimal(event.target.value))}
         />
       </TableCell>
       <TableCell>

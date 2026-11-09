@@ -14,6 +14,7 @@
 // save_arrangement_proposal (migration 0068): all or nothing, and only into
 // cells still empty.
 import { ARRANGEMENT_ERROR_CODES } from "@ori/domain/arrangement";
+import { floorToPalletStep, isPalletQuantity, roundPallets } from "@ori/shared/pallets";
 
 import { formatVarietyName } from "@/lib/variety-label";
 
@@ -55,7 +56,7 @@ export interface ResolvedProposal {
   /**
    * Lines left out because the day has nowhere to put them: that grower has
    * no lot of that product, that customer is not trading, or the quantity is
-   * not a whole number of pallets above zero.
+   * not a number of pallets above zero with at most one decimal place.
    */
   unplaceable: number;
   /**
@@ -82,7 +83,7 @@ function orderedPallets(orders: readonly BoardOrder<BoardSubmissionTime>[]): Map
       const pallets = Number(line.pallets_ordered);
       if (!(pallets > 0)) continue;
       const key = `${order.customer_company_id}${SEP}${line.product_varieties?.id ?? line.product_variety_id}`;
-      ordered.set(key, (ordered.get(key) ?? 0) + pallets);
+      ordered.set(key, roundPallets((ordered.get(key) ?? 0) + pallets));
     }
   }
   return ordered;
@@ -166,7 +167,7 @@ export function resolveProposal({
     const pallets = Number(record.quantity_pallets);
     if (varietyId && pallets > 0) {
       const key = `${ownerId}${SEP}${varietyId}`;
-      if (owed.has(key)) owed.set(key, (owed.get(key) ?? 0) - pallets);
+      if (owed.has(key)) owed.set(key, roundPallets((owed.get(key) ?? 0) - pallets));
     }
   }
 
@@ -184,8 +185,8 @@ export function resolveProposal({
   }> = [];
   for (const line of lines) {
     const pickLineId = pickLineByGrowerVariety.get(`${line.growerId}${SEP}${line.varietyId}`);
-    const wholePallets = Number.isInteger(line.quantity) && line.quantity > 0;
-    if (!pickLineId || !tradingCustomers.has(line.customerId) || !wholePallets) {
+    const placeable = isPalletQuantity(line.quantity) && line.quantity > 0;
+    if (!pickLineId || !tradingCustomers.has(line.customerId) || !placeable) {
       unplaceable += 1;
       continue;
     }
@@ -201,7 +202,7 @@ export function resolveProposal({
       heldToOrder += 1;
       continue;
     }
-    landed.push({ line, pickLineId, cell, key, quantity: line.quantity });
+    landed.push({ line, pickLineId, cell, key, quantity: roundPallets(line.quantity) });
   }
 
   // Held to the order: every number the distributor typed for the customer
@@ -212,17 +213,18 @@ export function resolveProposal({
   // refused for it until someone found the cell.
   for (const entry of landed) {
     if (entry.line.forOrder !== "suggested") {
-      owed.set(entry.key, (owed.get(entry.key) ?? 0) - entry.quantity);
+      owed.set(entry.key, roundPallets((owed.get(entry.key) ?? 0) - entry.quantity));
     }
   }
   for (const entry of landed) {
     if (entry.line.forOrder !== "suggested") continue;
-    const left = Math.max(0, Math.floor(owed.get(entry.key) ?? 0));
+    // To the tenth, as every quantity is (workbook Task 35).
+    const left = Math.max(0, floorToPalletStep(owed.get(entry.key) ?? 0));
     if (left < entry.quantity) {
       heldToOrder += 1;
       entry.quantity = left;
     }
-    owed.set(entry.key, left - entry.quantity);
+    owed.set(entry.key, roundPallets(left - entry.quantity));
   }
 
   // Keyed by cell so two lines for the same one become a single write. Saved
@@ -235,7 +237,7 @@ export function resolveProposal({
     byCell.set(entry.cell, {
       pickLineId: entry.pickLineId,
       customerId: entry.line.customerId,
-      quantity: (existing?.quantity ?? 0) + entry.quantity,
+      quantity: roundPallets((existing?.quantity ?? 0) + entry.quantity),
       ...(forOrder ? { forOrder: true } : {}),
     });
   }
@@ -287,9 +289,10 @@ export function lotOfPickLine(
  * the order they are saved in, and which of two cells is refused when a lot
  * runs short should not depend on which of them was last corrected.
  *
- * A quantity that is not a whole number of pallets changes nothing. The grid
- * cannot send one (see parseMatrixQuantity); this is what keeps a caller that
- * could from writing a line resolveProposal would only count as unplaceable.
+ * A quantity that is not a number of pallets with at most one decimal place
+ * changes nothing. The grid cannot send one (see parseMatrixQuantity); this is
+ * what keeps a caller that could from writing a line resolveProposal would
+ * only count as unplaceable.
  *
  * `forOrder` is whether the customer has ordered the product — the caller's
  * to say (see typeIntoProposal), and the only thing that decides it. What
@@ -302,7 +305,7 @@ export function setProposalCell(
   quantity: number,
   forOrder: boolean,
 ): ProposalLine[] {
-  if (!Number.isInteger(quantity) || quantity < 0) return lines;
+  if (!isPalletQuantity(quantity)) return lines;
 
   const isCell = (line: ProposalLine) =>
     line.growerId === cell.growerId &&
@@ -315,7 +318,7 @@ export function setProposalCell(
             growerId: cell.growerId,
             varietyId: cell.varietyId,
             customerId: cell.customerId,
-            quantity,
+            quantity: roundPallets(quantity),
             ...(forOrder ? { forOrder: "typed" as const } : {}),
           },
         ]

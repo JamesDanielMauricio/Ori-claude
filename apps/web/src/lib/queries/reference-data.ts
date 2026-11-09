@@ -2,6 +2,7 @@ import type { UserRole } from "@ori/shared/roles";
 import { queryOptions } from "@tanstack/react-query";
 
 import { fetchAllRows } from "@/lib/fetch-all-rows";
+import type { ProduceCategory } from "@/lib/produce-categories";
 import { createClient } from "@/lib/supabase/client";
 
 // Server reads behind the backoffice's reference-data screens (products,
@@ -52,13 +53,9 @@ export interface ProductVariety {
 export interface ProductFamily {
   id: string;
   name: string;
-  category: string | null;
+  // Fruit, vegetable or both (migration 0090).
+  category: ProduceCategory | null;
   image_url: string | null;
-}
-
-export interface PalletCap {
-  customerCompanyId: string;
-  palletCap: number;
 }
 
 // ---------------------------------------------------------------- companies
@@ -122,6 +119,9 @@ export interface ProfileRow {
   must_change_password: boolean;
   created_at: string;
   companies: { name: string } | null;
+  // A customer user's category (migration 0090): they see only that
+  // category's products and "both" ones. Null = everything.
+  product_category: ProduceCategory | null;
 }
 
 // One entry in the contact-person picker's directory.
@@ -193,37 +193,6 @@ export const referenceDataQueries = {
           .order("name");
         if (error) throw error;
         return data;
-      },
-    });
-  },
-
-  // Every variety's per-customer caps in ONE read, grouped client-side by
-  // variety. No longer shown on the Products screen — read only so a save
-  // sends each variety's existing caps back unchanged.
-  productCustomerCaps() {
-    return queryOptions({
-      queryKey: ["reference-data", "product-customer-caps-all"],
-      queryFn: async () => {
-        const rows = await fetchAllRows<{
-          product_variety_id: string;
-          customer_company_id: string;
-          pallet_cap: number;
-        }>((from, to) =>
-          createClient()
-            .from("product_customer_caps")
-            .select("product_variety_id, customer_company_id, pallet_cap")
-            .order("product_variety_id")
-            .order("customer_company_id")
-            .range(from, to),
-        );
-        const byVariety = new Map<string, PalletCap[]>();
-        for (const row of rows) {
-          const cap = { customerCompanyId: row.customer_company_id, palletCap: row.pallet_cap };
-          const list = byVariety.get(row.product_variety_id);
-          if (list) list.push(cap);
-          else byVariety.set(row.product_variety_id, [cap]);
-        }
-        return byVariety;
       },
     });
   },
@@ -338,7 +307,7 @@ export const referenceDataQueries = {
             // embed PostgREST used to infer on its own is ambiguous and
             // returns 300 — see auth-context.tsx's loadProfile for the fuller
             // note.
-            "user_id, display_name, role, company_id, phone_number, must_change_password, created_at, companies!company_id(name)",
+            "user_id, display_name, role, company_id, phone_number, must_change_password, created_at, product_category, companies!company_id(name)",
           )
           .order("display_name");
         if (error) throw error;

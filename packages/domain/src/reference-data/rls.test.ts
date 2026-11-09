@@ -24,10 +24,11 @@ import {
 // RLS coverage for every table this module added or changed policies on
 // (packages/db/migrations/0006_reference-data-rls.sql) — `companies` and
 // `profiles` self/backoffice policies are already covered in
-// ../auth/rls.test.ts; this file is specifically the four tables that got
-// policies for the first time here: product_families, grower_products,
-// product_customer_caps, and a transporter-typed `companies` row (the
-// existing companies tests only exercised the grower/generic-type case).
+// ../auth/rls.test.ts; this file is specifically the tables that got
+// policies for the first time here: product_families, grower_products, and a
+// transporter-typed `companies` row (the existing companies tests only
+// exercised the grower/generic-type case). The fourth, product_customer_caps,
+// was removed (migrations 0087, 0091).
 describe("reference-data Row Level Security", () => {
   const cleanupFns: Array<() => Promise<void>> = [];
 
@@ -118,57 +119,6 @@ describe("reference-data Row Level Security", () => {
       .select();
     expect(growerWrite.error).toBeNull();
     expect(growerWrite.data).toEqual([]);
-  });
-
-  it("product_customer_caps: a customer reads their own pallet caps, not another customer's", async () => {
-    const family = await createTestProductFamily();
-    cleanupFns.push(() => deleteTestProductFamily(family.id));
-    const product = await createTestProductVariety({ familyId: family.id });
-    cleanupFns.push(() => deleteTestProductVariety(product.id));
-
-    const ownCustomerCompany = await createTestCustomerCompany();
-    cleanupFns.push(() => deleteTestCompanyById(ownCustomerCompany.id));
-    const otherCustomerCompany = await createTestCustomerCompany();
-    cleanupFns.push(() => deleteTestCompanyById(otherCustomerCompany.id));
-
-    const customer = await createTestProfile({ companyId: ownCustomerCompany.id, role: "customer" });
-    cleanupFns.push(() => deleteTestUser(customer.userId));
-    const admin = await createTestProfile({ companyId: ownCustomerCompany.id, role: "backoffice" });
-    cleanupFns.push(() => deleteTestUser(admin.userId));
-    const adminClient = await signInTestUser(admin.email, admin.password);
-
-    const ownInsert = await adminClient
-      .from("product_customer_caps")
-      .insert({ product_variety_id: product.id, customer_company_id: ownCustomerCompany.id, pallet_cap: 5 });
-    expect(ownInsert.error).toBeNull();
-    const otherInsert = await adminClient
-      .from("product_customer_caps")
-      .insert({ product_variety_id: product.id, customer_company_id: otherCustomerCompany.id, pallet_cap: 9 });
-    expect(otherInsert.error).toBeNull();
-
-    const customerClient = await signInTestUser(customer.email, customer.password);
-
-    const ownRead = await customerClient
-      .from("product_customer_caps")
-      .select("pallet_cap")
-      .eq("customer_company_id", ownCustomerCompany.id);
-    expect(ownRead.error).toBeNull();
-    expect(ownRead.data).toEqual([{ pallet_cap: 5 }]);
-
-    const otherRead = await customerClient
-      .from("product_customer_caps")
-      .select("pallet_cap")
-      .eq("customer_company_id", otherCustomerCompany.id);
-    expect(otherRead.error).toBeNull();
-    expect(otherRead.data).toEqual([]);
-
-    const customerWrite = await customerClient
-      .from("product_customer_caps")
-      .update({ pallet_cap: 999 })
-      .eq("customer_company_id", ownCustomerCompany.id)
-      .select();
-    expect(customerWrite.error).toBeNull();
-    expect(customerWrite.data).toEqual([]);
   });
 
   it("companies: a transporter-typed row follows the same self-row-or-backoffice rule as any other type", async () => {

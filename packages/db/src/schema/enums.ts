@@ -66,6 +66,11 @@ export const dailyPickStatusEnum = pgEnum("daily_pick_status", [
   "closed",
 ]);
 
+// A product family's category, and a customer user's (migration 0090) —
+// Bubble's "Product Categories" option set: פרי, ירק, פרי / ירק. A customer
+// user set to fruit or vegetable sees only that category and "both".
+export const produceCategoryEnum = pgEnum("produce_category", ["fruit", "vegetable", "both"]);
+
 // A Daily Order's real reachable states — per the PRD's own state-machine
 // doc, the option set nominally lists five values (Open / Submitted /
 // Scheduled / Out for delivery / Received), but only Open and Submitted

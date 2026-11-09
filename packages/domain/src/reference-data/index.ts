@@ -14,7 +14,6 @@
 export {
   companyStatusSchema,
   packTypeSchema,
-  customerPalletCapSchema,
   saveGrowerInputSchema,
   toSaveGrowerRpcArgs,
   type SaveGrowerInput,

@@ -11,6 +11,7 @@ import { Icon } from "@/components/ui/icon";
 import { PageHeader } from "@/components/ui/page-header";
 import { useToast } from "@/components/ui/toast";
 import { hasChanges } from "@/lib/has-changes";
+import { PRODUCE_CATEGORY_LABEL } from "@/lib/produce-categories";
 import type { ProductFamily, ProductVariety } from "@/lib/queries/reference-data";
 
 import { DeleteFamilyDialog, DeleteVarietyDialog } from "./product-catalog/catalog-dialogs";
@@ -120,7 +121,7 @@ export function ProductCatalogScreen({
     () => new Set<string>(),
   );
 
-  const { familiesQuery, familyById, productsQuery, capsQuery } = useCatalogData();
+  const { familiesQuery, familyById, productsQuery } = useCatalogData();
 
   const editingRowId = editingId !== null && editingId !== NEW_ROW_ID ? editingId : null;
   const selected = productsQuery.data?.find((row) => row.id === editingRowId) ?? null;
@@ -219,7 +220,7 @@ export function ProductCatalogScreen({
   function handleEditRow(row: ProductVariety) {
     setEditingId(row.id);
     openFamily(row.family_id);
-    setForm(toFormState(row, capsQuery.data?.get(row.id) ?? []));
+    setForm(toFormState(row));
   }
 
   // Starts a draft variety already assigned to one family. The family is
@@ -250,7 +251,7 @@ export function ProductCatalogScreen({
   // so it must not light up the save button on an otherwise empty draft —
   // which it did when this compared against whichever family sorts first.
   const baselineForm = selected
-    ? toFormState(selected, capsQuery.data?.get(selected.id) ?? [])
+    ? toFormState(selected)
     : blankForm(form.familyId);
   const dirty = hasChanges(form, baselineForm);
 
@@ -326,9 +327,9 @@ export function ProductCatalogScreen({
 
   const toGroup = (family: ProductFamily): RecordTableGroup => ({
     id: family.id,
-    // The family's own name and category, so searching "פירות" finds a
+    // The family's own name and category, so searching "ירק" finds a
     // family whose varieties never mention the word.
-    searchText: `${family.name} ${family.category ?? ""}`,
+    searchText: `${family.name} ${family.category ? PRODUCE_CATEGORY_LABEL[family.category] : ""}`,
     header: (expanded) =>
       renderFamilyHeader(family, varietyCountByFamily.get(family.id) ?? 0, expanded),
     // Pressing anywhere on the family's row opens or closes it, not only the
@@ -451,23 +452,19 @@ export function ProductCatalogScreen({
           getGroupId: (row) => (row.id === editingId ? form.familyId : row.family_id),
           expandedIds: expandedFamilyIds,
         }}
-        loading={
-          extraLoading || productsQuery.isLoading || capsQuery.isLoading || familiesQuery.isLoading
-        }
-        // Families are the table's groups and caps are a column, so any of
-        // the three missing leaves a table that misreports the catalog.
+        loading={extraLoading || productsQuery.isLoading || familiesQuery.isLoading}
+        // Families are the table's groups, so either missing leaves a table
+        // that misreports the catalog.
         loadError={
           (productsQuery.isError && !productsQuery.data) ||
-          (capsQuery.isError && !capsQuery.data) ||
           (familiesQuery.isError && !familiesQuery.data)
             ? {
                 what: "קטלוג המוצרים",
                 onRetry: () => {
                   void productsQuery.refetch();
-                  void capsQuery.refetch();
                   void familiesQuery.refetch();
                 },
-                retrying: productsQuery.isFetching || capsQuery.isFetching || familiesQuery.isFetching,
+                retrying: productsQuery.isFetching || familiesQuery.isFetching,
               }
             : null
         }

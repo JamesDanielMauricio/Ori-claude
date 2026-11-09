@@ -698,7 +698,7 @@ describe("arrangement module", () => {
     expect(await recordsOn(pickProductId)).toEqual([]);
   }, 30000);
 
-  it("save_arrangement_proposal refuses an allocation that is not a pick line, a customer and a whole number of pallets above zero, naming every one by position, and saves nothing", async () => {
+  it("save_arrangement_proposal refuses an allocation that is not a pick line, a customer and a number of pallets above zero with at most one decimal place, naming every one by position, and saves nothing", async () => {
     const { day, pickProductId, customer } = await setUpDayWithSupplyAndDemand(5, 3);
     const cell = {
       dailyPickProductId: pickProductId,
@@ -710,7 +710,7 @@ describe("arrangement module", () => {
       cell,
       { ...cell, quantityPallets: 0 },
       { ...cell, quantityPallets: -2 },
-      { ...cell, quantityPallets: 1.5 },
+      { ...cell, quantityPallets: 1.55 },
       { ...cell, quantityPallets: "2" },
       { dailyPickProductId: pickProductId, customerCompanyId: customer.id },
       { ...cell, dailyPickProductId: "not-a-uuid" },
@@ -730,6 +730,43 @@ describe("arrangement module", () => {
       indexes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     });
     expect(await recordsOn(pickProductId)).toEqual([]);
+  }, 30000);
+
+  // Workbook Task 35 (migration 0085): an arrangement may be part of a
+  // pallet, to one decimal place — by a single cell and by a proposal alike.
+  it("arranges part of a pallet to one decimal place and refuses a finer one, from arrange_to_customer and save_arrangement_proposal alike", async () => {
+    const second = await customerWhoOrdersNothing();
+    const { day, pickProductId, customer } = await setUpDayWithSupplyAndDemand(5, 3);
+
+    const finer = await admin.client.rpc("arrange_to_customer", {
+      p_daily_pick_product_id: pickProductId,
+      p_customer_company_id: customer.id,
+      p_quantity_pallets: 0.45,
+    });
+    expect(finer.error?.code).toBe(ARRANGEMENT_ERROR_CODES.INVALID_INPUT);
+    expect(await recordsOn(pickProductId)).toEqual([]);
+
+    const tenth = await admin.client.rpc("arrange_to_customer", {
+      p_daily_pick_product_id: pickProductId,
+      p_customer_company_id: customer.id,
+      p_quantity_pallets: 0.4,
+    });
+    expect(tenth.error).toBeNull();
+
+    const finerProposal = await saveRaw(day.id, [
+      { dailyPickProductId: pickProductId, customerCompanyId: second.id, quantityPallets: 1.55 },
+    ]);
+    expect(finerProposal.error?.code).toBe(ARRANGEMENT_ERROR_CODES.INVALID_INPUT);
+
+    const proposal = await saveRaw(day.id, [
+      { dailyPickProductId: pickProductId, customerCompanyId: second.id, quantityPallets: 1.5 },
+    ]);
+    expect(proposal.error).toBeNull();
+
+    const quantities = (await recordsOn(pickProductId))
+      .map((record) => Number(record.quantity_pallets))
+      .sort((a, b) => a - b);
+    expect(quantities).toEqual([0.4, 1.5]);
   }, 30000);
 
   it("save_arrangement_proposal refuses allocations that are not a list, and saves nothing", async () => {
@@ -1589,5 +1626,27 @@ describe("arrangement module", () => {
     expect((await admin.client.rpc("close_shop")).error).toBeNull();
     expect((await admin.client.rpc("close_arrangement")).error).toBeNull();
     expect(await sales()).toHaveLength(2);
+  }, 30000);
+
+  // Migration 0089: a closed pick (the truck icon) blocks arranging until it
+  // is reopened.
+  it("a closed pick refuses arranging from it (migration 0089), and reopening it lets arranging go on", async () => {
+    const { pickProductId, customer } = await setUpDayWithSupplyAndDemand(5, 5);
+    const [line] = await db.select({ pickId: dailyPickProducts.dailyPickId }).from(dailyPickProducts).where(eq(dailyPickProducts.id, pickProductId));
+    const arrange = () =>
+      admin.client.rpc("arrange_to_customer", {
+        p_daily_pick_product_id: pickProductId,
+        p_customer_company_id: customer.id,
+        p_quantity_pallets: 1,
+      });
+
+    expect((await admin.client.rpc("set_pick_closed", { p_daily_pick_id: line!.pickId, p_closed: true })).error).toBeNull();
+    const refused = await arrange();
+    expect(refused.error?.code).toBe(ARRANGEMENT_ERROR_CODES.PICK_CLOSED);
+    expect(await recordsOn(pickProductId)).toEqual([]);
+
+    expect((await admin.client.rpc("set_pick_closed", { p_daily_pick_id: line!.pickId, p_closed: false })).error).toBeNull();
+    expect((await arrange()).error).toBeNull();
+    expect(await recordsOn(pickProductId)).toHaveLength(1);
   }, 30000);
 });

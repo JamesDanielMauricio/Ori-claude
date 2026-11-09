@@ -218,7 +218,9 @@ export function dayToPropose({
         parsePallets(line.pallets_picked) +
         parsePallets(line.leftover_pallets) -
         (takenOff.get(line.id) ?? 0);
-      lots.push({ ...lot, available: Math.max(0, free) });
+      // A closed pick (the truck icon) is not arranged from any more —
+      // migration 0089 refuses it — so nothing is proposed off it.
+      lots.push({ ...lot, available: pick.status === "closed" ? 0 : Math.max(0, free) });
     }
   }
 

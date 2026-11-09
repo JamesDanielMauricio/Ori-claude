@@ -48,8 +48,12 @@ export interface AuthDecisionInput {
   role: UserRole | undefined;
   loading: boolean;
   hasUser: boolean;
-  profile: Pick<AuthProfile, "role" | "mustChangePassword"> | null;
+  profile: Pick<AuthProfile, "role" | "mustChangePassword" | "accountActive"> | null;
 }
+
+// Where a user of an inactive company is sent: the sign-in page, which reads
+// the flag and shows INACTIVE_ACCOUNT_MESSAGE.
+export const INACTIVE_ACCOUNT_LOGIN = "/login?inactive=1";
 
 // Extracted as a pure function so the ordering below can be tested without a
 // router, a context, or a network — see require-role.test.ts. The order of
@@ -73,6 +77,19 @@ export function resolveAuthDecision({
   // sensible to land, so both go to /login.
   if (!hasUser || !profile) {
     return { kind: "redirect", to: "/login", signOut: false };
+  }
+
+  // A user of an inactive company (migration 0088) is sent to sign-in, from
+  // every area — /profile included — and told why. Before the unroled-area
+  // exit below for that reason: the database already refuses them
+  // everything, so any screen they reached would only fail to load.
+  //
+  // The sign-in page signs them out itself (login.tsx), once it is showing
+  // the reason. Signed out from here, the session ended while that page was
+  // still loading, this guard ran again on a user who was now signed out and
+  // sent them to a plain /login instead — the reason lost on the way.
+  if (!profile.accountActive) {
+    return { kind: "redirect", to: INACTIVE_ACCOUNT_LOGIN, signOut: false };
   }
 
   // Unroled areas (/profile) stop here: the old requireSession() checked

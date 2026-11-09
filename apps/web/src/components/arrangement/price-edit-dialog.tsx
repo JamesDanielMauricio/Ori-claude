@@ -45,8 +45,6 @@ export function PriceEditDialog({
 
   const varietyQuery = useQuery(arrangementQueries.priceVariety(varietyId));
 
-  const capsQuery = useQuery(arrangementQueries.priceCaps(varietyId));
-
   // Seeded once per variety, not on every change of varietyQuery.data.
   //
   // Keyed on the data object, this re-ran on any refetch — and React Query
@@ -94,14 +92,9 @@ export function PriceEditDialog({
   const saveMutation = useMutation({
     mutationFn: async () => {
       const row = varietyQuery.data;
-      const caps = capsQuery.data;
-      // save_product REPLACES the variety's per-customer caps with whatever
-      // list it is given, deleting any cap left out. Caps that haven't loaded
-      // (still fetching, or the read failed) are unknown, not empty — sending
-      // [] in their place would silently delete every cap on this product.
-      // The save button is disabled until both reads land; this is the
-      // backstop behind it.
-      if (!row || !caps) throw new Error("נתוני המוצר עדיין לא נטענו");
+      // The save button is disabled until the product has loaded; this is
+      // the backstop behind it.
+      if (!row) throw new Error("נתוני המוצר עדיין לא נטענו");
       const input = saveProductInputSchema.parse({
         id: row.id,
         familyId: row.family_id,
@@ -119,7 +112,6 @@ export function PriceEditDialog({
         // noOverbooking/isSeasonalAvailable above.
         numberOfOrdersPerCustomer: row.number_of_orders_per_customer,
         expectedVersion: row.version,
-        customerPalletCaps: caps,
       });
       const { error } = await supabase.rpc("save_product", toSaveProductRpcArgs(input));
       if (error) throw error;
@@ -143,16 +135,13 @@ export function PriceEditDialog({
 
   return (
     <Dialog open={!!varietyId} onClose={onClose} title={title}>
-      {varietyQuery.isLoading || capsQuery.isLoading ? (
+      {varietyQuery.isLoading ? (
         <p className="text-sm text-ink-muted">טוען…</p>
-      ) : varietyQuery.isError || capsQuery.isError ? (
+      ) : varietyQuery.isError ? (
         <QueryError
           what="נתוני המוצר"
-          onRetry={() => {
-            void varietyQuery.refetch();
-            void capsQuery.refetch();
-          }}
-          retrying={varietyQuery.isFetching || capsQuery.isFetching}
+          onRetry={() => void varietyQuery.refetch()}
+          retrying={varietyQuery.isFetching}
         />
       ) : (
         <div className="flex flex-col gap-4">
@@ -206,7 +195,7 @@ export function PriceEditDialog({
             <Button
               type="button"
               onClick={() => saveMutation.mutate()}
-              disabled={saveMutation.isPending || !varietyQuery.data || !capsQuery.data}
+              disabled={saveMutation.isPending || !varietyQuery.data}
             >
               {saveMutation.isPending ? "שומר…" : "שמור"}
             </Button>

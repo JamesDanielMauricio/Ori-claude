@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { CatalogRow } from "./catalog-grouping";
-import { mergeServerRows, toDraft, toSubmittedLines } from "./order-draft";
+import {
+  linesOverLimit,
+  mergeServerRows,
+  orderLimit,
+  toDraft,
+  toSubmittedLines,
+} from "./order-draft";
 
 // The situation behind these tests: a customer has their order screen open
 // and has started changing one line, while the distributor — ordering on
@@ -64,5 +70,62 @@ describe("mergeServerRows", () => {
   it("with nothing edited, is simply the server's order", () => {
     const fresh = [row("X", 1), row("Y", 4), row("Z", 0)];
     expect(mergeServerRows(toDraft(loaded), fresh, new Set())).toEqual(toDraft(fresh));
+  });
+});
+
+// Workbook Task 35: the customer types a quantity, in steps of 0.1, and is
+// shown the most they can have on the line beside the box.
+describe("orderLimit", () => {
+  const limited = (max: number, saved: number): CatalogRow => ({
+    ...row("X", saved),
+    max_orderable_for_customer: max,
+  });
+
+  it("is what the stock still allows the customer", () => {
+    expect(orderLimit(limited(2.6, 0))).toBe(2.6);
+    expect(orderLimit(limited(6, 1))).toBe(6);
+  });
+
+  it("is cut down to the 0.1 steps a box can hold", () => {
+    expect(orderLimit(limited(2.65, 0))).toBe(2.6);
+  });
+
+  it("never drops below what the customer already has saved", () => {
+    // Stock fell to 1 after they saved 3: they may keep 3, or lower it.
+    expect(orderLimit(limited(1, 3))).toBe(3);
+  });
+
+  it("is zero, not negative, when nothing is left", () => {
+    expect(orderLimit(limited(-2, 0))).toBe(0);
+  });
+});
+
+describe("linesOverLimit", () => {
+  const rows = [
+    { ...row("X", 0), max_orderable_for_customer: 2.6 },
+    { ...row("Y", 3), max_orderable_for_customer: 1 },
+  ];
+
+  it("finds a line typed above its limit", () => {
+    const draft = { ...toDraft(rows), X: { pallets: "2.7", comment: "" } };
+    expect(linesOverLimit(rows, draft).map((r) => r.variety_id)).toEqual(["X"]);
+  });
+
+  it("lets a line sit exactly on its limit, and a saved line above the stock stay", () => {
+    const draft = { ...toDraft(rows), X: { pallets: "2.6", comment: "" } };
+    expect(linesOverLimit(rows, draft)).toEqual([]);
+  });
+
+  it("holds a saved line above the stock to what was saved", () => {
+    const draft = { ...toDraft(rows), Y: { pallets: "3.1", comment: "" } };
+    expect(linesOverLimit(rows, draft).map((r) => r.variety_id)).toEqual(["Y"]);
+  });
+});
+
+describe("toSubmittedLines with tenths", () => {
+  it("sends what was typed, a trailing point included", () => {
+    const rows = [row("X", 0), row("Y", 0)];
+    const draft = { X: { pallets: "0.4", comment: "" }, Y: { pallets: "2.", comment: "" } };
+    expect(toSubmittedLines(rows, draft).map((l) => l.palletsOrdered)).toEqual([0.4, 2]);
   });
 });

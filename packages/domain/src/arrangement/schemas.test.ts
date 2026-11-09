@@ -13,7 +13,7 @@ const CUSTOMER = "3bd16d29-d09f-4f9f-9105-79f276ca6921";
 const OTHER_CUSTOMER = "01d1f248-eeb8-4ee2-8ab8-a260e32d562f";
 
 describe("saveArrangementProposalInputSchema", () => {
-  it("accepts a day and its cells, in whole pallets above zero", () => {
+  it("accepts a day and its cells, in pallets above zero", () => {
     const parsed = saveArrangementProposalInputSchema.parse({
       tradingDayId: DAY,
       allocations: [
@@ -34,7 +34,28 @@ describe("saveArrangementProposalInputSchema", () => {
     });
   });
 
-  it.each([0, -1, 1.5])("refuses %s pallets", (quantityPallets) => {
+  // Task 35: a tenth of a pallet is a quantity; a hundredth is not.
+  it.each([0.1, 0.4, 2.5])("accepts %s pallets", (quantityPallets) => {
+    const parsed = saveArrangementProposalInputSchema.parse({
+      tradingDayId: DAY,
+      allocations: [{ dailyPickProductId: LOT, customerCompanyId: CUSTOMER, quantityPallets }],
+    });
+
+    expect(parsed.allocations[0]?.quantityPallets).toBe(quantityPallets);
+  });
+
+  it("sends a sum of tenths without its rounding noise", () => {
+    const parsed = saveArrangementProposalInputSchema.parse({
+      tradingDayId: DAY,
+      allocations: [
+        { dailyPickProductId: LOT, customerCompanyId: CUSTOMER, quantityPallets: 0.1 + 0.2 },
+      ],
+    });
+
+    expect(parsed.allocations[0]?.quantityPallets).toBe(0.3);
+  });
+
+  it.each([0, -1, 0.15, 1.55])("refuses %s pallets", (quantityPallets) => {
     const result = saveArrangementProposalInputSchema.safeParse({
       tradingDayId: DAY,
       allocations: [{ dailyPickProductId: LOT, customerCompanyId: CUSTOMER, quantityPallets }],

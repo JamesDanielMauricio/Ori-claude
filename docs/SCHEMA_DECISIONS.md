@@ -5,7 +5,96 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-09 (latest) — Release workbook tasks 24–29, 37 and 20: `0080`–`0084`
+## 2026-11-09 (latest) — Workbook Tasks 30 and 32, James's rulings: `0086`–`0091`
+
+James's answers (2026-11-09): prices hidden from growers; the per-customer cap removed; an inactive
+company's users lose access and its messages stop; no recent-sign-in rule for a password change;
+backups and exports owned by distributors/admins; staff may still edit orders after the shop closes
+(0071 stays); a closed pick blocks arranging; customers see only their category; no alert when a
+company is added mid-day; an inactive grower's data for the day is deleted; and Ori's way kept for
+arranging above the order, growers and pickup time, and ending a day with no shop.
+
+- **Growers no longer read prices (`0086`, then `0091`).** Row-level security works on whole rows,
+  and growers share the database role with staff, so the price columns cannot be cut out of the rows
+  a grower reads. Growers instead stop reading `product_varieties` at all (the step 0056 took for
+  customers): `get_pick_lines` gives a pick's lines with names and no price, for that grower or
+  staff. Two steps because the grower screen deployed today still reads the table: 0086 only adds
+  the function; **0091 closes the table to growers and is run after the web app is live.**
+- **The per-customer cap is removed (`0087`, then `0091`).** Nothing ever read
+  `product_customer_caps`. `save_product` stops writing it and keeps its last argument as optional and
+  ignored, so the Products screen deployed today keeps saving; 0091 drops the table once the new web
+  app is live (today's screens still read it).
+- **Making a company inactive (`0088`).** `current_role()` and `current_company_id()` return nothing
+  for a user of an inactive company, so every rule and privileged function refuses them; staff are
+  exempt, so a mistaken change to the office's own company cannot lock it out. `my_account_is_active()`
+  lets the app sign such a user out with the reason. A message queued for an inactive company is
+  skipped at once, and its waiting messages are skipped when it is made inactive — by trigger, so
+  the WhatsApp sender needs no redeploy. `sync_grower_picks` (every grower save) deletes an inactive
+  grower's pick for the open day, with what was arranged from it; made active again, the grower gets
+  a new pick with its leftovers carried in, as before.
+- **A closed pick blocks arranging (`0089`).** One trigger on `arrangement_records` refuses adding,
+  re-sizing or removing an allocation of a closed pick (code P0010, Hebrew message); a price change,
+  the importer and cascaded deletes (a discarded day, an inactive grower) are not refused. The grid
+  shows a closed pick's cells read-only and "הצע סידור" proposes nothing off it.
+- **Customer categories (`0090`).** Bubble's option set — פרי, ירק, פרי / ירק — becomes
+  `produce_category`; `product_families.category` (free text until now) takes it, the old text read
+  into it. A customer user's own category (`profiles.product_category`, Bubble's User field — the
+  Company field of that name is empty in Bubble) limits their shop to that category and "both";
+  staff lists are unchanged. One difference from Bubble, on purpose: a product already on the
+  customer's order with pallets stays visible to them, because the order screen sends back only the
+  lines it shows and `submit_order` removes the rest — hiding it would delete it on their next save.
+  `save_user` takes the category as an optional argument (left out = kept).
+
+**How it was checked.** All six on a copy built from every migration (PostgreSQL 17 in WASM): 55
+checks, including run-twice. A whole trading day replayed with and without them (0091 included):
+identical, every table and all 89 messages. CI tests added for the closed pick, the categories and
+the inactive company; the e2e grower test covers growers reading their lines through the function.
+
+---
+
+## 2026-11-09 — Part-pallet orders and arrangements, to one decimal place (`0085`)
+
+Workbook Task 35, the client's request of 4 November. James's decision (2026-11-09): the
+customer's quantity dropdown becomes a typed number, with the most they can order at that moment
+shown beside it.
+
+- **What a save may hold.** Order lines (`daily_order_products.pallets_ordered`) and arrangements
+  (`arrangement_records.quantity_pallets`) take any number of pallets with at most one decimal
+  place — 0.4, 2.5, not 0.14. The columns already kept two decimals (`numeric(10,2)`), so storage
+  did not change. A trigger on each of the two tables refuses a second decimal place on a save by
+  a signed-in user, when the quantity changes: one trigger per table rather than a check inside
+  each writer, so `submit_order`, `arrange_to_customer`, the arrangement-record functions and
+  `save_arrangement_proposal` are all covered without being restated. The importer and migrations
+  run as the database owner and are not checked, so Bubble's history imports as it is; values
+  already stored are left alone. The same rule is `packages/shared/src/pallets.ts`, used by the
+  screens and the zod schemas.
+- **`save_arrangement_proposal`** (`0075`) refused anything but whole pallets; it now takes one
+  decimal place. Its body is otherwise `0075`'s.
+- **Messages** write quantities without trailing zeros (`trim_scale`): "0.4 משטחים" and "3 משטחים",
+  where they were "0.40" and "3.00". `compose_order_details_text` is otherwise `0083`'s.
+- **The customer's limit**, shown beside the box, is the higher of what the stock still allows them
+  (`max_orderable_for_customer`, cut down to tenths) and what they already have saved — a saved
+  quantity stays theirs when stock drops, since `0068` holds only an increase to the limit. A send
+  with a line above it is stopped on the screen, naming the lines; the server's check is unchanged.
+  Staff ordering on a customer's behalf see no limit, as before.
+- **Auto-arrange ("הצע סידור")** counts in tenths. A part-pallet order is filled exactly when there
+  is enough; in a shortage the owner's rounds stay one pallet each, a part-pallet order gets its part
+  in the first round, and the last of the stock goes to the next in line even when it is part of a
+  pallet. A day of whole pallets comes out as before, pallet for pallet: every existing engine test
+  passes unchanged except the four that pinned "whole pallets only".
+- **Not changed (decision D18):** picks and leftovers stay whole on the screens until the client
+  says otherwise. A leftover can still come out fractional at the end of a day on which part of a
+  pallet was sold.
+
+**How it was checked.** `0085` on a copy built from every migration (PostgreSQL 17 in WASM): 26
+checks, including the old behaviour before it (0.14 stored, a 0.4 proposal refused). A whole trading
+day replayed with and without `0085`: identical. The real built app in Chromium against that copy:
+the limit shown and turning red when passed, the send stopped, 0.45 cut to 0.4 as it is typed, a
+0.5 order sent, saved and read back, and 0.4 typed into the arrangement grid saved. CI tests added.
+
+---
+
+## 2026-11-09 — Release workbook tasks 24–29, 37 and 20: `0080`–`0084`
 
 James asked for "the rest" of the release workbook, without over-engineering. His decisions
 (2026-11-09): Bubble stays live until a later switch-over (so the final import is still ahead);

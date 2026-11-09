@@ -1,3 +1,4 @@
+import { isPalletQuantity, PALLET_QUANTITY_MESSAGE, roundPallets } from "@ori/shared/pallets";
 import { z } from "zod";
 
 // One schema + `toRpcArgs` mapper per arrangement Postgres function
@@ -8,11 +9,19 @@ import { z } from "zod";
 // surface (create/update/delete a single arrangement record, arrange one
 // cell, and save a whole proposal at once).
 
+// An arrangement quantity: above zero, at most one decimal place — 0.4, not
+// 0.14 (workbook Task 35; the database refuses the same, migration 0085).
+// Rounded on the way out, as the order line is (customer/schemas.ts).
+const arrangedPalletsSchema = z
+  .number()
+  .positive()
+  .refine(isPalletQuantity, PALLET_QUANTITY_MESSAGE)
+  .transform(roundPallets);
+
 export const createArrangementRecordInputSchema = z.object({
   dailyPickProductId: z.string().uuid(),
   dailyOrderProductId: z.string().uuid(),
-  // Pallets are always whole units — never a fractional pallet.
-  quantityPallets: z.number().int().positive(),
+  quantityPallets: arrangedPalletsSchema,
   price: z.number().nonnegative().nullable().optional(),
   priceType: z.string().nullable().optional(),
 });
@@ -30,7 +39,7 @@ export function toCreateArrangementRecordRpcArgs(input: CreateArrangementRecordI
 
 export const updateArrangementRecordInputSchema = z.object({
   id: z.string().uuid(),
-  quantityPallets: z.number().int().positive(),
+  quantityPallets: arrangedPalletsSchema,
   price: z.number().nonnegative().nullable().optional(),
   priceType: z.string().nullable().optional(),
 });
@@ -56,7 +65,7 @@ export function toUpdateArrangementRecordRpcArgs(input: UpdateArrangementRecordI
 export const arrangeToCustomerInputSchema = z.object({
   dailyPickProductId: z.string().uuid(),
   customerCompanyId: z.string().uuid(),
-  quantityPallets: z.number().int().positive(),
+  quantityPallets: arrangedPalletsSchema,
   price: z.number().nonnegative().nullable().optional(),
   priceType: z.string().nullable().optional(),
 });
@@ -95,7 +104,7 @@ export function toDeleteArrangementRecordRpcArgs(input: DeleteArrangementRecordI
 const proposalAllocationSchema = z.object({
   dailyPickProductId: z.string().uuid(),
   customerCompanyId: z.string().uuid(),
-  quantityPallets: z.number().int().positive(),
+  quantityPallets: arrangedPalletsSchema,
   // The cell is meant to fill the customer's order (the engine suggested it,
   // or the distributor typed it for a customer who had ordered the product)
   // rather than to push stock to them: the function refuses it if that order
@@ -142,4 +151,6 @@ export const ARRANGEMENT_ERROR_CODES = {
   OVER_ALLOCATION: "P0009",
   /** save_arrangement_proposal (0068): a cell of the proposal already holds an allocation — filled after the proposal was read. The error's DETAIL lists every such cell. */
   CONFLICT: "P0006",
+  /** The allocation is on a line of a closed pick (the truck icon): adding, re-sizing or removing it is refused until the pick is reopened (migration 0089). Its message is Hebrew, shown as it is. */
+  PICK_CLOSED: "P0010",
 } as const;

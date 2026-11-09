@@ -8,8 +8,10 @@ import {
   dailyShops,
   notificationOutbox,
   orderSubmissionLogs,
+  productFamilies,
   productVarieties,
   profileBlockedProducts,
+  profiles,
 } from "@ori/db/schema";
 import type { Database } from "@ori/db/supabase-types";
 import {
@@ -28,7 +30,12 @@ import {
   deleteTestTradingDay,
 } from "@ori/domain/lifecycle-engine/testing";
 import { toSaveCustomerRpcArgs } from "@ori/domain/reference-data";
-import { createTestProductVariety, deleteTestProductVariety } from "@ori/domain/reference-data/testing";
+import {
+  createTestProductFamily,
+  createTestProductVariety,
+  deleteTestProductFamily,
+  deleteTestProductVariety,
+} from "@ori/domain/reference-data/testing";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { and, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -375,6 +382,88 @@ describe("customer ordering module", () => {
       is_orderable: true,
       max_orderable_for_customer: 4,
     });
+  }, 45000);
+
+  // Workbook Task 35 (migration 0085): a customer may order part of a
+  // pallet, to one decimal place, and nothing finer.
+  // Migration 0090: a customer user set to a category sees only that
+  // category's families and the "both" ones; staff see everything.
+  it("get_orderable_catalog_for_customer shows a customer user only their category and both (migration 0090), and staff everything", async () => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const fruitFamily = await createTestProductFamily();
+    cleanupFns.push(() => deleteTestProductFamily(fruitFamily.id));
+    const fruit = await createTestProductVariety({ familyId: fruitFamily.id });
+    cleanupFns.push(() => deleteTestProductVariety(fruit.id));
+    await db.update(productFamilies).set({ category: "vegetable" }).where(eq(productFamilies.id, grower.familyId));
+    await db.update(productFamilies).set({ category: "fruit" }).where(eq(productFamilies.id, fruitFamily.id));
+
+    const day = await createOpenTestDay(admin.userId);
+    const pick = await pickLine(day.id, grower.companyId, grower.varietyId, 10);
+    await db.insert(dailyPickProducts).values({ dailyPickId: pick.id, productVarietyId: fruit.id, palletsPicked: "10" });
+    const customer = await createTestCustomer(day.id);
+    const client = await signedInCustomer(customer.companyId);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+    await db.update(profiles).set({ productCategory: "vegetable" }).where(eq(profiles.companyId, customer.companyId));
+
+    const own = await client.rpc("get_orderable_catalog_for_customer", toOrderableCatalogRpcArgs({ tradingDayId: day.id }));
+    expect(own.error).toBeNull();
+    const ownVarieties = (own.data ?? []).map((row) => row.variety_id);
+    expect(ownVarieties).toContain(grower.varietyId);
+    expect(ownVarieties).not.toContain(fruit.id);
+
+    const staff = await admin.client.rpc(
+      "get_orderable_catalog_for_customer",
+      toOrderableCatalogRpcArgs({ tradingDayId: day.id, customerCompanyId: customer.companyId }),
+    );
+    expect(staff.error).toBeNull();
+    expect((staff.data ?? []).map((row) => row.variety_id)).toEqual(expect.arrayContaining([grower.varietyId, fruit.id]));
+  }, 45000);
+
+  // Migration 0088: a user of an inactive company is refused everything, and
+  // the app can tell them why.
+  it("a user of an inactive company cannot open the shop, and reads as inactive (migration 0088)", async () => {
+    const day = await createOpenTestDay(admin.userId);
+    const customer = await createTestCustomer(day.id);
+    const client = await signedInCustomer(customer.companyId);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    expect((await client.rpc("my_account_is_active")).data).toBe(true);
+    await db.update(companies).set({ status: "inactive" }).where(eq(companies.id, customer.companyId));
+    expect((await client.rpc("my_account_is_active")).data).toBe(false);
+    const refused = await client.rpc("get_orderable_catalog_for_customer", toOrderableCatalogRpcArgs({ tradingDayId: day.id }));
+    expect(refused.error?.code).toBe(CUSTOMER_ERROR_CODES.FORBIDDEN);
+  }, 45000);
+
+  it("submit_order takes 0.4 of a pallet and refuses 0.14, changing nothing", async () => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const day = await createOpenTestDay(admin.userId);
+    await pickLine(day.id, grower.companyId, grower.varietyId, 20);
+    const customer = await createTestCustomer(day.id);
+    const client = await signedInCustomer(customer.companyId);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    const tenth = await client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({
+        tradingDayId: day.id,
+        lines: [{ productVarietyId: grower.varietyId, palletsOrdered: 0.4, comment: null }],
+      }),
+    );
+    expect(tenth.error).toBeNull();
+    const order = await getDailyOrderForCustomer(day.id, customer.companyId);
+    expect(await getOrderProductLine(order!.id, grower.varietyId)).toMatchObject({ palletsOrdered: "0.40" });
+
+    const finer = await client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({
+        tradingDayId: day.id,
+        lines: [{ productVarietyId: grower.varietyId, palletsOrdered: 0.14, comment: null }],
+      }),
+    );
+    expect(finer.error?.code).toBe(CUSTOMER_ERROR_CODES.INVALID_INPUT);
+    expect(await getOrderProductLine(order!.id, grower.varietyId)).toMatchObject({ palletsOrdered: "0.40" });
   }, 45000);
 
   it("submit_order is one transaction — upserts, prunes lines omitted from the new submission, stamps submission, and logs exactly one audit row per call", async () => {

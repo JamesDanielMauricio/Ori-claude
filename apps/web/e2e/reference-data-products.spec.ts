@@ -158,7 +158,8 @@ test.describe("Backoffice — Products", () => {
     const familyName = `משפחת E2E ${randomUUID()}`;
     await page.getByRole("button", { name: "משפחה חדשה" }).click();
     await page.getByLabel("שם המשפחה").fill(familyName);
-    await page.getByLabel("קטגוריית המשפחה").fill("ירק");
+    // One of Bubble's three categories, picked rather than typed (migration 0090).
+    await chooseOption(page.getByRole("combobox", { name: "קטגוריית המשפחה" }), "ירק");
     await page.getByRole("button", { name: "שמור משפחה" }).click();
     // Registered even though the test deletes it through the UI below: if
     // an assertion fails first, the row must not outlive the run.
