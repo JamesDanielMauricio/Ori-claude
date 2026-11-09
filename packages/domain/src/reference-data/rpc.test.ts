@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 
+import { db } from "@ori/db";
+import { productVarieties } from "@ori/db/schema";
+import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createTestCompany, createTestProfile, deleteTestCompany, deleteTestUser, runCleanup, signInTestUser } from "../auth/test-helpers";
@@ -410,12 +413,22 @@ describe("reference-data save functions", () => {
     expect(result.error).not.toBeNull();
     expect(result.error?.message).toMatch(/FORBIDDEN/);
 
-    const { data: unchanged } = await growerClient
-      .from("product_varieties")
-      .select("name, version")
-      .eq("id", product.id)
-      .single();
+    // Read back with the database's own rights: a grower can no longer read
+    // product_varieties at all (migration 0091 — the selling prices are hidden
+    // from growers), so their own session would see nothing here.
+    const [unchanged] = await db
+      .select({ name: productVarieties.name, version: productVarieties.version })
+      .from(productVarieties)
+      .where(eq(productVarieties.id, product.id));
     expect(unchanged).toMatchObject({ name: product.name, version: 1 });
+
+    // ...which is itself the rule: the grower reads no product, so no price.
+    const { data: visibleToGrower, error: readError } = await growerClient
+      .from("product_varieties")
+      .select("id, price")
+      .eq("id", product.id);
+    expect(readError).toBeNull();
+    expect(visibleToGrower).toEqual([]);
   });
 
   // set_customer_score (migration 0067). Who may NOT see or set a score is
