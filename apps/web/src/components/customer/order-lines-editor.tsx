@@ -7,13 +7,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 
 import { ActionBar } from "@/components/reference-data/action-bar";
+import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
-import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
+import { optimisticUpdate } from "@/lib/optimistic-mutation";
 import { customerQueries } from "@/lib/queries/customer";
 import { tradingDayQueries } from "@/lib/queries/trading-day";
 import { createClient } from "@/lib/supabase/client";
@@ -30,6 +31,8 @@ import {
 import {
   linesOverLimit,
   mergeServerRows,
+  orderCommentChanged,
+  orderCommentToSend,
   orderLimit,
   toDraft,
   toSubmittedLines,
@@ -134,6 +137,22 @@ function OrderLinesEditorBody({
 
   const catalogQuery = useQuery(catalogOptions);
 
+  // The comment on the whole order, "הערה כללית" (migration 0093). Its own
+  // small read, so every host — the customer's screen, בשם לקוח and the
+  // board's pencil — gets it without passing it in. Kept like the lines: a
+  // refetch re-seeds it only while this person hasn't edited it.
+  const commentOptions = customerQueries.orderComment(tradingDayId, customerCompanyId);
+  const commentQueryKey = commentOptions.queryKey;
+  const commentQuery = useQuery(commentOptions);
+  const [commentDraft, setCommentDraft] = useState("");
+  const commentEdited = useRef(false);
+  const [orderCommentOpen, setOrderCommentOpen] = useState(false);
+
+  useEffect(() => {
+    if (commentEdited.current) return;
+    setCommentDraft(commentQuery.data?.comment ?? "");
+  }, [commentQuery.data]);
+
   // Keeps the draft tracking the server without clobbering typing in
   // progress: every refetch re-seeds the lines this person has NOT edited
   // and keeps the ones they have (mergeServerRows). The live updates
@@ -233,6 +252,15 @@ function OrderLinesEditorBody({
         : row;
     });
   });
+  // The order comment's own patch, for the same reason. Only once the stored
+  // comment has loaded — before that nothing is sent for it, so nothing
+  // changes.
+  const commentOptimistic = optimisticUpdate<{ id: string; comment: string | null } | null, void>(
+    queryClient,
+    commentQueryKey,
+    (current) =>
+      current && commentQuery.isSuccess ? { ...current, comment: commentDraft.trim() || null } : current,
+  );
 
   const submitMutation = useMutation({
     mutationFn: async () => {
@@ -256,7 +284,13 @@ function OrderLinesEditorBody({
         }
       }
       const lines = toSubmittedLines(catalogQuery.data ?? [], draft);
-      const input = submitOrderInputSchema.parse({ tradingDayId, lines, customerCompanyId });
+      const input = submitOrderInputSchema.parse({
+        tradingDayId,
+        lines,
+        customerCompanyId,
+        // Left out when the stored comment never loaded, so the save keeps it.
+        comment: orderCommentToSend(commentQuery.isSuccess, commentDraft),
+      });
       const { data, error } = await supabase.rpc("submit_order", toSubmitOrderRpcArgs(input));
       if (error) {
         // The server's own answer to the same question as the check above
@@ -272,17 +306,35 @@ function OrderLinesEditorBody({
       }
       return data;
     },
-    onMutate: submitOptimistic.onMutate,
+    onMutate: async (variables) => {
+      const lines = await submitOptimistic.onMutate(variables);
+      const comment = await commentOptimistic.onMutate(variables);
+      return { lines, comment };
+    },
     onSuccess: () => {
       showToast("ההזמנה נשלחה.", "success");
       setConfirmOpen(false);
       // The draft now matches the server, so nothing is "edited" any more —
-      // the refetch re-seeds every line, including the ones just sent.
+      // the refetch re-seeds every line, including the ones just sent, and
+      // the order comment.
       editedIds.current = new Set();
+      commentEdited.current = false;
       void queryClient.invalidateQueries({ queryKey });
+      void queryClient.invalidateQueries({ queryKey: commentQueryKey });
       onSubmitted?.();
     },
-    onError: mergeOnError(submitOptimistic.onError, (error: { message?: string }) => {
+    onError: (
+      error: { message?: string },
+      variables,
+      context:
+        | {
+            lines: { previous: CatalogRow[] | undefined } | undefined;
+            comment: { previous: { id: string; comment: string | null } | null | undefined } | undefined;
+          }
+        | undefined,
+    ) => {
+      submitOptimistic.onError(error, variables, context?.lines);
+      commentOptimistic.onError(error, variables, context?.comment);
       showToast(`השליחה נכשלה: ${errorMessage(error)}`, "error");
       // Closed on every failure, as PickLinesEditor's confirmation is: toasts
       // render below the browser's top layer, where the modal lives, so the
@@ -291,7 +343,7 @@ function OrderLinesEditorBody({
       // shop there is also nothing left to confirm: the page is turning
       // read-only underneath.
       setConfirmOpen(false);
-    }),
+    },
   });
 
   // Stable (it touches only a ref and a state setter), so OrderProductList's
@@ -319,10 +371,11 @@ function OrderLinesEditorBody({
   // notification to backoffice (migration 0031, id 6), so a reflexive press
   // of "שמור" tells the office an order changed when it did not.
   const baselineDraft = toDraft(catalogQuery.data ?? []);
-  const dirty = hasChanges(
-    toSubmittedLines(catalogQuery.data ?? [], draft),
-    toSubmittedLines(catalogQuery.data ?? [], baselineDraft),
-  );
+  const dirty =
+    hasChanges(
+      toSubmittedLines(catalogQuery.data ?? [], draft),
+      toSubmittedLines(catalogQuery.data ?? [], baselineDraft),
+    ) || orderCommentChanged(commentQuery.data?.comment, commentDraft);
 
   function handleDiscard() {
     // Puts the fields back to the stored order, and nothing else — there is
@@ -330,6 +383,8 @@ function OrderLinesEditorBody({
     // the edited lines hands every line back to the re-seeding effect above.
     setDraft(baselineDraft);
     editedIds.current = new Set();
+    setCommentDraft(commentQuery.data?.comment ?? "");
+    commentEdited.current = false;
   }
 
   // "שמור" on the customer's own screen first checks every line against the
@@ -384,6 +439,13 @@ function OrderLinesEditorBody({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Read-only (a closed day, history): the order comment as plain text,
+          the way read-only line comments show. */}
+      {readOnly && commentQuery.data?.comment && (
+        <p className="rounded-lg bg-surface px-4 py-3 text-sm text-ink shadow-card ring-1 ring-inset ring-border/70">
+          הערה כללית: {commentQuery.data.comment}
+        </p>
+      )}
       <div className="overflow-hidden rounded-xl bg-surface shadow-raised ring-1 ring-inset ring-border/70">
         {tradeDate && (
           <div className="flex items-center justify-between gap-3 border-b border-border bg-surface-muted/60 px-5 py-4">
@@ -417,14 +479,41 @@ function OrderLinesEditorBody({
           // the buttons are ActionBar's own direct children, so spacing the
           // whole row would push them apart from each other too.
           extra={
-            <span className="ms-auto text-xs font-medium text-ink-muted">
-              {filledProductCount === 0
-                ? "לא נבחרו מוצרים"
-                : `${filledProductCount === 1 ? "מוצר אחד" : `${filledProductCount} מוצרים`} בהזמנה`}
-            </span>
+            <>
+              {/* Bubble's "הערה כללית": a comment on the whole order. Sent
+                  with the order on "שמור", like the line comments. Disabled
+                  until the stored comment has loaded, so nothing typed here
+                  can be left unsent. */}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="min-h-10"
+                disabled={!commentQuery.isSuccess}
+                onClick={() => setOrderCommentOpen(true)}
+              >
+                {commentDraft.trim() ? "✎ הערה כללית" : "+ הערה כללית"}
+              </Button>
+              <span className="ms-auto text-xs font-medium text-ink-muted">
+                {filledProductCount === 0
+                  ? "לא נבחרו מוצרים"
+                  : `${filledProductCount === 1 ? "מוצר אחד" : `${filledProductCount} מוצרים`} בהזמנה`}
+              </span>
+            </>
           }
         />
       )}
+
+      <CommentPopup
+        open={orderCommentOpen}
+        title="הערה כללית"
+        initialValue={commentDraft}
+        onClose={() => setOrderCommentOpen(false)}
+        onConfirm={(comment) => {
+          commentEdited.current = true;
+          setCommentDraft(comment);
+        }}
+      />
 
       <CommentPopup
         open={commentPopupVarietyId !== null}
@@ -438,6 +527,7 @@ function OrderLinesEditorBody({
       <SubmissionConfirmationDialog
         open={confirmOpen}
         families={confirmFamilies}
+        orderComment={commentDraft.trim() || undefined}
         confirming={submitting}
         onClose={() => setConfirmOpen(false)}
         onConfirm={handleConfirmSubmit}

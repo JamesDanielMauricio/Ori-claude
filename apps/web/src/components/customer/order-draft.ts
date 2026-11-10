@@ -87,3 +87,19 @@ export function mergeServerRows(
   }
   return next;
 }
+
+// The order comment ("הערה כללית", migration 0093) as submit_order should
+// receive it. submit_order keeps the stored comment when p_comment is not
+// sent at all, so a screen whose comment read never arrived sends nothing
+// (undefined) rather than an empty draft that would wipe it. Once loaded, the
+// draft is sent trimmed — "" included, which is how a comment is cleared.
+export function orderCommentToSend(loaded: boolean, draft: string): string | undefined {
+  return loaded ? draft.trim() : undefined;
+}
+
+// Whether the comment in the box differs from the stored one — part of
+// "is there anything to save?". Spaces around it don't count, and an unset
+// comment is the same as an empty box.
+export function orderCommentChanged(saved: string | null | undefined, draft: string): boolean {
+  return (saved ?? "").trim() !== draft.trim();
+}

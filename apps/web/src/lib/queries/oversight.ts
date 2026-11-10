@@ -80,6 +80,8 @@ export interface DailyOrderForDay {
   status: "open" | "submitted";
   submitted_at: string | null;
   reminder_sent_at: string | null;
+  // הערה כללית — the comment on the whole order (migration 0093).
+  comment: string | null;
   daily_order_products: OrderLineRow[];
 }
 
@@ -219,7 +221,7 @@ export const oversightQueries = {
         const { data, error } = await createClient()
           .from("daily_orders")
           .select(
-            `id, customer_company_id, status, submitted_at, reminder_sent_at,
+            `id, customer_company_id, status, submitted_at, reminder_sent_at, comment,
            daily_order_products(id, pallets_ordered, comment, product_varieties(id, name, sizes, family_id, product_families(id, name, image_url)))`,
           )
           .eq("trading_day_id", dayId!);

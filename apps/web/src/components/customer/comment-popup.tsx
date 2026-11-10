@@ -17,11 +17,15 @@ export function CommentPopup({
   initialValue,
   onClose,
   onConfirm,
+  title = "הערה",
 }: {
   open: boolean;
   initialValue: string;
   onClose: () => void;
   onConfirm: (comment: string) => void;
+  // A line's comment by default; the order editor's "הערה כללית" (the
+  // comment on the whole order, migration 0093) passes its own.
+  title?: string;
 }) {
   const [value, setValue] = useState(initialValue);
 
@@ -30,7 +34,7 @@ export function CommentPopup({
   }, [open, initialValue]);
 
   return (
-    <Dialog open={open} onClose={onClose} title="הערה">
+    <Dialog open={open} onClose={onClose} title={title}>
       <div className="flex flex-col gap-4">
         <input
           className={`${inputClassName} w-full`}

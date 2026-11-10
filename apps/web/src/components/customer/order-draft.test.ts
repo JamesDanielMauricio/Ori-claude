@@ -4,6 +4,8 @@ import type { CatalogRow } from "./catalog-grouping";
 import {
   linesOverLimit,
   mergeServerRows,
+  orderCommentChanged,
+  orderCommentToSend,
   orderLimit,
   toDraft,
   toSubmittedLines,
@@ -127,5 +129,40 @@ describe("toSubmittedLines with tenths", () => {
     const rows = [row("X", 0), row("Y", 0)];
     const draft = { X: { pallets: "0.4", comment: "" }, Y: { pallets: "2.", comment: "" } };
     expect(toSubmittedLines(rows, draft).map((l) => l.palletsOrdered)).toEqual([0.4, 2]);
+  });
+});
+
+// The order comment, "הערה כללית" (migration 0093). submit_order keeps the
+// stored comment when it is not sent, so a screen that never managed to load
+// it must not send one — or it would send "" and wipe it.
+describe("orderCommentToSend", () => {
+  it("sends nothing when the stored comment never loaded", () => {
+    expect(orderCommentToSend(false, "abc")).toBeUndefined();
+  });
+
+  it("sends the draft trimmed once the stored comment has loaded", () => {
+    expect(orderCommentToSend(true, "  abc ")).toBe("abc");
+  });
+
+  it("sends an emptied comment as empty text, which clears it", () => {
+    expect(orderCommentToSend(true, "")).toBe("");
+  });
+});
+
+describe("orderCommentChanged", () => {
+  it("is unchanged when nothing was stored and nothing (or only spaces) was typed", () => {
+    expect(orderCommentChanged(null, "  ")).toBe(false);
+  });
+
+  it("ignores spaces around the same comment", () => {
+    expect(orderCommentChanged("abc", " abc ")).toBe(false);
+  });
+
+  it("sees a cleared comment as a change", () => {
+    expect(orderCommentChanged("abc", "")).toBe(true);
+  });
+
+  it("sees a comment typed before the stored one loaded as a change", () => {
+    expect(orderCommentChanged(undefined, "x")).toBe(true);
   });
 });

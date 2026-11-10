@@ -82,6 +82,24 @@ export const customerQueries = {
     });
   },
 
+  // The comment on the whole order, "הערה כללית" (migration 0093), for the
+  // order editor. A customer's own session needs no filter: the daily_orders
+  // rule already lets a customer read only their own company's orders, and
+  // there is one per day. The backoffice path filters to the customer being
+  // edited. Null when there is no order header for the day yet.
+  orderComment(tradingDayId: string, customerCompanyId?: string) {
+    return queryOptions({
+      queryKey: ["customer", "order-comment", tradingDayId, customerCompanyId ?? "self"],
+      queryFn: async (): Promise<{ id: string; comment: string | null } | null> => {
+        let query = createClient().from("daily_orders").select("id, comment").eq("trading_day_id", tradingDayId);
+        if (customerCompanyId) query = query.eq("customer_company_id", customerCompanyId);
+        const { data, error } = await query.maybeSingle();
+        if (error) throw error;
+        return data;
+      },
+    });
+  },
+
   // Every trading day, newest first, with this company's order (if any)
   // embedded — see routes/customer/history.tsx for why it starts from
   // trading_days rather than daily_orders.

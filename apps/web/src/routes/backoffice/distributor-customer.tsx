@@ -198,6 +198,13 @@ export default function DistributorAsCustomerPage() {
         }
         reminding={reminding}
       >
+        {/* Bubble's הזמנות shows the comment on the whole order with its
+            lines (migration 0093), so the office needn't open each order. */}
+        {order?.comment && (
+          <p className="mb-2 rounded-md bg-surface-muted px-3 py-2 text-sm text-ink ring-1 ring-inset ring-border">
+            הערה כללית: {order.comment}
+          </p>
+        )}
         <FamilyGroupedLines families={families} emptyLabel="אין עדיין הזמנה עבור לקוח זה." />
       </ExpandableEntityRow>
     );

@@ -25,12 +25,16 @@ export function SubmissionConfirmationDialog({
   confirming,
   onClose,
   onConfirm,
+  orderComment,
 }: {
   open: boolean;
   families: FamilyGroup[];
   confirming: boolean;
   onClose: () => void;
   onConfirm: () => void;
+  // The comment on the whole order (migration 0093), shown with the lines it
+  // goes out with. Omitted when there is none.
+  orderComment?: string | undefined;
 }) {
   return (
     <Dialog open={open} onClose={onClose} title="אישור הזמנה">
@@ -97,6 +101,11 @@ export function SubmissionConfirmationDialog({
               </section>
             ))}
           </div>
+        )}
+        {orderComment && (
+          <p className="rounded-md bg-surface-muted px-3 py-2 text-sm text-ink ring-1 ring-inset ring-border">
+            הערה כללית: {orderComment}
+          </p>
         )}
         <div className="flex justify-end gap-2 border-t border-border pt-4">
           <Button type="button" variant="secondary" onClick={onClose} disabled={confirming}>
