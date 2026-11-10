@@ -260,17 +260,16 @@ order screen, בשם לקוח, and the arrangement board's pencil.
 
 ### Web
 
-**A shared upload helper** handles product pictures for both family and
-variety saves.
+**Variety picture uploads follow the family upload's steps exactly.** The
+family upload code itself is left exactly as it is (James, 2026-11-10).
 
 - Every upload gets a fresh random file name, so no browser keeps showing a
   cached old picture.
 - It keeps the file's own content type.
-- It sets a one-year browser cache. That's safe because a file name is never
-  reused.
-- Families get the one-year cache too, because they share the helper.
-- Removing a replaced or deleted picture stays best-effort. It only ever
-  touches files in Ori's own storage (`productPhotoPathFromUrl`).
+- It uses the same storage settings as the family upload; no cache setting
+  of its own.
+- Removing a replaced or deleted picture is best-effort, as for families. It
+  only ever touches files in Ori's own storage (`productPhotoPathFromUrl`).
 
 **מוצרים and מוצרים שנקטפו** both use the same `ProductCatalogScreen`.
 
@@ -363,7 +362,10 @@ One module under `packages/db/scripts/` is used by both scripts. It holds:
   2. Download it, with a timeout.
   3. Accept only JPEG, PNG or WebP up to 5 MB. These are the bucket's own
      limits.
-  4. Upload it with the shared naming and the one-year cache.
+  4. Upload it under a fresh random file name, with a one-year browser
+     cache. That's safe because the name is never reused. Only these
+     copies get the long cache; pictures uploaded in the app keep the
+     app's current behaviour.
   5. Return Ori's link.
 
   Anything else is skipped and the reason recorded: AVIF, another type, too
@@ -455,7 +457,7 @@ These changes let the final switch-over carry the same fields:
   inside the same transaction. A contact whose login wasn't imported is
   reported, never guessed.
 - **Variety and family pictures** are copied into Ori's storage with the
-  shared helper.
+  shared module's picture copying (§8.1).
   - This happens on `--commit` only.
   - The pictures are created before the transaction and removed again if it
     fails. That's the same pattern the importer already uses for logins.
@@ -579,9 +581,9 @@ None is over 1 MB.
 **Storage and downloads:**
 
 - All 304 pictures come to about 28 MB of the Free plan's 1 GB.
-- A customer's first visit downloads about 1 MB, then close to nothing
-  thanks to the one-year cache. The Free plan allows 5 GB of downloads a
-  month.
+- A customer's first visit downloads about 1 MB, then close to nothing for
+  the copied pictures, thanks to their one-year cache. The Free plan allows
+  5 GB of downloads a month.
 
 **Triggers on the touched tables (live):**
 
