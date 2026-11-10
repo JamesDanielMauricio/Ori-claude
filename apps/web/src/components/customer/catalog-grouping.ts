@@ -31,6 +31,10 @@ export interface CatalogRow {
   // every family until a real photo URL is set per family; ProductThumbnail
   // falls back to a generic icon either way.
   image_url: string | null;
+  // The VARIETY's own picture (product_varieties.image_url, migration 0094):
+  // behind the order screen's "לחצו כאן לתמונה עדכנית" link. Null when it
+  // has none.
+  variety_image_url: string | null;
   // This customer's own ceiling for this row (migration 0042's
   // max_orderable_for_customer): least(the variety's per-customer cap,
   // remaining stock excluding demand from every OTHER customer), floored at

@@ -2,6 +2,7 @@ import { memo, useState } from "react";
 
 import { inputClassName } from "@/components/reference-data/form-field";
 import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { StatusPill } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
 import { ProductThumbnail } from "@/components/ui/product-thumbnail";
@@ -16,6 +17,9 @@ export interface OrderVarietyRow {
   pallets: string;
   comment: string;
   outOfStock?: boolean;
+  // The variety's own picture (migration 0094) — Bubble's "לחצו כאן לתמונה
+  // עדכנית". Null or absent: no picture, no link.
+  imageUrl?: string | null;
   // The most this customer can have on this line right now (order-draft.ts's
   // orderLimit), shown beside the quantity box as "מקסימום". Given only on
   // the customer's own order screen: staff ordering on a customer's behalf
@@ -66,6 +70,9 @@ export function OrderProductList({
   onOpenComment?: (varietyId: string) => void;
 }) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  // The picture a "לחצו כאן לתמונה עדכנית" link opened (migration 0094). The
+  // state setter is passed to the memoized rows as is, so it never changes.
+  const [pictureFor, setPictureFor] = useState<{ name: string; url: string } | null>(null);
 
   function toggle(familyId: string) {
     setExpandedIds((current) => {
@@ -86,80 +93,96 @@ export function OrderProductList({
     // than a 767px one does, and the same component also mounts inside the
     // arrangement board's order dialog, where the viewport says nothing
     // about the room available. See the row's own note for the threshold.
-    <ul className="@container">
-      {families.map((family, familyIndex) => {
-        const isOpen = expandedIds.has(family.familyId);
-        // How many varieties in this family already carry a quantity. Shown
-        // as a chip on the collapsed row so a user scrolling a long catalog
-        // can see what they've already filled in without opening every
-        // family to check — previously the only way to find your own entries
-        // was to expand each one in turn.
-        const filledCount = family.varieties.filter(
-          (variety) => Number(variety.pallets) > 0,
-        ).length;
+    <>
+      <ul className="@container">
+        {families.map((family, familyIndex) => {
+          const isOpen = expandedIds.has(family.familyId);
+          // How many varieties in this family already carry a quantity. Shown
+          // as a chip on the collapsed row so a user scrolling a long catalog
+          // can see what they've already filled in without opening every
+          // family to check — previously the only way to find your own entries
+          // was to expand each one in turn.
+          const filledCount = family.varieties.filter(
+            (variety) => Number(variety.pallets) > 0,
+          ).length;
 
-        return (
-          <li
-            key={family.familyId}
-            className="animate-stagger-in border-b border-border last:border-b-0"
-            // Capped at 8 so a long catalog's last rows don't arrive after
-            // the user has already started scrolling (see globals.css).
-            style={{ "--stagger-index": Math.min(familyIndex, 8) } as React.CSSProperties}
-          >
-            <button
-              type="button"
-              onClick={() => toggle(family.familyId)}
-              aria-expanded={isOpen}
-              className={`group flex w-full items-center gap-3 px-4 py-3 text-start transition-colors duration-200 ${
-                isOpen ? "bg-accent-soft/40" : "hover:bg-surface-muted"
-              }`}
+          return (
+            <li
+              key={family.familyId}
+              className="animate-stagger-in border-b border-border last:border-b-0"
+              // Capped at 8 so a long catalog's last rows don't arrive after
+              // the user has already started scrolling (see globals.css).
+              style={{ "--stagger-index": Math.min(familyIndex, 8) } as React.CSSProperties}
             >
-              <ProductThumbnail imageUrl={family.imageUrl ?? null} />
-              <Icon
-                name="chevronDown"
-                className={`h-4 w-4 shrink-0 transition-[transform,color] duration-300 ease-[cubic-bezier(0.22,0.61,0.36,1)] ${
-                  isOpen ? "rotate-180 text-accent" : "text-ink-muted group-hover:text-accent"
+              <button
+                type="button"
+                onClick={() => toggle(family.familyId)}
+                aria-expanded={isOpen}
+                className={`group flex w-full items-center gap-3 px-4 py-3 text-start transition-colors duration-200 ${
+                  isOpen ? "bg-accent-soft/40" : "hover:bg-surface-muted"
                 }`}
-              />
-              <span className="min-w-0 flex-1 truncate text-sm font-semibold">
-                {family.familyName}
-              </span>
-
-              {filledCount > 0 && (
-                <span className="animate-pop-in shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-bold text-accent-ink">
-                  {filledCount}
+              >
+                <ProductThumbnail imageUrl={family.imageUrl ?? null} />
+                <Icon
+                  name="chevronDown"
+                  className={`h-4 w-4 shrink-0 transition-[transform,color] duration-300 ease-[cubic-bezier(0.22,0.61,0.36,1)] ${
+                    isOpen ? "rotate-180 text-accent" : "text-ink-muted group-hover:text-accent"
+                  }`}
+                />
+                <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                  {family.familyName}
                 </span>
-              )}
-            </button>
 
-            {/* Always rendered, height-animated by the CSS grid technique in
-                globals.css (`.accordion-panel`) rather than mounted and
-                unmounted. Two reasons: a collapse can animate closed at all
-                only if the content still exists on the way out, and keeping
-                the inputs mounted preserves anything typed into a family the
-                user collapses and reopens before saving.
-                `inert` keeps the hidden subtree out of the tab order and off
-                the accessibility tree while it's closed — without it, tabbing
-                past a collapsed family walks through invisible inputs. */}
-            <div className="accordion-panel" data-open={isOpen}>
-              <div>
-                <ul className="border-t border-border bg-surface-muted/60" inert={!isOpen}>
-                  {family.varieties.map((variety) => (
-                    <OrderVarietyItem
-                      key={variety.varietyId}
-                      {...variety}
-                      editable={editable}
-                      onChangePallets={onChangePallets}
-                      onOpenComment={onOpenComment}
-                    />
-                  ))}
-                </ul>
+                {filledCount > 0 && (
+                  <span className="animate-pop-in shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-bold text-accent-ink">
+                    {filledCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Always rendered, height-animated by the CSS grid technique in
+                  globals.css (`.accordion-panel`) rather than mounted and
+                  unmounted. Two reasons: a collapse can animate closed at all
+                  only if the content still exists on the way out, and keeping
+                  the inputs mounted preserves anything typed into a family the
+                  user collapses and reopens before saving.
+                  `inert` keeps the hidden subtree out of the tab order and off
+                  the accessibility tree while it's closed — without it, tabbing
+                  past a collapsed family walks through invisible inputs. */}
+              <div className="accordion-panel" data-open={isOpen}>
+                <div>
+                  <ul className="border-t border-border bg-surface-muted/60" inert={!isOpen}>
+                    {family.varieties.map((variety) => (
+                      <OrderVarietyItem
+                        key={variety.varietyId}
+                        {...variety}
+                        editable={editable}
+                        onChangePallets={onChangePallets}
+                        onOpenComment={onOpenComment}
+                        onOpenPicture={setPictureFor}
+                      />
+                    ))}
+                  </ul>
+                </div>
               </div>
-            </div>
-          </li>
-        );
-      })}
-    </ul>
+            </li>
+          );
+        })}
+      </ul>
+      <Dialog
+        open={pictureFor !== null}
+        onClose={() => setPictureFor(null)}
+        title={pictureFor?.name ?? ""}
+      >
+        {pictureFor && (
+          <img
+            src={pictureFor.url}
+            alt={pictureFor.name}
+            className="max-h-[70vh] w-full object-contain"
+          />
+        )}
+      </Dialog>
+    </>
   );
 }
 
@@ -171,11 +194,13 @@ const OrderVarietyItem = memo(function OrderVarietyItem({
   editable,
   onChangePallets,
   onOpenComment,
+  onOpenPicture,
   ...variety
 }: OrderVarietyRow & {
   editable: boolean;
   onChangePallets?: ((varietyId: string, value: string) => void) | undefined;
   onOpenComment?: ((varietyId: string) => void) | undefined;
+  onOpenPicture?: ((picture: { name: string; url: string }) => void) | undefined;
 }) {
   const limit = variety.limit;
   // More than this customer may have on the line now: the
@@ -227,6 +252,16 @@ const OrderVarietyItem = memo(function OrderVarietyItem({
         </p>
         {variety.priceLabel && (
           <p className="mt-0.5 text-xs font-medium text-ink-muted">{variety.priceLabel}</p>
+        )}
+        {/* Shown on read-only orders too: looking at a picture changes nothing. */}
+        {variety.imageUrl && (
+          <button
+            type="button"
+            onClick={() => onOpenPicture?.({ name: variety.varietyName, url: variety.imageUrl! })}
+            className="mt-0.5 text-xs font-medium text-accent underline-offset-2 hover:underline"
+          >
+            לחצו כאן לתמונה עדכנית
+          </button>
         )}
       </div>
       {editable ? (

@@ -33,6 +33,7 @@ const row = (varietyId: string, pallets: number, comment: string | null = null):
   pallets_ordered: pallets,
   comment,
   image_url: null,
+  variety_image_url: null,
   max_orderable_for_customer: 20,
 });
 

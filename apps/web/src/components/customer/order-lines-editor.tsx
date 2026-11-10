@@ -201,6 +201,7 @@ function OrderLinesEditorBody({
           pallets: draft[row.variety_id]?.pallets ?? "",
           comment: draft[row.variety_id]?.comment ?? "",
           outOfStock: !row.is_orderable,
+          imageUrl: row.variety_image_url,
           ...(showsLimit ? { limit: orderLimit(row) } : {}),
         })),
       })),
