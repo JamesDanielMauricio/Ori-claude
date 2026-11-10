@@ -17,8 +17,7 @@ import { limitToOneDecimal } from "@/lib/pallet-input";
 
 import { type FlatRecord } from "./board-data";
 import { type AllocationPatch } from "./customer-demand-board";
-
-type ViewMode = "by-product" | "by-grower";
+import { sortRecords, type RecordsViewMode } from "./records-sort";
 
 // One row's three inputs as update_arrangement_record would receive them.
 // Called twice per row — once on what is typed, once on what the row would
@@ -64,22 +63,11 @@ export function ArrangementRecordsSection({
   onDelete: (recordId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>("by-product");
+  const [viewMode, setViewMode] = useState<RecordsViewMode>("by-product");
 
   // Same records, same fields, one different primary sort key — R6's "one
-  // function, two groupings", not two data models.
-  const sorted = useMemo(() => {
-    return [...records].sort((a, b) => {
-      const primary =
-        viewMode === "by-grower"
-          ? a.growerName.localeCompare(b.growerName, "he")
-          : a.varietyLabel.localeCompare(b.varietyLabel, "he");
-      if (primary !== 0) return primary;
-      return viewMode === "by-grower"
-        ? a.varietyLabel.localeCompare(b.varietyLabel, "he")
-        : a.growerName.localeCompare(b.growerName, "he");
-    });
-  }, [records, viewMode]);
+  // function, several groupings", not separate data models (records-sort.ts).
+  const sorted = useMemo(() => sortRecords(records, viewMode), [records, viewMode]);
 
   return (
     <section className="flex flex-col gap-3">
@@ -119,6 +107,8 @@ export function ArrangementRecordsSection({
               [
                 ["by-product", "לפי מוצר"],
                 ["by-grower", "לפי מגדל"],
+                // Bubble's by-customer list: the same rows, by customer.
+                ["by-customer", "לפי לקוח"],
               ] as const
             ).map(([mode, label]) => (
               <button
