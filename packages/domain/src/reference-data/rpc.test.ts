@@ -599,4 +599,49 @@ describe("reference-data save functions", () => {
     const cleared = await client.rpc("save_grower", toSaveGrowerRpcArgs({ ...base, id: created.data!.id, noArrangementMessage: false }));
     expect(cleared.data!.no_arrangement_message).toBe(false);
   });
+
+  // The padded values go straight to the database (no zod in between), so
+  // the trimming checked here is the save functions' own.
+  it("save_grower/save_customer/save_transporter (migration 0092): store company details trimmed, keep them when left out, clear them with an empty string", async () => {
+    const client = await signedInBackofficeClient();
+    const padded = { phone: " 050-1234567 ", addressLine: " רחוב הדקל 1 ", city: " חדרה ", taxId: " 514000000 ", accountingId: " 77 " };
+    const trimmed = { phone: "050-1234567", address_line: "רחוב הדקל 1", city: "חדרה", tax_id: "514000000", accounting_id: "77" };
+    const detailsOf = (row: { phone: string | null; address_line: string | null; city: string | null; tax_id: string | null; accounting_id: string | null }) => ({
+      phone: row.phone,
+      address_line: row.address_line,
+      city: row.city,
+      tax_id: row.tax_id,
+      accounting_id: row.accounting_id,
+    });
+
+    const growerBase = { name: `מגדל פרטים ${randomUUID()}`, status: "active" as const, defaultPickupTime: null, whatsappGroupId: null, productVarietyIds: [], transporterCompanyId: null, contactPersonId: null };
+    const grower = await client.rpc("save_grower", toSaveGrowerRpcArgs({ ...growerBase, id: null, ...padded }));
+    expect(grower.error).toBeNull();
+    cleanupFns.push(() => deleteTestCompanyById(grower.data!.id));
+    expect(detailsOf(grower.data!)).toEqual(trimmed);
+    const growerKept = await client.rpc("save_grower", toSaveGrowerRpcArgs({ ...growerBase, id: grower.data!.id }));
+    expect(detailsOf(growerKept.data!)).toEqual(trimmed);
+    const growerCleared = await client.rpc("save_grower", toSaveGrowerRpcArgs({ ...growerBase, id: grower.data!.id, city: "" }));
+    expect(detailsOf(growerCleared.data!)).toEqual({ ...trimmed, city: null });
+
+    const customerBase = { name: `לקוח פרטים ${randomUUID()}`, status: "active" as const, canSeeProductPrices: null, whatsappGroupId: null, contactPersonId: null };
+    const customer = await client.rpc("save_customer", toSaveCustomerRpcArgs({ ...customerBase, id: null, ...padded }));
+    expect(customer.error).toBeNull();
+    cleanupFns.push(() => deleteTestCompanyById(customer.data!.id));
+    expect(detailsOf(customer.data!)).toEqual(trimmed);
+    const customerKept = await client.rpc("save_customer", toSaveCustomerRpcArgs({ ...customerBase, id: customer.data!.id }));
+    expect(detailsOf(customerKept.data!)).toEqual(trimmed);
+    const customerCleared = await client.rpc("save_customer", toSaveCustomerRpcArgs({ ...customerBase, id: customer.data!.id, city: "" }));
+    expect(detailsOf(customerCleared.data!)).toEqual({ ...trimmed, city: null });
+
+    const transporterBase = { name: `מוביל פרטים ${randomUUID()}`, status: "active" as const, whatsappGroupId: null, contactPersonId: null };
+    const transporter = await client.rpc("save_transporter", toSaveTransporterRpcArgs({ ...transporterBase, id: null, ...padded }));
+    expect(transporter.error).toBeNull();
+    cleanupFns.push(() => deleteTestCompanyById(transporter.data!.id));
+    expect(detailsOf(transporter.data!)).toEqual(trimmed);
+    const transporterKept = await client.rpc("save_transporter", toSaveTransporterRpcArgs({ ...transporterBase, id: transporter.data!.id }));
+    expect(detailsOf(transporterKept.data!)).toEqual(trimmed);
+    const transporterCleared = await client.rpc("save_transporter", toSaveTransporterRpcArgs({ ...transporterBase, id: transporter.data!.id, city: "" }));
+    expect(detailsOf(transporterCleared.data!)).toEqual({ ...trimmed, city: null });
+  });
 });

@@ -5,6 +5,9 @@ import {
   saveGrowerInputSchema,
   saveTransporterInputSchema,
   setCustomerScoreInputSchema,
+  toSaveCustomerRpcArgs,
+  toSaveGrowerRpcArgs,
+  toSaveTransporterRpcArgs,
   toSetCustomerScoreRpcArgs,
 } from "./schemas";
 
@@ -125,5 +128,68 @@ describe("setCustomerScoreInputSchema", () => {
       p_customer_company_id: customerCompanyId,
       p_general_score: null,
     });
+  });
+});
+
+// A company's טלפון, כתובת, יישוב and הנה״ח (migration 0092). The save
+// functions keep a stored detail when its argument is left out and clear it
+// when sent empty, so what reaches the call decides which of the two happens.
+describe("company details (migration 0092)", () => {
+  const grower = {
+    ...company,
+    defaultPickupTime: null,
+    whatsappGroupId: null,
+    productVarietyIds: [],
+    transporterCompanyId: null,
+    contactPersonId: null,
+  };
+
+  it("are sent trimmed, an empty string is kept so it clears, and a detail not given is left out of the call", () => {
+    const args = toSaveGrowerRpcArgs(
+      saveGrowerInputSchema.parse({ ...grower, phone: "  050-1234567 ", city: "   " }),
+    );
+    expect(args.p_phone).toBe("050-1234567");
+    expect(args.p_city).toBe("");
+    expect("p_address_line" in args).toBe(false);
+    expect("p_tax_id" in args).toBe(false);
+    expect("p_accounting_id" in args).toBe(false);
+  });
+
+  it("refuse a value longer than its limit", () => {
+    const accepts = (details: Record<string, string>) =>
+      saveGrowerInputSchema.safeParse({ ...grower, ...details }).success;
+    expect(accepts({ phone: "1".repeat(30) })).toBe(true);
+    expect(accepts({ phone: "1".repeat(31) })).toBe(false);
+    expect(accepts({ addressLine: "א".repeat(200) })).toBe(true);
+    expect(accepts({ addressLine: "א".repeat(201) })).toBe(false);
+    expect(accepts({ city: "א".repeat(100) })).toBe(true);
+    expect(accepts({ city: "א".repeat(101) })).toBe(false);
+    expect(accepts({ taxId: "1".repeat(31) })).toBe(false);
+    expect(accepts({ accountingId: "1".repeat(31) })).toBe(false);
+  });
+
+  it("are sent the same way by the customer and transporter saves", () => {
+    const customerArgs = toSaveCustomerRpcArgs(
+      saveCustomerInputSchema.parse({
+        ...company,
+        canSeeProductPrices: null,
+        whatsappGroupId: null,
+        contactPersonId: null,
+        taxId: "123456789",
+        accountingId: "4321",
+      }),
+    );
+    expect(customerArgs.p_tax_id).toBe("123456789");
+    expect(customerArgs.p_accounting_id).toBe("4321");
+
+    const transporterArgs = toSaveTransporterRpcArgs(
+      saveTransporterInputSchema.parse({
+        ...company,
+        whatsappGroupId: null,
+        contactPersonId: null,
+        phone: "03-5000000",
+      }),
+    );
+    expect(transporterArgs.p_phone).toBe("03-5000000");
   });
 });

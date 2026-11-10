@@ -14,6 +14,10 @@
 export {
   companyStatusSchema,
   packTypeSchema,
+  COMPANY_DETAIL_MAX_LENGTH,
+  companyDetailsSchema,
+  toCompanyDetailsRpcArgs,
+  type CompanyDetailsInput,
   saveGrowerInputSchema,
   toSaveGrowerRpcArgs,
   type SaveGrowerInput,

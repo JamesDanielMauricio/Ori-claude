@@ -23,6 +23,48 @@ const whatsappGroupIdSchema = z
   .nullable()
   .transform((value) => value?.trim().replace(/@g\.us$/, "") || null);
 
+// A company's own contact and accounting details (migration 0092): טלפון,
+// כתובת, יישוב, and הנה״ח's ח.פ. and מספר בהנה״ח. Free text for people to
+// read — nothing sends messages to these phones, so there is no format check.
+// Trimmed; an empty string is sent, and the save function clears the stored
+// value; a detail left out (undefined) is not sent at all, and the save
+// function keeps what is stored — so a screen that doesn't know a field can
+// never wipe it.
+export const COMPANY_DETAIL_MAX_LENGTH = {
+  phone: 30,
+  addressLine: 200,
+  city: 100,
+  taxId: 30,
+  accountingId: 30,
+} as const;
+
+const companyDetail = (max: number) => z.string().trim().max(max).optional();
+
+export const companyDetailsSchema = z.object({
+  phone: companyDetail(COMPANY_DETAIL_MAX_LENGTH.phone),
+  addressLine: companyDetail(COMPANY_DETAIL_MAX_LENGTH.addressLine),
+  city: companyDetail(COMPANY_DETAIL_MAX_LENGTH.city),
+  taxId: companyDetail(COMPANY_DETAIL_MAX_LENGTH.taxId),
+  accountingId: companyDetail(COMPANY_DETAIL_MAX_LENGTH.accountingId),
+});
+export type CompanyDetailsInput = z.infer<typeof companyDetailsSchema>;
+
+export function toCompanyDetailsRpcArgs(input: CompanyDetailsInput): {
+  p_phone?: string;
+  p_address_line?: string;
+  p_city?: string;
+  p_tax_id?: string;
+  p_accounting_id?: string;
+} {
+  return {
+    ...(input.phone === undefined ? {} : { p_phone: input.phone }),
+    ...(input.addressLine === undefined ? {} : { p_address_line: input.addressLine }),
+    ...(input.city === undefined ? {} : { p_city: input.city }),
+    ...(input.taxId === undefined ? {} : { p_tax_id: input.taxId }),
+    ...(input.accountingId === undefined ? {} : { p_accounting_id: input.accountingId }),
+  };
+}
+
 export const saveGrowerInputSchema = z.object({
   id: z.string().uuid().nullable(),
   name: z.string().min(1),
@@ -44,6 +86,7 @@ export const saveGrowerInputSchema = z.object({
   // that leaves it out (the "בשם מגדל" products dialog) keeps the current
   // setting — save_grower treats a missing value as "unchanged".
   noArrangementMessage: z.boolean().optional(),
+  ...companyDetailsSchema.shape,
 });
 export type SaveGrowerInput = z.infer<typeof saveGrowerInputSchema>;
 
@@ -60,6 +103,7 @@ export function toSaveGrowerRpcArgs(input: SaveGrowerInput) {
     // Left out of the request when not given, so the database keeps the
     // grower's current setting.
     ...(input.noArrangementMessage === undefined ? {} : { p_no_arrangement_message: input.noArrangementMessage }),
+    ...toCompanyDetailsRpcArgs(input),
   };
 }
 
@@ -70,6 +114,7 @@ export const saveCustomerInputSchema = z.object({
   canSeeProductPrices: z.boolean().nullable(),
   whatsappGroupId: whatsappGroupIdSchema,
   contactPersonId: z.string().uuid().nullable(),
+  ...companyDetailsSchema.shape,
 });
 export type SaveCustomerInput = z.infer<typeof saveCustomerInputSchema>;
 
@@ -81,6 +126,7 @@ export function toSaveCustomerRpcArgs(input: SaveCustomerInput) {
     p_can_see_product_prices: input.canSeeProductPrices,
     p_whatsapp_group_id: input.whatsappGroupId,
     p_contact_person_id: input.contactPersonId,
+    ...toCompanyDetailsRpcArgs(input),
   };
 }
 
@@ -128,6 +174,7 @@ export const saveTransporterInputSchema = z.object({
   status: companyStatusSchema,
   whatsappGroupId: whatsappGroupIdSchema,
   contactPersonId: z.string().uuid().nullable(),
+  ...companyDetailsSchema.shape,
 });
 export type SaveTransporterInput = z.infer<typeof saveTransporterInputSchema>;
 
@@ -138,6 +185,7 @@ export function toSaveTransporterRpcArgs(input: SaveTransporterInput) {
     p_status: input.status,
     p_whatsapp_group_id: input.whatsappGroupId,
     p_contact_person_id: input.contactPersonId,
+    ...toCompanyDetailsRpcArgs(input),
   };
 }
 
