@@ -180,6 +180,8 @@ export type Database = {
           is_seasonal_available: boolean;
           number_of_orders_per_customer: number | null;
           version: number;
+          // The variety's own picture (migration 0094). Null when it has none.
+          image_url: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -198,6 +200,7 @@ export type Database = {
           is_seasonal_available?: boolean;
           number_of_orders_per_customer?: number | null;
           version?: number;
+          image_url?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -216,6 +219,7 @@ export type Database = {
           is_seasonal_available?: boolean;
           number_of_orders_per_customer?: number | null;
           version?: number;
+          image_url?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1257,6 +1261,9 @@ export type Database = {
           // Ignored since migration 0087 (the per-customer cap was removed);
           // kept so a client that still sends it keeps working.
           p_customer_pallet_caps?: Json;
+          // The variety's picture link (migration 0094): left out keeps the
+          // stored picture, "" removes it, other text is saved trimmed.
+          p_image_url?: string | null;
         };
         Returns: Database["public"]["Tables"]["product_varieties"]["Row"];
       };
@@ -1408,6 +1415,8 @@ export type Database = {
           comment: string | null;
           image_url: string | null;
           max_orderable_for_customer: number;
+          // The variety's own picture (migration 0094); image_url above is the family's.
+          variety_image_url: string | null;
         }[];
       };
       // One order's lines with their variety/family names and no price

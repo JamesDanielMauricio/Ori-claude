@@ -37,6 +37,9 @@ export const productVarieties = pgTable("product_varieties", {
   // (migrations 0087, 0091). Never consulted for a backoffice on-behalf-of
   // edit — see max_orderable_for_customer's own comment.
   numberOfOrdersPerCustomer: integer("number_of_orders_per_customer"),
+  // The variety's own picture (migration 0094; Bubble "Image"): a link into
+  // the product-photos bucket. The family's photo is product_families.image_url.
+  imageUrl: text("image_url"),
   version: integer("version").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
