@@ -18,7 +18,8 @@
     "db:studio": "drizzle-kit studio",
     "db:generate-types": "supabase gen types typescript --local > src/supabase-types.ts",
     "bubble:export": "tsx scripts/bubble-export.ts",
-    "import:from-bubble": "tsx scripts/import-from-bubble.ts"
+    "import:from-bubble": "tsx scripts/import-from-bubble.ts",
+    "fill:from-bubble": "tsx scripts/fill-from-bubble.ts"
   },
   "dependencies": {
     "@ori/shared": "workspace:*",
