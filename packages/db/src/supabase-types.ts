@@ -70,6 +70,13 @@ export type Database = {
           // The distributor's point of contact for this company — any
           // profile in the system (migration 0057). Null when unset.
           contact_person_id: string | null;
+          // The company's contact and accounting details (migration 0092):
+          // טלפון, כתובת, יישוב, ח.פ., מספר בהנה״ח. Null when unset.
+          phone: string | null;
+          address_line: string | null;
+          city: string | null;
+          tax_id: string | null;
+          accounting_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -84,6 +91,11 @@ export type Database = {
           can_see_product_prices?: boolean | null;
           whatsapp_group_id?: string | null;
           contact_person_id?: string | null;
+          phone?: string | null;
+          address_line?: string | null;
+          city?: string | null;
+          tax_id?: string | null;
+          accounting_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -98,6 +110,11 @@ export type Database = {
           can_see_product_prices?: boolean | null;
           whatsapp_group_id?: string | null;
           contact_person_id?: string | null;
+          phone?: string | null;
+          address_line?: string | null;
+          city?: string | null;
+          tax_id?: string | null;
+          accounting_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1165,6 +1182,13 @@ export type Database = {
           p_transporter_company_id?: string | null;
           p_contact_person_id?: string | null;
           p_no_arrangement_message?: boolean | null;
+          // Company details (migration 0092): left out keeps the stored
+          // value, "" clears it, other text is saved trimmed.
+          p_phone?: string | null;
+          p_address_line?: string | null;
+          p_city?: string | null;
+          p_tax_id?: string | null;
+          p_accounting_id?: string | null;
         };
         Returns: Database["public"]["Tables"]["companies"]["Row"];
       };
@@ -1176,6 +1200,12 @@ export type Database = {
           p_can_see_product_prices: boolean | null;
           p_whatsapp_group_id: string | null;
           p_contact_person_id?: string | null;
+          // Company details (migration 0092), as for save_grower.
+          p_phone?: string | null;
+          p_address_line?: string | null;
+          p_city?: string | null;
+          p_tax_id?: string | null;
+          p_accounting_id?: string | null;
         };
         Returns: Database["public"]["Tables"]["companies"]["Row"];
       };
@@ -1194,6 +1224,12 @@ export type Database = {
           p_status: Database["public"]["Enums"]["company_status"];
           p_whatsapp_group_id: string | null;
           p_contact_person_id?: string | null;
+          // Company details (migration 0092), as for save_grower.
+          p_phone?: string | null;
+          p_address_line?: string | null;
+          p_city?: string | null;
+          p_tax_id?: string | null;
+          p_accounting_id?: string | null;
         };
         Returns: Database["public"]["Tables"]["companies"]["Row"];
       };

@@ -645,6 +645,13 @@
       "when": 1792011600000,
       "tag": "0091_after-web-deploy-close-prices-to-growers-drop-caps",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1792098000000,
+      "tag": "0092_company-contact-details",
+      "breakpoints": true
     }
   ]
 }

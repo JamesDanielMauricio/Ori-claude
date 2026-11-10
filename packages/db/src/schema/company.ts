@@ -53,6 +53,18 @@ export const companies = pgTable("companies", {
   contactPersonId: uuid("contact_person_id").references((): AnyPgColumn => profiles.userId, {
     onDelete: "set null",
   }),
+  // The company's own contact and accounting details (migration 0092) —
+  // free text for people to read, shown on the company screens as in Bubble.
+  // טלפון — Bubble "Phone no.".
+  phone: text("phone"),
+  // כתובת — Bubble "Address Line".
+  addressLine: text("address_line"),
+  // יישוב — Bubble "City".
+  city: text("city"),
+  // ח.פ. (under הנה״ח) — Bubble "Tax ID".
+  taxId: text("tax_id"),
+  // מספר בהנה״ח (under הנה״ח) — Bubble "Accounting ID".
+  accountingId: text("accounting_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
