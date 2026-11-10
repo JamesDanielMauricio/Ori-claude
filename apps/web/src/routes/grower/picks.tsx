@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth-context";
+import { effectivePickupTime, formatPickupTime } from "@/lib/pickup-time";
 import { growerQueries, type DailyPickSummary } from "@/lib/queries/grower";
 
 // Exported for history.tsx: both screens show the same `daily_picks.status`
@@ -249,6 +250,11 @@ function PickDetail({
   tradeDateLabel: string;
   onSaved: () => void;
 }) {
+  // שעת איסוף, as Bubble's pick header shows it: the pick's own time once it
+  // is sent, the company's current default before that (lib/pickup-time).
+  const pickupTime = formatPickupTime(
+    effectivePickupTime(pick.pickup_time, pick.companies?.default_pickup_time ?? null),
+  );
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
@@ -264,6 +270,12 @@ function PickDetail({
         <div className="flex items-center gap-2.5 text-sm text-ink-muted">
           <Icon name="calendar" className="h-4 w-4 shrink-0 text-ink-subtle" />
           <span>{tradeDateLabel}</span>
+          {pickupTime && (
+            <>
+              <Icon name="clock" className="ms-2 h-4 w-4 shrink-0 text-ink-subtle" />
+              <span>שעת איסוף {pickupTime}</span>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-3">
           {pick.submitted_at && (

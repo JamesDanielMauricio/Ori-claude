@@ -13,6 +13,7 @@
 import type { Json } from "@ori/db/supabase-types";
 import { roundPallets } from "@ori/shared/pallets";
 
+import { effectivePickupTime } from "@/lib/pickup-time";
 import { formatVarietyName } from "@/lib/variety-label";
 
 /** A variety as it arrives embedded on a pick or order line. */
@@ -538,8 +539,11 @@ export function buildBoard({
         growerName: nameOf(pick.grower_company_id),
         pickId: pick.id,
         status: pick.status,
-        pickupTime:
-          pick.pickup_time ?? companyById.get(pick.grower_company_id)?.default_pickup_time ?? null,
+        // The same rule the grower's own picking screen shows (lib/pickup-time).
+        pickupTime: effectivePickupTime(
+          pick.pickup_time,
+          companyById.get(pick.grower_company_id)?.default_pickup_time ?? null,
+        ),
         picked,
         leftover,
         allocated,

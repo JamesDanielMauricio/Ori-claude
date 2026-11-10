@@ -18,6 +18,11 @@ export interface DailyPickSummary {
   id: string;
   status: "draft" | "submitted" | "closed";
   submitted_at: string | null;
+  // The pick's own pickup time (snapshotted when it is sent) and the
+  // company's current default — together the "שעת איסוף" the screen shows
+  // (lib/pickup-time.ts). A grower reads only their own company's row.
+  pickup_time: string | null;
+  companies: { default_pickup_time: string | null } | null;
 }
 
 export interface SpecificPick extends DailyPickSummary {
@@ -86,7 +91,7 @@ export const growerQueries = {
       queryFn: async (): Promise<DailyPickSummary | null> => {
         const { data, error } = await createClient()
           .from("daily_picks")
-          .select("id, status, submitted_at")
+          .select("id, status, submitted_at, pickup_time, companies(default_pickup_time)")
           .eq("trading_day_id", openDayId!)
           .eq("grower_company_id", companyId!)
           .maybeSingle();
@@ -103,7 +108,7 @@ export const growerQueries = {
       queryFn: async (): Promise<SpecificPick | null> => {
         const { data, error } = await createClient()
           .from("daily_picks")
-          .select("id, status, submitted_at, trading_day_id, trading_days(trade_date)")
+          .select("id, status, submitted_at, pickup_time, companies(default_pickup_time), trading_day_id, trading_days(trade_date)")
           .eq("id", pickId)
           .maybeSingle();
         if (error) throw error;
