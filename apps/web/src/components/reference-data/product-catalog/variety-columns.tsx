@@ -4,17 +4,20 @@ import type { Dispatch, SetStateAction } from "react";
 import { checkboxClassName, inputClassName } from "@/components/reference-data/form-field";
 import type { RecordTableColumn } from "@/components/reference-data/record-table";
 import { StatusPill } from "@/components/ui/card";
+import { ProductThumbnail } from "@/components/ui/product-thumbnail";
 import { Select } from "@/components/ui/select";
 import { blockWheel } from "@/lib/integer-input";
 import type { ProductFamily, ProductVariety } from "@/lib/queries/reference-data";
 
 import {
   CREATED_AT_FORMAT,
-  NAME_GUTTER_PAD,
+  NAME_GUTTER,
   PACK_TYPE_LABEL,
   orDash,
   type FormState,
 } from "./catalog-form";
+import type { useVarietyPhoto } from "./use-variety-photo";
+import { VarietyPhotoButton } from "./variety-photo-button";
 
 export interface VarietyColumnsContext {
   form: FormState;
@@ -22,6 +25,10 @@ export interface VarietyColumnsContext {
   familyById: ReadonlyMap<string, ProductFamily>;
   familiesQuery: UseQueryResult<ProductFamily[]>;
   openFamily: (familyId: string) => void;
+  // The variety picture being edited (migration 0094) — see useVarietyPhoto.
+  photo: ReturnType<typeof useVarietyPhoto>;
+  // While a save is in flight the picture control is disabled.
+  saving: boolean;
 }
 
 // The two family-level fields the flat table used to repeat on every
@@ -35,6 +42,8 @@ export function buildVarietyColumns({
   familyById,
   familiesQuery,
   openFamily,
+  photo,
+  saving,
 }: VarietyColumnsContext): RecordTableColumn<ProductVariety>[] {
   return [
     {
@@ -44,14 +53,40 @@ export function buildVarietyColumns({
       // Every family's expand toggle and "זן חדש" button live in this
       // column, so hiding it would strand the whole catalog closed.
       alwaysVisible: true,
+      // The variety's own picture (migration 0094) sits in the gutter the
+      // family row uses for its photo, so every name in the column still
+      // starts on one edge; a variety without a picture leaves it empty.
       render: (row) => (
-        <span className={`block font-medium text-ink ${NAME_GUTTER_PAD}`}>{row.name}</span>
+        <span className="flex items-center font-medium text-ink">
+          <span className={`flex ${NAME_GUTTER} shrink-0 items-center`}>
+            {row.image_url && <ProductThumbnail imageUrl={row.image_url} size="sm" />}
+          </span>
+          {row.name}
+        </span>
       ),
       renderEdit: () => (
-        // Padded to the same gutter as the read state, so the field opens
-        // exactly where the name it replaces was sitting rather than jumping
-        // to the cell edge the moment the row goes into edit mode.
-        <div className={NAME_GUTTER_PAD}>
+        // The same gutter as the read state, so the field opens exactly
+        // where the name it replaces was sitting — with the picture control
+        // where the picture was.
+        <div className="flex items-center">
+          <span className={`flex ${NAME_GUTTER} shrink-0 items-center`}>
+            <VarietyPhotoButton
+              pendingPhotoFile={photo.pendingPhotoFile}
+              imageUrl={form.imageUrl}
+              previewUrl={photo.photoPreviewUrl}
+              inputRef={photo.photoInputRef}
+              disabled={saving}
+              onRemove={photo.handleRemovePhoto}
+            />
+            {/* Opened by clicking the picture; uploaded only on שמור. */}
+            <input
+              ref={photo.photoInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={photo.handlePhotoFileChange}
+            />
+          </span>
           <input
             aria-label="זן / שם"
             autoFocus

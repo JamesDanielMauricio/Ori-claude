@@ -23,6 +23,9 @@ export interface FormState {
   // comment). Kept as a string here for the same reason every other numeric
   // form field is: an <input> can't hold `null`.
   numberOfOrdersPerCustomer: string;
+  // The variety's picture link (migration 0094), "" for none. A newly picked
+  // file is held apart (useVarietyPhoto) and uploaded on save.
+  imageUrl: string;
   version: number | null;
 }
 
@@ -107,6 +110,7 @@ export function blankForm(defaultFamilyId: string): FormState {
     highlightPriceFluctuations: false,
     isSeasonalAvailable: true,
     numberOfOrdersPerCustomer: "",
+    imageUrl: "",
     version: null,
   };
 }
@@ -132,6 +136,7 @@ export function blankRow(familyId: string): ProductVariety {
     is_seasonal_available: true,
     number_of_orders_per_customer: null,
     version: 0,
+    image_url: null,
     created_at: "",
   };
 }
@@ -192,6 +197,7 @@ export function toFormState(row: ProductVariety): FormState {
     isSeasonalAvailable: row.is_seasonal_available,
     numberOfOrdersPerCustomer:
       row.number_of_orders_per_customer == null ? "" : String(row.number_of_orders_per_customer),
+    imageUrl: row.image_url ?? "",
     version: row.version,
   };
 }

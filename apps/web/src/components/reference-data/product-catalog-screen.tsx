@@ -35,6 +35,7 @@ import {
 import { useCatalogData } from "./product-catalog/use-catalog-data";
 import { useFamilyMutations } from "./product-catalog/use-family-mutations";
 import { useFamilyPhoto } from "./product-catalog/use-family-photo";
+import { useVarietyPhoto } from "./product-catalog/use-variety-photo";
 import { useVarietyMutations } from "./product-catalog/use-variety-mutations";
 import { buildVarietyColumns } from "./product-catalog/variety-columns";
 
@@ -116,6 +117,10 @@ export function ProductCatalogScreen({
     handleRemovePhoto,
   } = useFamilyPhoto({ showToast, setFamilyForm });
 
+  // A picked-but-not-yet-saved picture for the variety row being edited
+  // (migration 0094) — see useVarietyPhoto. Uploaded only on save.
+  const varietyPhoto = useVarietyPhoto({ showToast, setForm });
+
   // Which families are open. Everything starts collapsed: the catalog runs
   // to ~78 families and ~600 varieties, and a screen that opens every one of
   // them is the flat table this grouping replaced.
@@ -137,6 +142,8 @@ export function ProductCatalogScreen({
     setEditingId,
     deleteTargetId: deleteTarget?.id ?? null,
     setDeleteTarget,
+    pendingPhotoFile: varietyPhoto.pendingPhotoFile,
+    setPendingPhotoFile: varietyPhoto.setPendingPhotoFile,
   });
 
   const editingFamily = familyById.get(editingFamilyId ?? "") ?? null;
@@ -218,6 +225,7 @@ export function ProductCatalogScreen({
   // instant the edit ends: a variety saved inside a collapsed family would
   // disappear at the moment the user is looking for confirmation it landed.
   function handleEditRow(row: ProductVariety) {
+    varietyPhoto.setPendingPhotoFile(null);
     setEditingId(row.id);
     openFamily(row.family_id);
     setForm(toFormState(row));
@@ -228,12 +236,14 @@ export function ProductCatalogScreen({
   // family the FORM names (see `getGroupId`) — into a collapsed group it
   // would be seeded correctly and then be invisible.
   function handleNewInFamily(familyId: string) {
+    varietyPhoto.setPendingPhotoFile(null);
     setEditingId(NEW_ROW_ID);
     openFamily(familyId);
     setForm(blankForm(familyId));
   }
 
   function handleCancel() {
+    varietyPhoto.setPendingPhotoFile(null);
     setEditingId(null);
   }
 
@@ -254,7 +264,8 @@ export function ProductCatalogScreen({
   const baselineForm = selected
     ? toFormState(selected)
     : blankForm(form.familyId);
-  const dirty = hasChanges(form, baselineForm);
+  // A picked picture is a change too, though the form holds no file.
+  const dirty = hasChanges(form, baselineForm) || varietyPhoto.pendingPhotoFile !== null;
 
   function handleSave() {
     setSaving(true);
@@ -269,6 +280,8 @@ export function ProductCatalogScreen({
     familyById,
     familiesQuery,
     openFamily,
+    photo: varietyPhoto,
+    saving,
   });
 
   // Creating a record is offered on the unfiltered catalog only. A brand-new

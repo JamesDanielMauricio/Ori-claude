@@ -45,6 +45,8 @@ export interface ProductVariety {
   is_seasonal_available: boolean;
   number_of_orders_per_customer: number | null;
   version: number;
+  // The variety's own picture (migration 0094). Null when it has none.
+  image_url: string | null;
   created_at: string;
 }
 
@@ -173,7 +175,7 @@ export const referenceDataQueries = {
           createClient()
             .from("product_varieties")
             .select(
-              "id, family_id, name, sizes, pack_type, price, price_range_from, price_range_to, price_type, no_overbooking, highlight_price_fluctuations, is_seasonal_available, number_of_orders_per_customer, version, created_at",
+              "id, family_id, name, sizes, pack_type, price, price_range_from, price_range_to, price_type, no_overbooking, highlight_price_fluctuations, is_seasonal_available, number_of_orders_per_customer, version, image_url, created_at",
             )
             .order("name")
             .order("id")

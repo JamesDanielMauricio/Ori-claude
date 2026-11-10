@@ -13,7 +13,8 @@ import { customerKeys } from "@/lib/queries/customer";
 import { referenceDataQueries, type ProductVariety } from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 
-import { toFormState, type FormState } from "./catalog-form";
+import { productPhotoPathFromUrl, toFormState, type FormState } from "./catalog-form";
+import { removeVarietyPhotoFile, replacedPhotoPath, uploadVarietyPhoto } from "./variety-photo";
 
 // Saving and deleting a variety, each patching the table at once and
 // rolling back if the server refuses (see lib/optimistic-mutation.ts).
@@ -27,6 +28,8 @@ export function useVarietyMutations({
   setEditingId,
   deleteTargetId,
   setDeleteTarget,
+  pendingPhotoFile,
+  setPendingPhotoFile,
 }: {
   queryClient: QueryClient;
   showToast: ReturnType<typeof useToast>["showToast"];
@@ -36,12 +39,23 @@ export function useVarietyMutations({
   setEditingId: Dispatch<SetStateAction<string | null>>;
   deleteTargetId: string | null;
   setDeleteTarget: Dispatch<SetStateAction<ProductVariety | null>>;
+  // A picture picked for the row being edited, not yet uploaded (migration
+  // 0094 — see useVarietyPhoto). Uploaded on save, cleared once saved.
+  pendingPhotoFile: File | null;
+  setPendingPhotoFile: (file: File | null) => void;
 }) {
   const supabase = createClient();
   const productsQueryKey = referenceDataQueries.products().queryKey;
   // The same varieties' names, as the Growers and Users chips and pickers
   // read them. Not mounted here, so invalidating it only marks it stale.
   const catalogQueryKey = referenceDataQueries.productCatalog().queryKey;
+
+  // The pictures as the table holds them NOW, at render — before a save's or
+  // a delete's optimistic patch rewrites the cached row. After a save the
+  // replaced file is removed; after a delete, the variety's own file.
+  const cachedRows = queryClient.getQueryData<ProductVariety[]>(productsQueryKey);
+  const previousImageUrl = cachedRows?.find((row) => row.id === editingRowId)?.image_url ?? null;
+  const deleteTargetImageUrl = cachedRows?.find((row) => row.id === deleteTargetId)?.image_url ?? null;
 
   // Patches every field the form edits except `version` — that's a real
   // optimistic-concurrency column, bumped by the server only. Leaving it
@@ -72,6 +86,9 @@ export function useVarietyMutations({
                 form.numberOfOrdersPerCustomer === ""
                   ? null
                   : Number(form.numberOfOrdersPerCustomer),
+              // A removed picture disappears at once; a newly picked one shows
+              // when the save returns its uploaded link (onSuccess below).
+              image_url: pendingPhotoFile ? row.image_url : form.imageUrl.trim() || null,
             }
           : row,
       ),
@@ -79,6 +96,11 @@ export function useVarietyMutations({
 
   const saveMutation = useMutation({
     mutationFn: async (): Promise<ProductVariety> => {
+      // A newly picked picture is uploaded first, the same way a family's is;
+      // the save then points the row at it.
+      const imageUrl = pendingPhotoFile
+        ? await uploadVarietyPhoto(supabase, pendingPhotoFile)
+        : form.imageUrl.trim();
       const input = saveProductInputSchema.parse({
         id: editingRowId,
         familyId: form.familyId,
@@ -95,9 +117,16 @@ export function useVarietyMutations({
         numberOfOrdersPerCustomer:
           form.numberOfOrdersPerCustomer === "" ? null : Number(form.numberOfOrdersPerCustomer),
         expectedVersion: form.version,
+        // Always sent: "" removes the picture (migration 0094).
+        imageUrl,
       });
       const { data, error } = await supabase.rpc("save_product", toSaveProductRpcArgs(input));
-      if (error) throw error;
+      if (error) {
+        // The picture just uploaded is referenced by nothing now.
+        if (pendingPhotoFile) removeVarietyPhotoFile(supabase, productPhotoPathFromUrl(imageUrl));
+        throw error;
+      }
+      removeVarietyPhotoFile(supabase, replacedPhotoPath(previousImageUrl, data.image_url));
       return data;
     },
     onMutate: async (variables) => {
@@ -110,9 +139,12 @@ export function useVarietyMutations({
       // before then would be seeded with the old one, and its next save
       // refused as a conflict with itself. A create matches no cached row.
       queryClient.setQueryData<ProductVariety[]>(productsQueryKey, (rows) =>
-        rows?.map((row) => (row.id === saved.id ? { ...row, version: saved.version } : row)),
+        rows?.map((row) =>
+          row.id === saved.id ? { ...row, version: saved.version, image_url: saved.image_url } : row,
+        ),
       );
       showToast("הנתונים נשמרו.", "success");
+      setPendingPhotoFile(null);
       setEditingId(null);
       void queryClient.invalidateQueries({ queryKey: productsQueryKey });
       void queryClient.invalidateQueries({ queryKey: catalogQueryKey });
@@ -168,6 +200,8 @@ export function useVarietyMutations({
     onMutate: deleteOptimistic.onMutate,
     onSuccess: () => {
       showToast("המוצר נמחק.", "success");
+      // Its own picture goes with it — best-effort, and only a file in Ori's storage.
+      removeVarietyPhotoFile(supabase, deleteTargetImageUrl ? productPhotoPathFromUrl(deleteTargetImageUrl) : null);
       setDeleteTarget(null);
       void queryClient.invalidateQueries({ queryKey: productsQueryKey });
       void queryClient.invalidateQueries({ queryKey: catalogQueryKey });
