@@ -20,7 +20,7 @@ import { formatPallets, type BoardProduct, type SelectedPickLine } from "./board
 // it could not answer "from whom" anyway.
 
 const STATS: Array<{
-  key: "picked" | "leftover" | "ordered" | "allocated" | "remaining";
+  key: "picked" | "leftover" | "ordered" | "allocated" | "remaining" | "overbookingAllowed";
   label: string;
   hint: string;
 }> = [
@@ -32,6 +32,13 @@ const STATS: Array<{
     key: "remaining",
     label: "נותר",
     hint: "נקטף ועודף פחות חולק — מה שעוד פנוי לסידור",
+  },
+  // Bubble's arrangement header shows it too, in orange: the variety's own
+  // setting, not a figure for the day.
+  {
+    key: "overbookingAllowed",
+    label: "הזמנת יתר מותרת",
+    hint: "כמה משטחים מותר ללקוחות להזמין מהמוצר הזה מעבר למלאי",
   },
 ];
 
@@ -97,7 +104,7 @@ export function ProductStrip({
                 </p>
                 <p
                   className={`font-display mt-1 text-2xl leading-none ${
-                    negative ? "text-danger" : "text-ink"
+                    negative ? "text-danger" : stat.key === "overbookingAllowed" ? "text-warning" : "text-ink"
                   }`}
                   dir="ltr"
                 >

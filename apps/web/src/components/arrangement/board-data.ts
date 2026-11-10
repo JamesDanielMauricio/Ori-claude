@@ -25,6 +25,10 @@ export interface BoardVarietyRow {
   sizes?: string | null;
   family_id: string;
   product_families: { name: string; image_url: string | null } | null;
+  /** The variety's overbooking allowance (product_varieties.no_overbooking):
+   * how many pallets may be ordered beyond stock — the strip's "הזמנת יתר
+   * מותרת". Optional so the matrix's rows, which don't read it, still fit. */
+  no_overbooking?: number;
 }
 
 export interface BoardPickLine {
@@ -208,6 +212,9 @@ export interface BoardProduct {
   allocated: number;
   /** נותר — (picked + leftover) minus allocated: what is still free to arrange. */
   remaining: number;
+  /** הזמנת יתר מותרת — the variety's overbooking allowance (no_overbooking):
+   * pallets customers may order beyond stock. 0 when it has none. */
+  overbookingAllowed: number;
   /**
    * The PRD's OOS flag: demand exceeds supply for this variety, where supply
    * is `picked + leftover` — leftover is carried-forward stock, not a
@@ -469,6 +476,7 @@ export function buildBoard({
         ordered,
         allocated,
         remaining: roundPallets(picked + leftover - allocated),
+        overbookingAllowed: parsePallets(variety.no_overbooking),
         outOfStock: ordered > roundPallets(picked + leftover),
       };
     })

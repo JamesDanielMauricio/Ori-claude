@@ -328,3 +328,28 @@ describe("settleOptimisticRecord", () => {
     expect(settleOptimisticRecord(day, saved)).toBe(day);
   });
 });
+
+// The סידור strip's "הזמנת יתר מותרת" (Bubble parity): the variety's own
+// overbooking allowance, product_varieties.no_overbooking.
+describe("a board product's overbooking allowance", () => {
+  it("is the variety's no_overbooking, and 0 when the row has none", () => {
+    const allowed = { ...variety("variety-allowed", "לימון מורשה", "family-lemon", lemonFamily), no_overbooking: 3 };
+    const plain = variety("variety-plain", "לימון רגיל", "family-lemon", lemonFamily);
+    const board = buildBoard({
+      picks: [
+        {
+          id: "pick-x",
+          grower_company_id: GROWER_A,
+          status: "draft",
+          pickup_time: null,
+          daily_pick_products: [pickLine("x-allowed", "pick-x", allowed, 4, 0), pickLine("x-plain", "pick-x", plain, 2, 0)],
+        },
+      ],
+      orders: [],
+      records: [],
+      companies,
+    });
+    expect(board.products.find((product) => product.varietyId === "variety-allowed")?.overbookingAllowed).toBe(3);
+    expect(board.products.find((product) => product.varietyId === "variety-plain")?.overbookingAllowed).toBe(0);
+  });
+});
