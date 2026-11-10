@@ -145,7 +145,7 @@ export function ProductCatalogScreen({
     setForm,
     editingRowId,
     setEditingId,
-    deleteTargetId: deleteTarget?.id ?? null,
+    deleteTarget,
     setDeleteTarget,
     pendingPhotoFile: varietyPhoto.pendingPhotoFile,
     setPendingPhotoFile: varietyPhoto.setPendingPhotoFile,

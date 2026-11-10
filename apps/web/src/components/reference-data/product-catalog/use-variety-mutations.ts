@@ -26,7 +26,7 @@ export function useVarietyMutations({
   setForm,
   editingRowId,
   setEditingId,
-  deleteTargetId,
+  deleteTarget,
   setDeleteTarget,
   pendingPhotoFile,
   setPendingPhotoFile,
@@ -37,7 +37,9 @@ export function useVarietyMutations({
   setForm: Dispatch<SetStateAction<FormState>>;
   editingRowId: string | null;
   setEditingId: Dispatch<SetStateAction<string | null>>;
-  deleteTargetId: string | null;
+  // The row itself, held from the click: the optimistic delete takes it out
+  // of the cache before the picture cleanup below reads its URL.
+  deleteTarget: ProductVariety | null;
   setDeleteTarget: Dispatch<SetStateAction<ProductVariety | null>>;
   // A picture picked for the row being edited, not yet uploaded (migration
   // 0094 — see useVarietyPhoto). Uploaded on save, cleared once saved.
@@ -50,12 +52,11 @@ export function useVarietyMutations({
   // read them. Not mounted here, so invalidating it only marks it stale.
   const catalogQueryKey = referenceDataQueries.productCatalog().queryKey;
 
-  // The pictures as the table holds them NOW, at render — before a save's or
-  // a delete's optimistic patch rewrites the cached row. After a save the
-  // replaced file is removed; after a delete, the variety's own file.
+  // The picture as the table holds it NOW, at render — before a save's
+  // optimistic patch rewrites the cached row — so the file a save replaces
+  // can be removed. (A delete reads its row's picture from deleteTarget.)
   const cachedRows = queryClient.getQueryData<ProductVariety[]>(productsQueryKey);
   const previousImageUrl = cachedRows?.find((row) => row.id === editingRowId)?.image_url ?? null;
-  const deleteTargetImageUrl = cachedRows?.find((row) => row.id === deleteTargetId)?.image_url ?? null;
 
   // Patches every field the form edits except `version` — that's a real
   // optimistic-concurrency column, bumped by the server only. Leaving it
@@ -188,20 +189,23 @@ export function useVarietyMutations({
   const deleteOptimistic = optimisticUpdate<ProductVariety[], void>(
     queryClient,
     productsQueryKey,
-    (rows) => rows?.filter((row) => row.id !== deleteTargetId),
+    (rows) => rows?.filter((row) => row.id !== deleteTarget?.id),
   );
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
-      if (!deleteTargetId) return;
-      const { error } = await supabase.from("product_varieties").delete().eq("id", deleteTargetId);
+      if (!deleteTarget) return;
+      const imageUrl = deleteTarget.image_url;
+      const { error } = await supabase.from("product_varieties").delete().eq("id", deleteTarget.id);
       if (error) throw error;
+      // Its own picture goes with it — best-effort, and only a file in Ori's
+      // storage. Read from the row held since the click: by now the
+      // optimistic delete has taken it out of the cache.
+      removeVarietyPhotoFile(supabase, imageUrl ? productPhotoPathFromUrl(imageUrl) : null);
     },
     onMutate: deleteOptimistic.onMutate,
     onSuccess: () => {
       showToast("המוצר נמחק.", "success");
-      // Its own picture goes with it — best-effort, and only a file in Ori's storage.
-      removeVarietyPhotoFile(supabase, deleteTargetImageUrl ? productPhotoPathFromUrl(deleteTargetImageUrl) : null);
       setDeleteTarget(null);
       void queryClient.invalidateQueries({ queryKey: productsQueryKey });
       void queryClient.invalidateQueries({ queryKey: catalogQueryKey });

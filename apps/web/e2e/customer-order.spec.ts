@@ -162,7 +162,10 @@ test.describe("Customer — order + history", () => {
     // own comment buttons too (the accordion panels stay mounted while
     // collapsed, by design — see order-product-list.tsx).
     await familyItem.getByRole("button", { name: /הערה/ }).click();
-    await page.getByPlaceholder("הוסף הערה…").fill("gate code 4321");
+    // Scoped to the open popup: the editor holds a second comment popup,
+    // the order's "הערה כללית" (migration 0093), and a closed Dialog keeps
+    // its box in the page, so a page-wide lookup finds two.
+    await page.locator("dialog[open]").getByPlaceholder("הוסף הערה…").fill("gate code 4321");
     await page.getByRole("button", { name: "אישור" }).click();
 
     await page.getByRole("button", { name: "שמור" }).click();
@@ -200,6 +203,8 @@ test.describe("Customer — order + history", () => {
     // the popup checks the same thing the text did — that the comment
     // survived the round trip — without asserting the wrong view's markup.
     await familyItem.getByRole("button", { name: /הערה/ }).click();
-    await expect(page.getByPlaceholder("הוסף הערה…")).toHaveValue("gate code 4321");
+    await expect(page.locator("dialog[open]").getByPlaceholder("הוסף הערה…")).toHaveValue(
+      "gate code 4321",
+    );
   });
 });

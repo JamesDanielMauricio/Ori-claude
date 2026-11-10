@@ -144,6 +144,11 @@ function OrderLinesEditorBody({
   const commentOptions = customerQueries.orderComment(tradingDayId, customerCompanyId);
   const commentQueryKey = commentOptions.queryKey;
   const commentQuery = useQuery(commentOptions);
+  // Loaded = the stored comment arrived at least once. Not isSuccess: a
+  // failed re-read (a return to the tab, a live update) turns that false
+  // while keeping the comment it had, which disabled the button and left an
+  // edited comment out of the send without a word.
+  const commentLoaded = commentQuery.data !== undefined;
   const [commentDraft, setCommentDraft] = useState("");
   const commentEdited = useRef(false);
   const [orderCommentOpen, setOrderCommentOpen] = useState(false);
@@ -260,7 +265,7 @@ function OrderLinesEditorBody({
     queryClient,
     commentQueryKey,
     (current) =>
-      current && commentQuery.isSuccess ? { ...current, comment: commentDraft.trim() || null } : current,
+      current && commentLoaded ? { ...current, comment: commentDraft.trim() || null } : current,
   );
 
   const submitMutation = useMutation({
@@ -290,7 +295,7 @@ function OrderLinesEditorBody({
         lines,
         customerCompanyId,
         // Left out when the stored comment never loaded, so the save keeps it.
-        comment: orderCommentToSend(commentQuery.isSuccess, commentDraft),
+        comment: orderCommentToSend(commentLoaded, commentDraft),
       });
       const { data, error } = await supabase.rpc("submit_order", toSubmitOrderRpcArgs(input));
       if (error) {
@@ -490,7 +495,7 @@ function OrderLinesEditorBody({
                 variant="ghost"
                 size="sm"
                 className="min-h-10"
-                disabled={!commentQuery.isSuccess}
+                disabled={!commentLoaded}
                 onClick={() => setOrderCommentOpen(true)}
               >
                 {commentDraft.trim() ? "✎ הערה כללית" : "+ הערה כללית"}
