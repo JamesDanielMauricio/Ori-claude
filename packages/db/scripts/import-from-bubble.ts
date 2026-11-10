@@ -57,6 +57,17 @@ import { normalizePhoneNumber } from "@ori/shared/phone";
 import { createClient } from "@supabase/supabase-js";
 import postgres from "postgres";
 
+import {
+  checkPicture,
+  companyDetailsFromBubble,
+  copyPicture,
+  isBubblePictureUrl,
+  mainContactBubbleId,
+  orderCommentFromBubble,
+  supabasePictureStore,
+  varietyPictureFromBubble,
+} from "./lib/bubble-extras";
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -326,12 +337,12 @@ class Report {
 // ---------------------------------------------------------------------------
 
 const COLUMNS = {
-  companies: ["id", "name", "type", "status", "default_pickup_time", "can_see_product_prices", "whatsapp_group_id", "no_arrangement_message", "created_at", "updated_at"],
+  companies: ["id", "name", "type", "status", "default_pickup_time", "can_see_product_prices", "whatsapp_group_id", "no_arrangement_message", "phone", "address_line", "city", "tax_id", "accounting_id", "created_at", "updated_at"],
   profiles: ["user_id", "company_id", "role", "display_name", "phone_number", "must_change_password", "product_category", "created_at", "updated_at"],
   product_families: ["id", "name", "category", "image_url", "created_at", "updated_at"],
   product_varieties: [
     "id", "family_id", "name", "sizes", "price", "price_range_from", "price_range_to", "price_type", "no_overbooking",
-    "highlight_price_fluctuations", "is_seasonal_available", "number_of_orders_per_customer", "created_at", "updated_at",
+    "highlight_price_fluctuations", "is_seasonal_available", "number_of_orders_per_customer", "image_url", "created_at", "updated_at",
   ],
   grower_products: ["company_id", "product_variety_id"],
   profile_blocked_products: ["user_id", "product_variety_id"],
@@ -340,7 +351,7 @@ const COLUMNS = {
   daily_shops: ["id", "trading_day_id", "status", "can_see_prices", "opened_by", "created_at", "updated_at"],
   daily_picks: ["id", "trading_day_id", "grower_company_id", "status", "submitted_at", "pickup_time", "created_at", "updated_at"],
   daily_pick_products: ["id", "daily_pick_id", "product_variety_id", "pallets_picked", "comment", "leftover_pallets", "end_of_day_leftover_pallets", "created_at", "updated_at"],
-  daily_orders: ["id", "trading_day_id", "customer_company_id", "status", "submitted_at", "created_at", "updated_at"],
+  daily_orders: ["id", "trading_day_id", "customer_company_id", "status", "submitted_at", "comment", "created_at", "updated_at"],
   daily_order_products: ["id", "daily_order_id", "product_variety_id", "pallets_ordered", "comment", "created_at", "updated_at"],
   arrangement_records: [
     "id", "daily_arrangement_id", "daily_pick_product_id", "daily_order_product_id", "customer_company_id",
@@ -447,6 +458,8 @@ interface PlannedUser {
 interface ReferencePlan {
   companies: Row[];
   transporterLinks: Array<{ id: string; transporter_company_id: string }>;
+  // איש קשר (0092): set once the logins exist (main()), as Main Contact is a login.
+  contactLinks: Array<{ id: string; contact_bubble_user_id: string }>;
   users: PlannedUser[];
   productFamilies: Row[];
   productVarieties: Row[];
@@ -492,6 +505,7 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
   const companies: Row[] = [];
   const companyIdByBubbleId = new Map<string, string>();
   const companyTypeByBubbleId = new Map<string, CompanyType>();
+  const contactLinks: ReferencePlan["contactLinks"] = [];
 
   for (const company of data.company) {
     let name = text(company, "Name");
@@ -544,12 +558,16 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
       whatsapp_group_id: whatsappGroupId(company, "group id (whatsapp)"),
       // Bubble's "Should not receive arrangement?" (migration 0081).
       no_arrangement_message: booleanValue(company, "Should not receive arrangement?") === true,
+      // Bubble column parity (0092): טלפון, כתובת, יישוב, ח.פ., מספר בהנה״ח.
+      ...companyDetailsFromBubble(company),
       created_at: createdAt(company),
       updated_at: modifiedAt(company),
     });
     companyIdByBubbleId.set(company._id, id);
     companyTypeByBubbleId.set(company._id, type);
     idMap.push({ bubble_id: company._id, entity_type: "company", new_id: id });
+    const contact = mainContactBubbleId(company);
+    if (contact) contactLinks.push({ id, contact_bubble_user_id: contact });
   }
 
   const transporterLinks: ReferencePlan["transporterLinks"] = [];
@@ -575,7 +593,7 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
   report.fieldsNotImported(
     "company",
     data.company,
-    ["Address Line", "Area code", "City", "Tax ID", "Accounting ID", "Phone no.", "Phone prefix", "Code in external system", "Comments", "Main Contact", "logo", "default product category"],
+    ["Area code", "Phone prefix", "Code in external system", "Comments", "logo", "default product category"],
     "no column for it in companies",
   );
 
@@ -664,6 +682,9 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
       highlight_price_fluctuations: booleanValue(variety, "Highlight Price Fluctuations") ?? false,
       is_seasonal_available: inSeason ?? false,
       number_of_orders_per_customer: cap,
+      // The variety's own picture (0094): Bubble's link here; a --commit run
+      // replaces it with Ori's own copy before writing (main()).
+      image_url: varietyPictureFromBubble(variety),
       created_at: createdAt(variety),
       updated_at: modifiedAt(variety),
     });
@@ -674,7 +695,7 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
       report.note("info", "productvarieties", variety._id, "variety.archived", `"${name}" is archived in Bubble — imported (this schema has no archive flag).`);
     }
   }
-  report.fieldsNotImported("productvarieties", data.productvarieties, ["Image", "Comments", "Category"], "no column for it in product_varieties");
+  report.fieldsNotImported("productvarieties", data.productvarieties, ["Comments", "Category"], "no column for it in product_varieties");
 
   // A grower's "Products in season" list is the grower_products join table.
   const growerProducts: Row[] = [];
@@ -799,6 +820,7 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
   return {
     companies,
     transporterLinks,
+    contactLinks,
     users,
     productFamilies,
     productVarieties,
@@ -1287,11 +1309,6 @@ function planTrading(data: ExportData, reference: ReferencePlan, loginIds: Map<s
       report.blockers.push(`Two orders for one customer on trading day ${day.tradeDate} (order ${order._id}).`);
       continue;
     }
-    const comment = text(order, "comment");
-    if (comment) {
-      // Kept here in full, since daily_orders has no column for it.
-      report.note("warning", "dailyorder", order._id, "order.comment_not_imported", `Order-level comment on ${day.tradeDate} has no column in this schema: "${comment}"`);
-    }
     const id = randomUUID();
     rows.daily_orders.push({
       id,
@@ -1299,6 +1316,8 @@ function planTrading(data: ExportData, reference: ReferencePlan, loginIds: Map<s
       customer_company_id: customerId,
       status,
       submitted_at: text(order, "Submission Time"),
+      // הערה כללית (0093).
+      comment: orderCommentFromBubble(order),
       created_at: createdAt(order),
       updated_at: modifiedAt(order),
     });
@@ -1424,6 +1443,8 @@ function planTrading(data: ExportData, reference: ReferencePlan, loginIds: Map<s
         customer_company_id: customerId,
         status: "open",
         submitted_at: null,
+        // A stand-in order: no Bubble order, so no הערה כללית (0093).
+        comment: null,
         created_at: createdAt(record),
         updated_at: createdAt(record),
       });
@@ -1895,6 +1916,8 @@ async function main() {
   const keptIds = new Set(previousCompanyIds.values());
   console.log(`Company ids kept from the previous import: ${reference.companies.filter((company) => keptIds.has(String(company.id))).length} of ${reference.companies.length}\n`);
   const createdLoginIds: string[] = [];
+  // Pictures a --commit run copied into Ori's storage, removed again if it fails.
+  const uploadedPicturePaths: string[] = [];
   const admin = COMMIT
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
     : null;
@@ -1952,6 +1975,15 @@ async function main() {
     // Plan again with the real login ids — this is the plan that is written.
     const report = new Report();
     const plan = planTrading(data, reference, loginIds, report);
+
+    // איש קשר (0092), now that every imported login has its Ori id. A contact
+    // whose login wasn't imported is noted, never guessed.
+    const contactRows: Array<{ id: string; contact_person_id: string }> = [];
+    for (const link of reference.contactLinks) {
+      const userId = loginIds.get(link.contact_bubble_user_id);
+      if (userId) contactRows.push({ id: link.id, contact_person_id: userId });
+      else report.note("warning", "company", null, "company.contact_not_imported", `Main Contact of company ${link.id} is a login that was not imported — איש קשר left empty.`);
+    }
     const issues = [...referenceReport.issues, ...loginReport.issues, ...report.issues];
 
     console.log("Planned rows:");
@@ -1970,6 +2002,46 @@ async function main() {
     console.log(plan.liveDay ? `Live day: ${plan.liveDay.tradeDate} in phase ${plan.liveDay.phase}\n` : "No live day — every imported day is closed.\n");
     console.log("Not imported as-is (grouped):");
     printIssues(issues);
+
+    // ---- pictures (Bubble column parity): Ori keeps its own copies of the
+    // family and variety pictures instead of loading them from Bubble's CDN.
+    // A dry run only checks each one's headers. A --commit run copies them into
+    // the product-photos bucket before the transaction, and removes them again
+    // if it fails, the way it treats the logins. A skipped family keeps its
+    // Bubble link; a skipped variety gets no picture.
+    const pictureStore = admin ? supabasePictureStore(admin) : null;
+    const pictureRows = [
+      ...reference.productFamilies.map((row) => ({ row, keepOnSkip: true })),
+      ...reference.productVarieties.map((row) => ({ row, keepOnSkip: false })),
+    ].filter(({ row }) => typeof row.image_url === "string" && isBubblePictureUrl(row.image_url));
+    const skippedPictures = new Map<string, number>();
+    let copiedPictures = 0;
+    for (let start = 0; start < pictureRows.length; start += 4) {
+      await Promise.all(
+        pictureRows.slice(start, start + 4).map(async ({ row, keepOnSkip }) => {
+          const source = String(row.image_url);
+          const skip = (reason: string) => skippedPictures.set(reason, (skippedPictures.get(reason) ?? 0) + 1);
+          if (!pictureStore) {
+            const check = await checkPicture(source);
+            if (check.ok) copiedPictures += 1;
+            else skip(check.reason);
+            return;
+          }
+          const copy = await copyPicture(source, pictureStore);
+          if (copy.ok) {
+            copiedPictures += 1;
+            row.image_url = copy.url;
+            uploadedPicturePaths.push(copy.path);
+          } else {
+            skip(copy.reason);
+            if (!keepOnSkip) row.image_url = null;
+          }
+        }),
+      );
+    }
+    const skippedTotal = [...skippedPictures.values()].reduce((total, count) => total + count, 0);
+    const skippedDetail = skippedPictures.size > 0 ? ` (${[...skippedPictures].map(([reason, count]) => `${reason}: ${count}`).join(", ")})` : "";
+    console.log(`\nPictures: ${copiedPictures} ${COMMIT ? "copied" : "can be copied"}, ${skippedTotal} skipped${skippedDetail}`);
 
     await sql.begin(async (tx) => {
       await tx`set local statement_timeout = '15min'`;
@@ -2049,6 +2121,13 @@ async function main() {
       }
       console.log(`Customer scores kept: ${scoresBack.length} of ${keptScores.length}`);
       await insertRows(tx, "profiles", plan.rows.profiles);
+      if (contactRows.length > 0) {
+        await tx`
+          update companies set contact_person_id = link.contact_person_id
+          from jsonb_to_recordset(${tx.json(contactRows)}) as link(id uuid, contact_person_id uuid)
+          where companies.id = link.id
+        `;
+      }
       await insertRows(tx, "product_families", reference.productFamilies);
       await insertRows(tx, "product_varieties", reference.productVarieties);
       await insertRows(tx, "grower_products", reference.growerProducts);
@@ -2089,6 +2168,12 @@ async function main() {
       return;
     }
     await deleteCreatedLogins();
+    if (admin && uploadedPicturePaths.length > 0) {
+      await supabasePictureStore(admin)
+        .remove(uploadedPicturePaths)
+        .then(() => console.error(`Removed the ${uploadedPicturePaths.length} picture(s) this run uploaded.`))
+        .catch((removeError: unknown) => console.error(`Could NOT remove the ${uploadedPicturePaths.length} picture(s) this run uploaded: ${String(removeError)}`));
+    }
     throw error;
   } finally {
     await sql.end();
