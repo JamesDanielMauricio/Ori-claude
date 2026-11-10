@@ -53,6 +53,11 @@ export const submitOrderInputSchema = z.object({
   tradingDayId: z.string().uuid(),
   lines: z.array(orderLineInputSchema),
   customerCompanyId: z.string().uuid().optional(),
+  // The comment on the whole order, "הערה כללית" (migration 0093). Trimmed;
+  // an empty string is sent and clears the stored comment; left out
+  // (undefined) it is not sent at all, and submit_order keeps what is stored
+  // — which is what the order screen sends when it couldn't load the comment.
+  comment: z.string().trim().optional(),
 });
 export type SubmitOrderInput = z.infer<typeof submitOrderInputSchema>;
 
@@ -65,6 +70,7 @@ export function toSubmitOrderRpcArgs(input: SubmitOrderInput) {
       comment: line.comment ?? null,
     })),
     p_customer_company_id: input.customerCompanyId ?? null,
+    ...(input.comment === undefined ? {} : { p_comment: input.comment }),
   };
 }
 

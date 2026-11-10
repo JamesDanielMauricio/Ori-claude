@@ -1112,6 +1112,43 @@ describe("customer ordering module", () => {
     expect(await savedLine()).toMatchObject({ palletsOrdered: "4.00" });
   }, 30000);
 
+  // The padded comment goes straight to the database (no zod in between), so
+  // the trimming checked here is submit_order's own.
+  it("submit_order (migration 0093): stores the order comment trimmed, keeps it when left out, clears it with an empty string, and refuses a customer's own change once the shop has closed", async () => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const day = await createOpenTestDay(admin.userId);
+    await pickLine(day.id, grower.companyId, grower.varietyId, 10);
+
+    const customer = await createTestCustomer(day.id);
+    const client = await signedInCustomer(customer.companyId);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    const send = (comment?: string) =>
+      client.rpc(
+        "submit_order",
+        toSubmitOrderRpcArgs({
+          tradingDayId: day.id,
+          lines: [{ productVarietyId: grower.varietyId, palletsOrdered: 2, comment: null }],
+          ...(comment === undefined ? {} : { comment }),
+        }),
+      );
+    const storedComment = async () => (await getDailyOrderForCustomer(day.id, customer.companyId))!.comment;
+
+    expect((await send("  להביא לפני 6 ")).error).toBeNull();
+    expect(await storedComment()).toBe("להביא לפני 6");
+    expect((await send()).error).toBeNull();
+    expect(await storedComment()).toBe("להביא לפני 6");
+    expect((await send("")).error).toBeNull();
+    expect(await storedComment()).toBeNull();
+
+    expect((await send("לפני הסגירה")).error).toBeNull();
+    expect((await admin.client.rpc("close_shop")).error).toBeNull();
+    const refused = await send("אחרי הסגירה");
+    expect(refused.error?.code).toBe(CUSTOMER_ERROR_CODES.INVALID_STATE);
+    expect(await storedComment()).toBe("לפני הסגירה");
+  }, 30000);
+
   it("get_orderable_catalog_for_customer (migration 0072): a customer sees prices only when both the day's shop and their company allow it, and never through an older day's id", async () => {
     const grower = await createTestGrowerWithProduct({ price: 9.9 });
     cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
