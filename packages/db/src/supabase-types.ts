@@ -605,6 +605,9 @@ export type Database = {
           status: Database["public"]["Enums"]["daily_order_status"];
           submitted_at: string | null;
           reminder_sent_at: string | null;
+          // הערה כללית — the comment on the whole order (migration 0093).
+          // Null when unset.
+          comment: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -615,6 +618,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["daily_order_status"];
           submitted_at?: string | null;
           reminder_sent_at?: string | null;
+          comment?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -625,6 +629,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["daily_order_status"];
           submitted_at?: string | null;
           reminder_sent_at?: string | null;
+          comment?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1470,6 +1475,9 @@ export type Database = {
           p_trading_day_id: string;
           p_lines: Json;
           p_customer_company_id?: string | null;
+          // The order comment (migration 0093): left out keeps the stored
+          // comment, "" clears it, other text is saved trimmed.
+          p_comment?: string | null;
         };
         Returns: Database["public"]["Tables"]["daily_orders"]["Row"];
       };

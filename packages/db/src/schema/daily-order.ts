@@ -1,4 +1,4 @@
-import { pgTable, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 import { companies } from "./company";
 import { dailyOrderStatusEnum } from "./enums";
@@ -25,6 +25,9 @@ export const dailyOrders = pgTable(
     // Order Status screen — mirrors daily_picks.reminderSentAt exactly,
     // just the customer-side equivalent.
     reminderSentAt: timestamp("reminder_sent_at", { withTimezone: true }),
+    // הערה כללית — the customer's comment on the whole order, written by
+    // submit_order's p_comment (migration 0093; Bubble Daily Order "comment").
+    comment: text("comment"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
