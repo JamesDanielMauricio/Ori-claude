@@ -4,7 +4,7 @@ import { ProductCatalogScreen } from "@/components/reference-data/product-catalo
 import { StatusPill } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
-import { NO_VARIETIES, pickedProductsQueries } from "@/lib/queries/picked-products";
+import { NO_PICKED_STOCK, pickedProductsQueries } from "@/lib/queries/picked-products";
 import { useTradingDayView } from "@/lib/trading-day-view";
 
 const TITLE = "מוצרים שנקטפו";
@@ -76,7 +76,9 @@ export default function PickedProductsPage() {
           {!dayView.isLive && <StatusPill tone="warning">יום מסחר קודם</StatusPill>}
         </>
       }
-      varietyIds={pickedQuery.data ?? NO_VARIETIES}
+      varietyIds={(pickedQuery.data ?? NO_PICKED_STOCK).varietyIds}
+      // משטחים במלאי: each variety's picked + leftover pallets that day.
+      stockByVariety={(pickedQuery.data ?? NO_PICKED_STOCK).stockByVariety}
       extraLoading={dayView.isLoading || pickedQuery.isLoading}
       emptyLabel={
         day

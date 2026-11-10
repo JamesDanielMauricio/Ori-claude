@@ -7,6 +7,7 @@ import { StatusPill } from "@/components/ui/card";
 import { ProductThumbnail } from "@/components/ui/product-thumbnail";
 import { Select } from "@/components/ui/select";
 import { blockWheel } from "@/lib/integer-input";
+import { formatPallets } from "@/components/arrangement/board-data";
 import type { ProductFamily, ProductVariety } from "@/lib/queries/reference-data";
 
 import {
@@ -29,6 +30,8 @@ export interface VarietyColumnsContext {
   photo: ReturnType<typeof useVarietyPhoto>;
   // While a save is in flight the picture control is disabled.
   saving: boolean;
+  // מוצרים שנקטפו only — see ProductCatalogScreen's prop of the same name.
+  stockByVariety?: ReadonlyMap<string, number> | undefined;
 }
 
 // The two family-level fields the flat table used to repeat on every
@@ -44,6 +47,7 @@ export function buildVarietyColumns({
   openFamily,
   photo,
   saving,
+  stockByVariety,
 }: VarietyColumnsContext): RecordTableColumn<ProductVariety>[] {
   return [
     {
@@ -98,6 +102,19 @@ export function buildVarietyColumns({
         </div>
       ),
     },
+    // משטחים במלאי (Bubble's ריכוז מוצרים): right after the name, as Bubble
+    // has it after שם. Read-only, and only where a day is in view. The family
+    // row leaves it empty — Bubble showed the category there, which Ori
+    // already shows in its own column.
+    ...(stockByVariety
+      ? [
+          {
+            key: "stock",
+            label: "משטחים במלאי",
+            render: (row: ProductVariety) => formatPallets(stockByVariety.get(row.id) ?? 0),
+          },
+        ]
+      : []),
     {
       key: "family",
       label: "משפחה",

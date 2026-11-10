@@ -67,6 +67,7 @@ export function ProductCatalogScreen({
   varietyIds = null,
   extraLoading = false,
   emptyLabel = "אין מוצרים עדיין.",
+  stockByVariety,
 }: {
   title: string;
   subtitle: string;
@@ -83,6 +84,10 @@ export function ProductCatalogScreen({
   // meantime would be wrong rather than merely early.
   extraLoading?: boolean;
   emptyLabel?: string;
+  // מוצרים שנקטפו only: each listed variety's picked + leftover pallets for
+  // the day, shown as Bubble's "משטחים במלאי" column. Omitted on the full
+  // catalog, which isn't tied to a day.
+  stockByVariety?: ReadonlyMap<string, number>;
 }) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -282,6 +287,7 @@ export function ProductCatalogScreen({
     openFamily,
     photo: varietyPhoto,
     saving,
+    stockByVariety,
   });
 
   // Creating a record is offered on the unfiltered catalog only. A brand-new
