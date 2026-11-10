@@ -1149,6 +1149,34 @@ describe("customer ordering module", () => {
     expect(await storedComment()).toBe("לפני הסגירה");
   }, 30000);
 
+  it("get_orderable_catalog_for_customer (migration 0094): returns the variety's own picture as variety_image_url, null when it has none", async () => {
+    const withPicture = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(withPicture));
+    const withoutPicture = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(withoutPicture));
+    await db
+      .update(productVarieties)
+      .set({ imageUrl: "https://example.test/varieties/a.jpg" })
+      .where(eq(productVarieties.id, withPicture.varietyId));
+
+    const day = await createOpenTestDay(admin.userId);
+    await pickLine(day.id, withPicture.companyId, withPicture.varietyId, 5);
+    await pickLine(day.id, withoutPicture.companyId, withoutPicture.varietyId, 5);
+    const customer = await createTestCustomer(day.id);
+    const client = await signedInCustomer(customer.companyId);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    const { data, error } = await client.rpc(
+      "get_orderable_catalog_for_customer",
+      toOrderableCatalogRpcArgs({ tradingDayId: day.id }),
+    );
+    expect(error).toBeNull();
+    // undefined (not listed at all) fails both: the rows must be there.
+    const pictureOf = (varietyId: string) => data!.find((row) => row.variety_id === varietyId)?.variety_image_url;
+    expect(pictureOf(withPicture.varietyId)).toBe("https://example.test/varieties/a.jpg");
+    expect(pictureOf(withoutPicture.varietyId)).toBeNull();
+  }, 30000);
+
   it("get_orderable_catalog_for_customer (migration 0072): a customer sees prices only when both the day's shop and their company allow it, and never through an older day's id", async () => {
     const grower = await createTestGrowerWithProduct({ price: 9.9 });
     cleanupFns.push(() => deleteTestGrowerWithProduct(grower));

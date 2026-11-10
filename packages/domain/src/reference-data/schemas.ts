@@ -210,6 +210,11 @@ export const saveProductInputSchema = z.object({
   // Required when updating (the version the client last read); ignored by
   // the function on create. Null only ever legitimately occurs on create.
   expectedVersion: z.number().int().nullable(),
+  // The variety's own picture (migration 0094): a link into the
+  // product-photos bucket. Trimmed; an empty string is sent and removes the
+  // stored picture; left out (undefined) it is not sent, and save_product
+  // keeps what is stored.
+  imageUrl: z.string().trim().optional(),
 });
 export type SaveProductInput = z.infer<typeof saveProductInputSchema>;
 
@@ -229,6 +234,7 @@ export function toSaveProductRpcArgs(input: SaveProductInput) {
     p_is_seasonal_available: input.isSeasonalAvailable,
     p_number_of_orders_per_customer: input.numberOfOrdersPerCustomer,
     p_expected_version: input.expectedVersion,
+    ...(input.imageUrl === undefined ? {} : { p_image_url: input.imageUrl }),
   };
 }
 

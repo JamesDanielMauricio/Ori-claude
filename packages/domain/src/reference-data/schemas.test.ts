@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   saveCustomerInputSchema,
   saveGrowerInputSchema,
+  saveProductInputSchema,
   saveTransporterInputSchema,
   setCustomerScoreInputSchema,
   toSaveCustomerRpcArgs,
   toSaveGrowerRpcArgs,
+  toSaveProductRpcArgs,
   toSaveTransporterRpcArgs,
   toSetCustomerScoreRpcArgs,
 } from "./schemas";
@@ -191,5 +193,34 @@ describe("company details (migration 0092)", () => {
       }),
     );
     expect(transporterArgs.p_phone).toBe("03-5000000");
+  });
+});
+
+// A variety's own picture (migration 0094). save_product keeps the stored
+// picture when p_image_url is left out and removes it when sent empty.
+describe("save_product args: the variety picture (migration 0094)", () => {
+  const product = {
+    id: null,
+    familyId: "00000000-0000-4000-8000-000000000201",
+    name: "קוונדיש",
+    sizes: null,
+    packType: null,
+    price: null,
+    priceRangeFrom: null,
+    priceRangeTo: null,
+    priceType: null,
+    noOverbooking: 0,
+    highlightPriceFluctuations: false,
+    isSeasonalAvailable: true,
+    numberOfOrdersPerCustomer: null,
+    expectedVersion: null,
+  };
+  const argsFor = (extra: Record<string, unknown>) =>
+    toSaveProductRpcArgs(saveProductInputSchema.parse({ ...product, ...extra }));
+
+  it("a picture link is sent trimmed, an empty one is sent to remove it, and when left out it is not sent", () => {
+    expect(argsFor({ imageUrl: " https://x.test/a.jpg " }).p_image_url).toBe("https://x.test/a.jpg");
+    expect(argsFor({ imageUrl: "" }).p_image_url).toBe("");
+    expect("p_image_url" in argsFor({})).toBe(false);
   });
 });

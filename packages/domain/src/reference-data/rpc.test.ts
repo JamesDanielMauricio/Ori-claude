@@ -644,4 +644,44 @@ describe("reference-data save functions", () => {
     const transporterCleared = await client.rpc("save_transporter", toSaveTransporterRpcArgs({ ...transporterBase, id: transporter.data!.id, city: "" }));
     expect(detailsOf(transporterCleared.data!)).toEqual({ ...trimmed, city: null });
   });
+
+  // The padded link goes straight to the database (no zod in between), so the
+  // trimming checked here is save_product's own.
+  it("save_product (migration 0094): sets the variety picture, keeps it when left out, removes it with an empty string", async () => {
+    const family = await createTestProductFamily();
+    cleanupFns.push(() => deleteTestProductFamily(family.id));
+    const product = await createTestProductVariety({ familyId: family.id });
+    cleanupFns.push(() => deleteTestProductVariety(product.id));
+    const client = await signedInBackofficeClient();
+
+    const save = (expectedVersion: number, imageUrl?: string) =>
+      client.rpc(
+        "save_product",
+        toSaveProductRpcArgs({
+          id: product.id,
+          familyId: family.id,
+          name: product.name,
+          sizes: null,
+          packType: null,
+          price: null,
+          priceRangeFrom: null,
+          priceRangeTo: null,
+          priceType: null,
+          noOverbooking: 0,
+          highlightPriceFluctuations: false,
+          isSeasonalAvailable: true,
+          numberOfOrdersPerCustomer: null,
+          expectedVersion,
+          ...(imageUrl === undefined ? {} : { imageUrl }),
+        }),
+      );
+
+    const set = await save(1, " https://example.test/varieties/a.jpg ");
+    expect(set.error).toBeNull();
+    expect(set.data).toMatchObject({ image_url: "https://example.test/varieties/a.jpg", version: 2 });
+    const kept = await save(2);
+    expect(kept.data).toMatchObject({ image_url: "https://example.test/varieties/a.jpg", version: 3 });
+    const removed = await save(3, "");
+    expect(removed.data).toMatchObject({ image_url: null, version: 4 });
+  });
 });
