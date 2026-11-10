@@ -322,8 +322,10 @@ family upload code itself is left exactly as it is (James, 2026-11-10).
    - It shows the selected variety's `no_overbooking`. Despite the column's
      name, this holds Bubble's "Overbooking": how many pallets may be ordered
      beyond stock.
-   - The board already loads it (`lib/queries/arrangement.ts`), and
-     `BoardProduct` carries it to the strip.
+   - The board's one nested read (`arrangementQueries.boardData` in
+     `lib/queries/arrangement.ts`) adds `no_overbooking` to the varieties it
+     already embeds, so there's still no extra request. `BoardProduct`
+     carries it to the strip.
 3. **לפי לקוח in the records table.**
    - A third view button after לפי מוצר and לפי מגדל.
    - It shows the same rows sorted by customer name, then product, using
