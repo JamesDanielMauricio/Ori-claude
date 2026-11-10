@@ -3,6 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { CellChipList } from "@/components/reference-data/cell-popover";
+import { buildCompanyDetailColumns } from "@/components/reference-data/company-detail-columns";
+import {
+  BLANK_COMPANY_DETAILS,
+  toCompanyDetailsForm,
+  toCompanyDetailsRow,
+  type CompanyDetailsForm,
+} from "@/components/reference-data/company-details";
 import { ContactPersonEditCell, ContactPersonSummary } from "@/components/reference-data/contact-person-cell";
 import { checkboxClassName, inputClassName } from "@/components/reference-data/form-field";
 import { ProductMultiSelectCell } from "@/components/reference-data/product-multi-select-cell";
@@ -35,6 +42,7 @@ interface FormState {
   transporterCompanyId: string;
   contactPersonId: string;
   noArrangementMessage: boolean;
+  details: CompanyDetailsForm;
 }
 
 // Sentinel row id for a not-yet-created record: the draft row prepended to
@@ -54,6 +62,7 @@ const BLANK_FORM: FormState = {
   transporterCompanyId: "",
   contactPersonId: "",
   noArrangementMessage: false,
+  details: BLANK_COMPANY_DETAILS,
 };
 
 function blankRow(): GrowerCompany {
@@ -65,6 +74,11 @@ function blankRow(): GrowerCompany {
     whatsapp_group_id: null,
     transporter_company_id: null,
     contact_person_id: null,
+    phone: null,
+    address_line: null,
+    city: null,
+    tax_id: null,
+    accounting_id: null,
     no_arrangement_message: false,
     created_at: "",
   };
@@ -80,6 +94,7 @@ function toFormState(row: GrowerCompany, productVarietyIds: string[]): FormState
     transporterCompanyId: row.transporter_company_id ?? "",
     contactPersonId: row.contact_person_id ?? "",
     noArrangementMessage: row.no_arrangement_message ?? false,
+    details: toCompanyDetailsForm(row),
   };
 }
 
@@ -157,6 +172,7 @@ export default function GrowersPage() {
               transporter_company_id: form.transporterCompanyId || null,
               contact_person_id: form.contactPersonId || null,
               no_arrangement_message: form.noArrangementMessage,
+              ...toCompanyDetailsRow(form.details),
             }
           : row,
       ),
@@ -188,6 +204,12 @@ export default function GrowersPage() {
         transporterCompanyId: form.transporterCompanyId || null,
         contactPersonId: form.contactPersonId || null,
         noArrangementMessage: form.noArrangementMessage,
+        // Always all five, so an emptied box clears the stored value (0092).
+        phone: form.details.phone,
+        addressLine: form.details.addressLine,
+        city: form.details.city,
+        taxId: form.details.taxId,
+        accountingId: form.details.accountingId,
       });
       const { data, error } = await supabase.rpc("save_grower", toSaveGrowerRpcArgs(input));
       if (error) throw error;
@@ -297,6 +319,13 @@ export default function GrowersPage() {
     saveMutation.mutate(undefined, { onSettled: () => setSaving(false) });
   }
 
+  // טלפון, כתובת, יישוב and הנה״ח (migration 0092) — the same columns on all
+  // three company screens (company-detail-columns.tsx).
+  const detailColumns = buildCompanyDetailColumns<GrowerCompany>({
+    details: form.details,
+    onChange: (patch) =>
+      setForm((current) => ({ ...current, details: { ...current.details, ...patch } })),
+  });
   const columns: RecordTableColumn<GrowerCompany>[] = [
     {
       key: "name",
@@ -418,6 +447,7 @@ export default function GrowersPage() {
         />
       ),
     },
+    ...detailColumns.beforeContact,
     {
       key: "contactPerson",
       label: "איש קשר",
@@ -434,6 +464,7 @@ export default function GrowersPage() {
         />
       ),
     },
+    ...detailColumns.afterContact,
     {
       key: "inSeason",
       label: "מוצרים בעונה",

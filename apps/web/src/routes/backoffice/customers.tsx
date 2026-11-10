@@ -7,6 +7,13 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
+import { buildCompanyDetailColumns } from "@/components/reference-data/company-detail-columns";
+import {
+  BLANK_COMPANY_DETAILS,
+  toCompanyDetailsForm,
+  toCompanyDetailsRow,
+  type CompanyDetailsForm,
+} from "@/components/reference-data/company-details";
 import { ContactPersonEditCell, ContactPersonSummary } from "@/components/reference-data/contact-person-cell";
 import { formatCustomerScore } from "@/components/reference-data/customer-score";
 import { CustomerScoreCell } from "@/components/reference-data/customer-score-cell";
@@ -48,6 +55,7 @@ interface FormState {
   canSeeProductPrices: boolean;
   whatsappGroupId: string;
   contactPersonId: string;
+  details: CompanyDetailsForm;
 }
 
 // Sentinel row id for a not-yet-created record: the draft row prepended to
@@ -64,6 +72,7 @@ const BLANK_FORM: FormState = {
   canSeeProductPrices: false,
   whatsappGroupId: "",
   contactPersonId: "",
+  details: BLANK_COMPANY_DETAILS,
 };
 
 // Field values here are never actually read: every column either has a
@@ -78,6 +87,11 @@ function blankRow(): CustomerCompany {
     can_see_product_prices: false,
     whatsapp_group_id: null,
     contact_person_id: null,
+    phone: null,
+    address_line: null,
+    city: null,
+    tax_id: null,
+    accounting_id: null,
     created_at: "",
   };
 }
@@ -89,6 +103,7 @@ function toFormState(row: CustomerCompany): FormState {
     canSeeProductPrices: row.can_see_product_prices ?? false,
     whatsappGroupId: row.whatsapp_group_id ?? "",
     contactPersonId: row.contact_person_id ?? "",
+    details: toCompanyDetailsForm(row),
   };
 }
 
@@ -232,6 +247,7 @@ export default function CustomersPage() {
               can_see_product_prices: form.canSeeProductPrices,
               whatsapp_group_id: form.whatsappGroupId || null,
               contact_person_id: form.contactPersonId || null,
+              ...toCompanyDetailsRow(form.details),
             }
           : row,
       ),
@@ -246,6 +262,12 @@ export default function CustomersPage() {
         canSeeProductPrices: form.canSeeProductPrices,
         whatsappGroupId: form.whatsappGroupId || null,
         contactPersonId: form.contactPersonId || null,
+        // Always all five, so an emptied box clears the stored value (0092).
+        phone: form.details.phone,
+        addressLine: form.details.addressLine,
+        city: form.details.city,
+        taxId: form.details.taxId,
+        accountingId: form.details.accountingId,
       });
       const { data, error } = await supabase.rpc("save_customer", toSaveCustomerRpcArgs(input));
       if (error) throw error;
@@ -325,6 +347,13 @@ export default function CustomersPage() {
     saveMutation.mutate(undefined, { onSettled: () => setSaving(false) });
   }
 
+  // טלפון, כתובת, יישוב and הנה״ח (migration 0092) — the same columns on all
+  // three company screens (company-detail-columns.tsx).
+  const detailColumns = buildCompanyDetailColumns<CustomerCompany>({
+    details: form.details,
+    onChange: (patch) =>
+      setForm((current) => ({ ...current, details: { ...current.details, ...patch } })),
+  });
   const columns: RecordTableColumn<CustomerCompany>[] = [
     {
       key: "name",
@@ -435,6 +464,7 @@ export default function CustomersPage() {
         />
       ),
     },
+    ...detailColumns.beforeContact,
     {
       key: "contactPerson",
       label: "איש קשר",
@@ -451,6 +481,7 @@ export default function CustomersPage() {
         />
       ),
     },
+    ...detailColumns.afterContact,
     {
       key: "created",
       label: "נוצר",

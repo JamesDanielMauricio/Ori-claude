@@ -2,6 +2,13 @@ import { saveTransporterInputSchema, toSaveTransporterRpcArgs } from "@ori/domai
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { buildCompanyDetailColumns } from "@/components/reference-data/company-detail-columns";
+import {
+  BLANK_COMPANY_DETAILS,
+  toCompanyDetailsForm,
+  toCompanyDetailsRow,
+  type CompanyDetailsForm,
+} from "@/components/reference-data/company-details";
 import { ContactPersonEditCell, ContactPersonSummary } from "@/components/reference-data/contact-person-cell";
 import { inputClassName } from "@/components/reference-data/form-field";
 import { RecordTable, type RecordTableColumn } from "@/components/reference-data/record-table";
@@ -27,6 +34,7 @@ interface FormState {
   status: "active" | "inactive";
   whatsappGroupId: string;
   contactPersonId: string;
+  details: CompanyDetailsForm;
 }
 
 // Sentinel row id for a not-yet-created record: the draft row prepended to
@@ -42,6 +50,7 @@ const BLANK_FORM: FormState = {
   status: "active",
   whatsappGroupId: "",
   contactPersonId: "",
+  details: BLANK_COMPANY_DETAILS,
 };
 
 function blankRow(): TransporterCompany {
@@ -51,6 +60,11 @@ function blankRow(): TransporterCompany {
     status: "active",
     whatsapp_group_id: null,
     contact_person_id: null,
+    phone: null,
+    address_line: null,
+    city: null,
+    tax_id: null,
+    accounting_id: null,
     created_at: "",
   };
 }
@@ -61,6 +75,7 @@ function toFormState(row: TransporterCompany): FormState {
     status: row.status,
     whatsappGroupId: row.whatsapp_group_id ?? "",
     contactPersonId: row.contact_person_id ?? "",
+    details: toCompanyDetailsForm(row),
   };
 }
 
@@ -105,6 +120,7 @@ export default function TransportersPage() {
               status: form.status,
               whatsapp_group_id: form.whatsappGroupId || null,
               contact_person_id: form.contactPersonId || null,
+              ...toCompanyDetailsRow(form.details),
             }
           : row,
       ),
@@ -118,6 +134,12 @@ export default function TransportersPage() {
         status: form.status,
         whatsappGroupId: form.whatsappGroupId || null,
         contactPersonId: form.contactPersonId || null,
+        // Always all five, so an emptied box clears the stored value (0092).
+        phone: form.details.phone,
+        addressLine: form.details.addressLine,
+        city: form.details.city,
+        taxId: form.details.taxId,
+        accountingId: form.details.accountingId,
       });
       const { data, error } = await supabase.rpc(
         "save_transporter",
@@ -187,6 +209,13 @@ export default function TransportersPage() {
     saveMutation.mutate(undefined, { onSettled: () => setSaving(false) });
   }
 
+  // טלפון, כתובת, יישוב and הנה״ח (migration 0092) — the same columns on all
+  // three company screens (company-detail-columns.tsx).
+  const detailColumns = buildCompanyDetailColumns<TransporterCompany>({
+    details: form.details,
+    onChange: (patch) =>
+      setForm((current) => ({ ...current, details: { ...current.details, ...patch } })),
+  });
   const columns: RecordTableColumn<TransporterCompany>[] = [
     {
       key: "name",
@@ -239,6 +268,7 @@ export default function TransportersPage() {
         />
       ),
     },
+    ...detailColumns.beforeContact,
     {
       key: "contactPerson",
       label: "איש קשר",
@@ -255,6 +285,7 @@ export default function TransportersPage() {
         />
       ),
     },
+    ...detailColumns.afterContact,
     {
       key: "created",
       label: "נוצר",

@@ -1,6 +1,7 @@
 import type { UserRole } from "@ori/shared/roles";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
+import type { CompanyDetailsRow } from "@/components/reference-data/company-details";
 import { fetchAllRows } from "@/lib/fetch-all-rows";
 import type { ProduceCategory } from "@/lib/produce-categories";
 import { usersAdminQueries } from "@/lib/queries/users-admin";
@@ -62,7 +63,8 @@ export interface ProductFamily {
 
 // ---------------------------------------------------------------- companies
 
-export interface GrowerCompany {
+// The five company detail columns (migration 0092): טלפון, כתובת, יישוב, הנה״ח.
+export interface GrowerCompany extends CompanyDetailsRow {
   id: string;
   name: string;
   status: "active" | "inactive";
@@ -75,7 +77,7 @@ export interface GrowerCompany {
   created_at: string;
 }
 
-export interface CustomerCompany {
+export interface CustomerCompany extends CompanyDetailsRow {
   id: string;
   name: string;
   status: "active" | "inactive";
@@ -85,7 +87,7 @@ export interface CustomerCompany {
   created_at: string;
 }
 
-export interface TransporterCompany {
+export interface TransporterCompany extends CompanyDetailsRow {
   id: string;
   name: string;
   status: "active" | "inactive";
@@ -202,7 +204,7 @@ export const referenceDataQueries = {
         const { data, error } = await createClient()
           .from("companies")
           .select(
-            "id, name, status, default_pickup_time, whatsapp_group_id, transporter_company_id, contact_person_id, no_arrangement_message, created_at",
+            "id, name, status, default_pickup_time, whatsapp_group_id, transporter_company_id, contact_person_id, no_arrangement_message, phone, address_line, city, tax_id, accounting_id, created_at",
           )
           .eq("type", "grower")
           .order("name");
@@ -248,7 +250,7 @@ export const referenceDataQueries = {
         const { data, error } = await createClient()
           .from("companies")
           .select(
-            "id, name, status, can_see_product_prices, whatsapp_group_id, contact_person_id, created_at",
+            "id, name, status, can_see_product_prices, whatsapp_group_id, contact_person_id, phone, address_line, city, tax_id, accounting_id, created_at",
           )
           .eq("type", "customer")
           .order("name");
@@ -267,7 +269,7 @@ export const referenceDataQueries = {
       queryFn: async (): Promise<TransporterCompany[]> => {
         const { data, error } = await createClient()
           .from("companies")
-          .select("id, name, status, whatsapp_group_id, contact_person_id, created_at")
+          .select("id, name, status, whatsapp_group_id, contact_person_id, phone, address_line, city, tax_id, accounting_id, created_at")
           .eq("type", "transporter")
           .order("name");
         if (error) throw error;
