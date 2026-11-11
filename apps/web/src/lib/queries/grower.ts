@@ -59,6 +59,36 @@ export interface GrowerHistoryDay {
   daily_picks: Array<{ id: string; status: "draft" | "submitted" | "closed" }>;
 }
 
+// One pick's lines, with each line's variety and family for display —
+// growerQueries.pickLines' read, also called on its own by anything that must
+// act on the lines exactly as they are at that moment rather than on a cached
+// copy: the "בשם מגדל" picking upload re-reads them right before it saves,
+// because save_pick_lines writes each line's leftover and comment back too.
+//
+// Through get_pick_lines (migration 0086), not by embedding
+// product_varieties: that table holds the selling prices, which growers may
+// not see (workbook Task 30), so it is closed to them (0091) and the
+// function returns the names without prices. Reshaped here into the nested
+// form the editor was written against, so nothing downstream changes.
+export async function fetchPickLines(dailyPickId: string): Promise<PickProductLineRow[]> {
+  const { data, error } = await createClient().rpc("get_pick_lines", {
+    p_daily_pick_id: dailyPickId,
+  });
+  if (error) throw error;
+  return data.map((line) => ({
+    id: line.id,
+    pallets_picked: line.pallets_picked,
+    leftover_pallets: line.leftover_pallets,
+    comment: line.comment,
+    product_varieties: {
+      name: line.variety_name,
+      sizes: line.variety_sizes,
+      family_id: line.family_id,
+      product_families: { name: line.family_name, image_url: line.family_image_url },
+    },
+  }));
+}
+
 // Days per "הצג עוד" batch — about two and a half months of trading. Loading
 // every day at once grew with every day the business ran (measured: ~0.8 s
 // at 323 days, ~3 s at 1,600 on a laptop, several times that on a phone),
@@ -133,34 +163,12 @@ export const growerQueries = {
     });
   },
 
-  // One pick's lines, with each line's variety and family for display.
-  //
-  // Through get_pick_lines (migration 0086), not by embedding
-  // product_varieties: that table holds the selling prices, which growers may
-  // not see (workbook Task 30), so it is closed to them (0091) and the
-  // function returns the names without prices. Reshaped here into the nested
-  // form the editor was written against, so nothing downstream changes.
+  // One pick's lines, with each line's variety and family for display (see
+  // fetchPickLines above).
   pickLines(dailyPickId: string) {
     return queryOptions({
       queryKey: ["grower", "pick-lines", dailyPickId],
-      queryFn: async (): Promise<PickProductLineRow[]> => {
-        const { data, error } = await createClient().rpc("get_pick_lines", {
-          p_daily_pick_id: dailyPickId,
-        });
-        if (error) throw error;
-        return data.map((line) => ({
-          id: line.id,
-          pallets_picked: line.pallets_picked,
-          leftover_pallets: line.leftover_pallets,
-          comment: line.comment,
-          product_varieties: {
-            name: line.variety_name,
-            sizes: line.variety_sizes,
-            family_id: line.family_id,
-            product_families: { name: line.family_name, image_url: line.family_image_url },
-          },
-        }));
-      },
+      queryFn: () => fetchPickLines(dailyPickId),
     });
   },
 

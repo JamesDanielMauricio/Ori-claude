@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { formatPickupTime } from "@/components/arrangement/board-data";
 import { GrowerPickDialog } from "@/components/arrangement/grower-pick-dialog";
+import { PickUploadDialog, type PickUploadTarget } from "@/components/arrangement/pick-upload-dialog";
 import { CheckboxList } from "@/components/reference-data/checkbox-list";
 import { ExpandableEntityRow } from "@/components/reference-data/expandable-entity-row";
 import {
@@ -61,7 +62,9 @@ const NO_FAMILIES: FamilyGroupedRow[] = [];
 // pencil already use, since save_pick_lines already accepts "the owning
 // grower, or backoffice" — and a bell that resends the pick reminder. The
 // pencil's "שמור" also SUBMITS the pick, as on the grower's own screen, which
-// is what turns the name green.
+// is what turns the name green. A third button fills the same pick from a
+// spreadsheet instead (PickUploadDialog, workbook Task 38) and saves it the
+// same way, sending included.
 //
 // Replaced a master-detail layout (pick a grower on the left, edit their
 // pick on the right) with this flat, always-expandable list: the earlier
@@ -82,6 +85,7 @@ export default function DistributorAsGrowerPage() {
     status: string;
     growerName: string;
   } | null>(null);
+  const [uploadTarget, setUploadTarget] = useState<PickUploadTarget | null>(null);
   const [productsDialogGrower, setProductsDialogGrower] = useState<OversightGrower | null>(null);
   const [productDraft, setProductDraft] = useState<Set<string>>(new Set());
   const [savingProducts, setSavingProducts] = useState(false);
@@ -343,6 +347,19 @@ export default function DistributorAsGrowerPage() {
         : [pickupTime && `איסוף ${pickupTime}`, statusCaption].filter(Boolean).join(" · ") || null;
     const families = familiesByGrowerId.get(grower.id) ?? NO_FAMILIES;
     const reminding = reminderMutation.isPending && reminderMutation.variables === pick?.id;
+    // The upload writes only into the pick it is opened for, on the open
+    // day, and only while that pick can still be edited — the bell's three
+    // conditions, each with its own reason on the button. With no pick it
+    // stays off rather than falling back to the products dialog the way the
+    // pencil does: creating a grower's pick is the pencil's job, and a file
+    // has nothing to fill until there is one.
+    const uploadDisabledReason = !dayView.isLive
+      ? "צפייה ביום אחר — אפשר להעלות ליקוט רק ליום המסחר הפתוח."
+      : !pick
+        ? "אין למגדל ליקוט ביום הזה, ולכן אין לאן להעלות קובץ."
+        : pick.status === "closed"
+          ? "הליקוט סגור (סמל המשאית). פתחו אותו מחדש כדי להעלות קובץ."
+          : null;
 
     return (
       <ExpandableEntityRow
@@ -371,6 +388,9 @@ export default function DistributorAsGrowerPage() {
           !dayView.isLive || !pick || pick.status === "closed" || reminderMutation.isPending
         }
         reminding={reminding}
+        onUpload={() => pick && setUploadTarget({ pickId: pick.id, growerName: grower.name })}
+        uploadLabel={`העלאת ליקוט מקובץ — ${grower.name}`}
+        uploadDisabledReason={uploadDisabledReason}
       >
         <FamilyGroupedLines families={families} emptyLabel="אין מוצרים בעונה עבור מגדל זה." />
       </ExpandableEntityRow>
@@ -462,6 +482,23 @@ export default function DistributorAsGrowerPage() {
         // submitted (`isDone`), would stay un-green. Sending never closes the
         // pick, so it leaves that truck icon as it was.
         submitOnSave
+      />
+
+      <PickUploadDialog
+        target={uploadTarget}
+        // Live, from this screen's own read of the day: a pick closed while
+        // the dialog is open switches its confirm off.
+        pickClosed={
+          uploadTarget !== null &&
+          picksForDayQuery.data?.find((pick) => pick.id === uploadTarget.pickId)?.status === "closed"
+        }
+        onClose={() => setUploadTarget(null)}
+        onSaved={(pickId) => {
+          void queryClient.invalidateQueries({
+            queryKey: oversightQueries.picksForDay(dayId).queryKey,
+          });
+          setUploadTarget((current) => (current?.pickId === pickId ? null : current));
+        }}
       />
 
       <Dialog

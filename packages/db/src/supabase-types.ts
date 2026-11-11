@@ -1419,6 +1419,23 @@ export type Database = {
           variety_image_url: string | null;
         }[];
       };
+      // The growers each variety can come from on a day (migration 0095,
+      // workbook Task 36): only their names, only for the varieties the
+      // catalog above shows the caller, and only where two or more growers
+      // have the variety in stock — the order screen's "מגדל מועדף" button.
+      // The catalog's arguments, with the same rule on who may pass a
+      // company; a grower is refused, and a customer gets rows only while
+      // that day's shop is open.
+      get_variety_growers_for_customer: {
+        Args: {
+          p_trading_day_id: string;
+          p_customer_company_id?: string | null;
+        };
+        Returns: {
+          variety_id: string;
+          grower_name: string;
+        }[];
+      };
       // One order's lines with their variety/family names and no price
       // (migration 0056) — how a customer's closed-order screen reads them,
       // since customers can no longer read product_varieties directly.

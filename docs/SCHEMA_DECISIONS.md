@@ -5,7 +5,67 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-09 (latest) — Workbook Tasks 30 and 32, James's rulings: `0086`–`0091`
+## 2026-11-11 (latest) — A customer may name a preferred grower, as words in the line's comment (`0095`)
+
+Release workbook Task 36. The client: "When more than one grower has the selected variety in stock
+for the business day, show a small button allowing the customer to choose a preferred grower. Add
+that choice only to the existing order comment field; it must not affect allocation or other
+business logic." Built to these rules, set out to James before the work started (2026-11-11): the
+choice goes into the product LINE's own comment (the row's "+ הערה"), not the order's "הערה
+כללית"; it reads "מגדל מועדף: <name>", kept beside any other text with " · ", replaced by a new
+choice and removed by "ללא העדפה", and the comment stays free text; the button shows only when two
+or more growers have the variety in stock that day, and only on an order that can still be changed;
+customers see grower names and nothing else; staff ordering on a customer's behalf get it too.
+
+- **Why a function.** The order screen cannot tell when there is a choice: customers cannot read
+  growers' picks or companies (`0066`), and the shop catalog adds every grower's picking into one
+  total. `get_variety_growers_for_customer(day, company)` returns one row per (variety, grower
+  name), only for varieties that two or more growers have in stock. "In stock" is the catalog's own
+  "picking", per grower instead of summed: `pallets_picked + leftover_pallets > 0` on that grower's
+  line for the day, whatever the state of the pick, active growers only. Two growers with the same
+  name count once, since the customer could not tell them apart.
+- **Who may see what.** Security definer, with the catalog's caller rules: a customer reads their
+  own company's, only backoffice may name a company (42501 otherwise), and a caller with no profile
+  or an inactive company is refused. Two rules stricter than the catalog. Growers are refused —
+  the catalog is open to growers (see the `0076` entry), but this would tell one which competitors
+  have a product today, which their own rules never let them read. And a customer gets names only
+  for a day whose shop is open (`shop_open`), the only time their order can change: every day's id
+  is readable and the catalog lists a closed day's products too, so otherwise one call per past day
+  would give the history of which growers had what in stock. For any other day a customer gets no
+  rows, not an error, so a screen left open as the shop closes just loses the button. Staff may
+  read any day — they still change orders after the shop closes, and read picks and companies
+  directly anyway. Rows are limited to the varieties the catalog itself returns for the same
+  caller, day and company, so blocked products (`0072`), categories (`0090`) and the customer/staff
+  lists (`0064`) apply without being restated. That holds inside a second security definer
+  function because the catalog asks who is calling through `auth.uid()` (directly, and inside
+  `current_role()` and `current_company_id()`, `0088`), which reads the request's sign-in, not the
+  database role running it. Signed-out callers cannot execute it.
+- **What did not change.** No table, column, trigger, policy or other function. The preference is
+  only text in `daily_order_products.comment`, saved by `submit_order` as any line comment is —
+  which also means it is saved only with a quantity (a 0-pallet line is skipped), and the chooser
+  says so. Nothing in the database reads it; allocation, arranging, stock, messages and
+  `submit_order` are untouched. The distributor sees it wherever line comments already show on the
+  arrangement board. A web test (`arrangement-engine-input.test.ts`) holds that the same day with
+  and without a preference gives the arrangement engine the same input and the same proposal.
+- **Rollout.** The web app can go first: until `0095` runs, the call fails, the screen reads that
+  as "no growers", and the button simply does not appear — nothing else on the order screen waits
+  for it. James applies `0095` on production. Safe to run again.
+
+**How it was checked.** Not run against a database: there is no Docker on the machine it was
+written on, so neither the migration nor its tests ran. CI tests added in
+`customer/customer.test.ts` (two growers with stock named — one of them with only carried-in
+pallets; a grower with nothing in stock and an inactive one not named; a variety only one grower
+has gives no rows; a customer user's blocked product gives none, while a colleague and staff still
+see it; backoffice may name a customer; a customer naming any company, a grower, and a signed-out
+caller are refused; a customer gets no names once the shop has closed or for a closed day, while
+staff still do); they typecheck. The web side's pure rules (reading, setting and clearing the
+preference in a comment, including words the customer typed after the name with a comma, a space or
+a dash, and a preference that does not start the comment) and the arrangement guarantee above have
+unit tests, run.
+
+---
+
+## 2026-11-09 — Workbook Tasks 30 and 32, James's rulings: `0086`–`0091`
 
 James's answers (2026-11-09): prices hidden from growers; the per-customer cap removed; an inactive
 company's users lose access and its messages stop; no recent-sign-in rule for a password change;

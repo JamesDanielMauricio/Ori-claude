@@ -1,9 +1,4 @@
 import { savePickLinesInputSchema, toSavePickLinesRpcArgs } from "@ori/domain/grower";
-import {
-  LIFECYCLE_ERROR_CODES,
-  submitPickInputSchema,
-  toSubmitPickRpcArgs,
-} from "@ori/domain/lifecycle-engine";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -27,6 +22,7 @@ import { hasChanges } from "@/lib/has-changes";
 import { blockDecimalKey, blockWheel, stripDecimal } from "@/lib/integer-input";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
 import { growerQueries, type PickProductLineRow } from "@/lib/queries/grower";
+import { submitPickIfStillDraft } from "@/lib/submit-pick-if-draft";
 import { createClient } from "@/lib/supabase/client";
 import { formatVarietyName } from "@/lib/variety-label";
 
@@ -382,47 +378,6 @@ export function PickLinesEditor({
     },
   );
 
-  // `submitOnSave`'s second step, run only after save_pick_lines has
-  // committed — so the pick is always sent with the numbers just saved, never
-  // the previous ones.
-  //
-  // It asks the server for the pick's status rather than trusting the
-  // `pickStatus` prop, because that prop can be stale: the pick's status can
-  // change under an open screen — the same pick sent from a second device, or
-  // by the distributor's save on "בשם מגדל", or closed (with the day, or by
-  // the distributor's truck icon). Trusting a stale "draft" would try a submit
-  // that is no longer needed.
-  //
-  // INVALID_STATE from submit_pick means the pick left draft between that
-  // read and this call — submitted by someone else in that instant, or closed
-  // (with the day, or by the truck). Either way it is no longer waiting to be
-  // sent, which is what this step exists to achieve, so it counts as success,
-  // not a failure.
-  //
-  // Returns the error instead of throwing it — the try/catch included, for
-  // anything that throws rather than returning `{ error }`. By the time this
-  // runs the lines ARE saved, and a throw would send the mutation down
-  // onError, which rolls the line cache back and shows "השמירה נכשלה" over
-  // numbers that did in fact save.
-  async function submitIfStillDraft(): Promise<unknown> {
-    try {
-      const { data: pick, error: readError } = await supabase
-        .from("daily_picks")
-        .select("status")
-        .eq("id", dailyPickId)
-        .single();
-      if (readError) return readError;
-      if (pick.status !== "draft") return null;
-
-      const input = submitPickInputSchema.parse({ dailyPickId });
-      const { error } = await supabase.rpc("submit_pick", toSubmitPickRpcArgs(input));
-      if (error && error.code !== LIFECYCLE_ERROR_CODES.INVALID_STATE) return error;
-      return null;
-    } catch (error) {
-      return error;
-    }
-  }
-
   const saveMutation = useMutation({
     mutationFn: async () => {
       const input = savePickLinesInputSchema.parse({
@@ -433,7 +388,15 @@ export function PickLinesEditor({
       });
       const { error } = await supabase.rpc("save_pick_lines", toSavePickLinesRpcArgs(input));
       if (error) throw error;
-      return { submitError: submitOnSave ? await submitIfStillDraft() : null };
+      if (!submitOnSave) return { submitError: null };
+      // `submitOnSave`'s second step, only now that the lines have committed —
+      // see submitPickIfStillDraft for why it re-reads the status, and why it
+      // never throws: the lines ARE saved by this point, and a throw would send
+      // this mutation down onError, which rolls the line cache back and shows
+      // "השמירה נכשלה" over numbers that did in fact save. (Shared with the
+      // "בשם מגדל" picking upload, which sends a pick the same way.)
+      const submit = await submitPickIfStillDraft(supabase, dailyPickId);
+      return { submitError: submit.status === "failed" ? submit.error : null };
     },
     onMutate: saveOptimistic.onMutate,
     onSuccess: ({ submitError }) => {

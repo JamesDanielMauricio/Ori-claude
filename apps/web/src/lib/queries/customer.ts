@@ -2,6 +2,7 @@ import { orderableCatalogInputSchema, toOrderableCatalogRpcArgs } from "@ori/dom
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 import type { CatalogRow } from "@/components/customer/catalog-grouping";
+import { growersByVariety } from "@/components/customer/preferred-grower";
 import { createClient } from "@/lib/supabase/client";
 
 import type { TradingDayPhase } from "./trading-day";
@@ -78,6 +79,34 @@ export const customerQueries = {
         );
         if (error) throw error;
         return data;
+      },
+    });
+  },
+
+  // Which growers each variety of that catalog can come from today, for the
+  // order editor's "מגדל מועדף" button (workbook Task 36) —
+  // get_variety_growers_for_customer, migration 0095: grower names only, and
+  // only for varieties two or more growers have in stock. Keyed by variety id.
+  // The same day and company as the catalog, and the same two arguments: the
+  // function takes them, and refuses them, exactly as the catalog does, so the
+  // catalog's schema builds them.
+  //
+  // Nothing but that button reads this, and the editor treats a failed read
+  // as "no growers": until 0095 has run on the database the app talks to,
+  // the call fails and the button simply does not appear (see
+  // OrderLinesEditor). Its refusal carries a PostgREST code, so it is not
+  // retried either (lib/providers.tsx).
+  varietyGrowers(tradingDayId: string, customerCompanyId?: string) {
+    return queryOptions({
+      queryKey: ["customer", "variety-growers", tradingDayId, customerCompanyId ?? "self"],
+      queryFn: async (): Promise<Map<string, string[]>> => {
+        const input = orderableCatalogInputSchema.parse({ tradingDayId, customerCompanyId });
+        const { data, error } = await createClient().rpc(
+          "get_variety_growers_for_customer",
+          toOrderableCatalogRpcArgs(input),
+        );
+        if (error) throw error;
+        return growersByVariety(data);
       },
     });
   },

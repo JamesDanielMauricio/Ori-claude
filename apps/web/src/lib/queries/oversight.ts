@@ -1,3 +1,4 @@
+import { roundPallets } from "@ori/shared/pallets";
 import { queryOptions } from "@tanstack/react-query";
 
 import { fetchAllRows } from "@/lib/fetch-all-rows";
@@ -83,6 +84,40 @@ export interface DailyOrderForDay {
   // הערה כללית — the comment on the whole order (migration 0093).
   comment: string | null;
   daily_order_products: OrderLineRow[];
+}
+
+// ------------------------------------------------------- arranged supply
+
+// How many pallets of each of one pick's lines are already arranged to
+// customers — arrangement_records' quantity_pallets summed per pick line,
+// keyed by the line's id (a line with nothing arranged is absent). The
+// "בשם מגדל" picking upload checks a file against it before anything is
+// saved: save_pick_lines refuses a line whose picked + leftover would drop
+// below this (P0006, migration 0076), but only for the whole save and without
+// saying which line, so the preview names the row first. The server's check
+// stays the authority.
+//
+// Read fresh every time, never cached: it is asked at the moment a file is
+// read and again at the moment it is saved. Filtered through the pick line's
+// own pick (an inner join), so the request stays short however many lines the
+// pick has, and paged, because one record per (line, customer) can pass
+// Supabase's 1,000-row cap for a grower supplying many customers.
+export async function fetchArrangedPalletsByLine(dailyPickId: string): Promise<Map<string, number>> {
+  const rows = await fetchAllRows<{ daily_pick_product_id: string; quantity_pallets: number }>(
+    (from, to) =>
+      createClient()
+        .from("arrangement_records")
+        .select("id, daily_pick_product_id, quantity_pallets, daily_pick_products!inner(daily_pick_id)")
+        .eq("daily_pick_products.daily_pick_id", dailyPickId)
+        .order("id")
+        .range(from, to),
+  );
+  const arranged = new Map<string, number>();
+  for (const row of rows) {
+    const sum = (arranged.get(row.daily_pick_product_id) ?? 0) + (Number(row.quantity_pallets) || 0);
+    arranged.set(row.daily_pick_product_id, roundPallets(sum));
+  }
+  return arranged;
 }
 
 export const oversightQueries = {

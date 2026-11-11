@@ -172,6 +172,23 @@ const PATHS = {
   // A bare checkmark — the custom Select's "this is the chosen option"
   // marker, as opposed to checkCircle's status-confirmation use.
   check: <path d="m5 12.5 4.5 4.5L19 7" />,
+  // An arrow rising out of an open tray — "בשם מגדל"'s upload-a-file button —
+  // and the same tray with the arrow coming down into it, for the template
+  // download beside it. Mirror images, so the pair reads as one.
+  upload: (
+    <>
+      <path d="M12 15V4.5" />
+      <path d="m7.5 9 4.5-4.5L16.5 9" />
+      <path d="M4.5 15v2.8a2.2 2.2 0 0 0 2.2 2.2h10.6a2.2 2.2 0 0 0 2.2-2.2V15" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M12 4.5V15" />
+      <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+      <path d="M4.5 15v2.8a2.2 2.2 0 0 0 2.2 2.2h10.6a2.2 2.2 0 0 0 2.2-2.2V15" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof PATHS;

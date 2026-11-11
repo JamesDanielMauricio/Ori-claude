@@ -15,6 +15,7 @@ import {
 } from "@ori/db/schema";
 import type { Database } from "@ori/db/supabase-types";
 import {
+  createAnonClient,
   createTestCompany,
   createTestProfile,
   deleteTestCompany,
@@ -28,6 +29,7 @@ import {
   createTestTradingDay,
   deleteTestGrowerWithProduct,
   deleteTestTradingDay,
+  getDailyPickForGrower,
 } from "@ori/domain/lifecycle-engine/testing";
 import { toSaveCustomerRpcArgs } from "@ori/domain/reference-data";
 import {
@@ -1345,4 +1347,208 @@ describe("customer ordering module", () => {
     expect(await getDailyOrderForCustomer(day.id, laterId)).toBeTruthy();
     expect(await shopOpenMessages(laterId)).toBe(1);
   }, 30000);
+
+  // Workbook Task 36: the growers behind the order screen's "מגדל מועדף"
+  // button. Written for CI; not run where they were written (no local
+  // database there).
+  describe("get_variety_growers_for_customer (migration 0095)", () => {
+    // A grower company with nothing else — the extra growers of a variety
+    // that createTestGrowerWithProduct's own grower already has.
+    async function createTestGrower(status: "active" | "inactive" = "active") {
+      const company = await createTestCompany(`מגדל בדיקה ${randomUUID()}`, "grower");
+      cleanupFns.push(() => deleteTestCompany(company.id));
+      if (status === "inactive") {
+        await db.update(companies).set({ status }).where(eq(companies.id, company.id));
+      }
+      return company;
+    }
+
+    // One grower's line for a variety on the day: what was picked and what was
+    // carried in. Adds to that grower's pick for the day if it already has
+    // one (there is one per grower and day).
+    async function stockLine(
+      tradingDayId: string,
+      growerCompanyId: string,
+      productVarietyId: string,
+      picked: number,
+      leftover = 0,
+    ) {
+      const pick =
+        (await getDailyPickForGrower(tradingDayId, growerCompanyId)) ??
+        (await db.insert(dailyPicks).values({ tradingDayId, growerCompanyId }).returning())[0];
+      if (!pick) throw new Error("failed to create test daily pick");
+      await db.insert(dailyPickProducts).values({
+        dailyPickId: pick.id,
+        productVarietyId,
+        palletsPicked: picked.toString(),
+        leftoverPallets: leftover.toString(),
+      });
+    }
+
+    const growersFor = (
+      viewer: SupabaseClient<Database>,
+      tradingDayId: string,
+      customerCompanyId?: string,
+    ) =>
+      viewer.rpc(
+        "get_variety_growers_for_customer",
+        // The catalog's own two arguments (see the function's comment).
+        toOrderableCatalogRpcArgs({
+          tradingDayId,
+          ...(customerCompanyId ? { customerCompanyId } : {}),
+        }),
+      );
+
+    it("names every grower with the variety in stock — picked, or only carried in — and only where two or more do", async () => {
+      // Grower A's variety, which B, C and D also have lines for, and a
+      // second variety only A has in stock.
+      const grower = await createTestGrowerWithProduct();
+      cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+      const onlyA = await createTestProductVariety({ familyId: grower.familyId });
+      cleanupFns.push(() => deleteTestProductVariety(onlyA.id));
+      const leftoverOnly = await createTestGrower();
+      const nothingOn = await createTestGrower();
+      const inactive = await createTestGrower("inactive");
+
+      const day = await createOpenTestDay(admin.userId);
+      await stockLine(day.id, grower.companyId, grower.varietyId, 5);
+      await stockLine(day.id, grower.companyId, onlyA.id, 3);
+      // Nothing picked today, but 2 carried in from the day before: in stock.
+      await stockLine(day.id, leftoverOnly.id, grower.varietyId, 0, 2);
+      // A line with nothing on it, of both varieties: not in stock.
+      await stockLine(day.id, nothingOn.id, grower.varietyId, 0, 0);
+      await stockLine(day.id, nothingOn.id, onlyA.id, 0, 0);
+      // Stock, but the grower is inactive.
+      await stockLine(day.id, inactive.id, grower.varietyId, 4);
+
+      const customer = await createTestCustomer(day.id);
+      const client = await signedInCustomer(customer.companyId);
+      cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+      const { data, error } = await growersFor(client, day.id);
+      expect(error).toBeNull();
+      const rows = data ?? [];
+      // Names only, nothing else about the growers.
+      for (const row of rows) {
+        expect(Object.keys(row).sort()).toEqual(["grower_name", "variety_id"]);
+      }
+      // A and the leftover-only grower, for A's variety; nobody for the
+      // variety only A has in stock — one grower is no choice.
+      expect(rows.map((row) => row.variety_id)).toEqual([grower.varietyId, grower.varietyId]);
+      expect(rows.map((row) => row.grower_name).sort()).toEqual(
+        [grower.companyName, leftoverOnly.name].sort(),
+      );
+    }, 45000);
+
+    it("names no grower of a product on the customer user's own blocked list; a colleague and staff are unaffected", async () => {
+      const grower = await createTestGrowerWithProduct();
+      cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+      const second = await createTestGrower();
+      const day = await createOpenTestDay(admin.userId);
+      await stockLine(day.id, grower.companyId, grower.varietyId, 5);
+      await stockLine(day.id, second.id, grower.varietyId, 3);
+
+      const customer = await createTestCustomer(day.id);
+      const blockedUser = await createTestProfile({ companyId: customer.companyId, role: "customer" });
+      cleanupFns.push(() => deleteTestUser(blockedUser.userId));
+      const blockedClient = await signInTestUser(blockedUser.email, blockedUser.password);
+      const colleague = await signedInCustomer(customer.companyId);
+      cleanupFns.push(() => deleteTestTradingDay(day.id));
+      await db
+        .insert(profileBlockedProducts)
+        .values({ userId: blockedUser.userId, productVarietyId: grower.varietyId });
+
+      const blocked = await growersFor(blockedClient, day.id);
+      expect(blocked.error).toBeNull();
+      expect(blocked.data).toEqual([]);
+
+      const names = [grower.companyName, second.name].sort();
+      const ofColleague = await growersFor(colleague, day.id);
+      expect(ofColleague.error).toBeNull();
+      expect((ofColleague.data ?? []).map((row) => row.grower_name).sort()).toEqual(names);
+      const ofStaff = await growersFor(admin.client, day.id, customer.companyId);
+      expect(ofStaff.error).toBeNull();
+      expect((ofStaff.data ?? []).map((row) => row.grower_name).sort()).toEqual(names);
+    }, 45000);
+
+    it("lets backoffice name a customer, and refuses a customer naming any company, a grower, and a caller who is not signed in", async () => {
+      const grower = await createTestGrowerWithProduct();
+      cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+      const second = await createTestGrower();
+      const day = await createOpenTestDay(admin.userId);
+      await stockLine(day.id, grower.companyId, grower.varietyId, 5);
+      await stockLine(day.id, second.id, grower.varietyId, 3);
+
+      const customer = await createTestCustomer(day.id);
+      const other = await createTestCustomer(day.id);
+      const client = await signedInCustomer(customer.companyId);
+      const growerUser = await createTestProfile({ companyId: grower.companyId, role: "grower" });
+      cleanupFns.push(() => deleteTestUser(growerUser.userId));
+      const growerClient = await signInTestUser(growerUser.email, growerUser.password);
+      cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+      // Staff, on the customer's behalf.
+      const ofStaff = await growersFor(admin.client, day.id, customer.companyId);
+      expect(ofStaff.error).toBeNull();
+      expect((ofStaff.data ?? []).map((row) => row.grower_name).sort()).toEqual(
+        [grower.companyName, second.name].sort(),
+      );
+
+      // A customer naming a company — another one, or even their own — as
+      // with the catalog.
+      for (const named of [other.companyId, customer.companyId]) {
+        const refused = await growersFor(client, day.id, named);
+        expect(refused.error?.code).toBe(CUSTOMER_ERROR_CODES.FORBIDDEN);
+        expect(refused.data).toBeNull();
+      }
+
+      // A grower, who may read the catalog (0076) but not this: it would name
+      // the other growers that have the product today.
+      const ofGrower = await growersFor(growerClient, day.id);
+      expect(ofGrower.error?.code).toBe(CUSTOMER_ERROR_CODES.FORBIDDEN);
+
+      // Not signed in: turned away before the function runs at all.
+      const anonymous = await growersFor(createAnonClient(), day.id);
+      expect(anonymous.error?.code).toBe(CUSTOMER_ERROR_CODES.FORBIDDEN);
+      expect(anonymous.error?.message).toMatch(/permission denied/);
+    }, 45000);
+
+    it("answers a customer only while that day's shop is open — not once it closes, nor for a closed day — and staff on any day", async () => {
+      const grower = await createTestGrowerWithProduct();
+      cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+      const second = await createTestGrower();
+      const day = await createOpenTestDay(admin.userId);
+      await stockLine(day.id, grower.companyId, grower.varietyId, 5);
+      await stockLine(day.id, second.id, grower.varietyId, 3);
+
+      const customer = await createTestCustomer(day.id);
+      const client = await signedInCustomer(customer.companyId);
+      cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+      const names = [grower.companyName, second.name].sort();
+      const namesFor = async (viewer: SupabaseClient<Database>, customerCompanyId?: string) => {
+        const { data, error } = await growersFor(viewer, day.id, customerCompanyId);
+        expect(error).toBeNull();
+        return (data ?? []).map((row) => row.grower_name).sort();
+      };
+
+      // Open: the customer's order can change, so there is a choice to offer.
+      expect(await namesFor(client)).toEqual(names);
+
+      // The shop has closed: their order can no longer change, so no names —
+      // and no error, for a screen still open at that moment. Staff, who may
+      // still change the order, are unaffected.
+      expect((await admin.client.rpc("close_shop")).error).toBeNull();
+      expect(await namesFor(client)).toEqual([]);
+      expect(await namesFor(admin.client, customer.companyId)).toEqual(names);
+
+      // A closed day, as every earlier one is: nothing for the customer
+      // either, so the history of who had what cannot be read back.
+      expect(
+        (await admin.client.from("trading_days").update({ phase: "closed" }).eq("id", day.id)).error,
+      ).toBeNull();
+      expect(await namesFor(client)).toEqual([]);
+      expect(await namesFor(admin.client, customer.companyId)).toEqual(names);
+    }, 45000);
+  });
 });

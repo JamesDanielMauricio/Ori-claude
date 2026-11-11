@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { Icon } from "@/components/ui/icon";
+import { useToast } from "@/components/ui/toast";
 
 // One row of the "בשם מגדל" / "בשם לקוח" oversight screens — a grower or a
 // customer, today's engagement status carried by the NAME's own color
@@ -9,7 +10,8 @@ import { Icon } from "@/components/ui/icon";
 // expand panel for the read-only family-grouped view of their picking/order
 // data. Shared between both screens because the shell is identical; only
 // what fills `children` when expanded, and what the edit pencil opens,
-// differs.
+// differs. "בשם מגדל" adds a fourth action, the picking upload (`onUpload`);
+// without it the row is exactly the three-action row "בשם לקוח" shows.
 const TONE_TEXT = {
   // The warmest color, reserved for whichever state each screen considers
   // most in need of the distributor's attention right now. Meaning is
@@ -35,6 +37,9 @@ export function ExpandableEntityRow({
   remindLabel,
   remindDisabled,
   reminding,
+  onUpload,
+  uploadLabel,
+  uploadDisabledReason,
   children,
 }: {
   name: string;
@@ -49,8 +54,14 @@ export function ExpandableEntityRow({
   remindLabel: string;
   remindDisabled: boolean;
   reminding: boolean;
+  /** The upload button ("בשם מגדל" only); no button at all without it. */
+  onUpload?: () => void;
+  uploadLabel?: string;
+  /** Why the upload can't be used on this row right now, or null when it can. */
+  uploadDisabledReason?: string | null;
   children: ReactNode;
 }) {
+  const { showToast } = useToast();
   return (
     <li className="border-b border-border last:border-b-0">
       <div
@@ -93,6 +104,36 @@ export function ExpandableEntityRow({
             <Icon name="bell" className="h-3.5 w-3.5" />
           )}
         </button>
+
+        {/* Upload — fill this row's pick from a spreadsheet (workbook Task
+            38). Neutral like the pencil, because like the pencil it changes
+            what is on screen. After the bell rather than between the two, so
+            the pencil and the bell stay where hands already know them.
+
+            Unavailable is `aria-disabled`, not `disabled`, so that it can
+            still say WHY (a past day, no pick, a closed pick). A disabled
+            button fires no hover and leaves the tab order; this one keeps the
+            reason as its `title` — shown on hover, read out as its
+            description — and pressing it, by mouse, finger or keyboard, shows
+            the reason as a toast instead of opening the upload: a title alone
+            never shows on a phone, or to someone who reached the button by
+            Tab. */}
+        {onUpload && (
+          <button
+            type="button"
+            onClick={uploadDisabledReason ? () => showToast(uploadDisabledReason) : onUpload}
+            aria-disabled={uploadDisabledReason ? true : undefined}
+            aria-label={uploadLabel}
+            title={uploadDisabledReason ?? uploadLabel}
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink-subtle ring-1 ring-inset ring-border transition-colors duration-150 ${
+              uploadDisabledReason
+                ? "cursor-not-allowed opacity-40"
+                : "hover:bg-surface hover:text-accent hover:ring-accent/40"
+            }`}
+          >
+            <Icon name="upload" className="h-3.5 w-3.5" />
+          </button>
+        )}
 
         {/* Expand — the family-grouped read-only summary in `children`. */}
         <button

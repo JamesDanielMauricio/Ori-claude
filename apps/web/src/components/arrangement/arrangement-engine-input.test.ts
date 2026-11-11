@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { setPreferredGrower } from "@/components/customer/preferred-grower";
+
 import {
   customerFactsFrom,
   dayToPropose,
@@ -965,5 +967,110 @@ describe("proposeForDay", () => {
         learnedFrom: { history: [], familyOf: {}, customers: {} },
       }).map((line) => line.customerId),
     ).toEqual(["z-timed"]);
+  });
+});
+
+// Workbook Task 36: a customer's preferred grower is only words in the order
+// line's comment ("מגדל מועדף: …", written by the order screen's chooser —
+// components/customer/preferred-grower.ts), and the client asked that it not
+// affect allocation. So the same day with and without one must reach the
+// engine as the same day, and come out as the same proposal. (The history the
+// engine learns from reads no comments at all: HistoryRows has none.)
+describe("a preferred grower in an order line's comment (workbook Task 36)", () => {
+  const tradeDate = "2026-11-11";
+  // Two growers have lemons: A has 5, B has 2.
+  const picks: BoardPick[] = [
+    {
+      id: "pick-a",
+      grower_company_id: "grower-a",
+      status: "submitted",
+      pickup_time: null,
+      daily_pick_products: [
+        {
+          id: "line-a-lemon",
+          daily_pick_id: "pick-a",
+          product_variety_id: LEMON,
+          pallets_picked: 5,
+          leftover_pallets: 0,
+          comment: null,
+          product_varieties: variety(LEMON),
+        },
+      ],
+    },
+    {
+      id: "pick-b",
+      grower_company_id: "grower-b",
+      status: "submitted",
+      pickup_time: null,
+      daily_pick_products: [
+        {
+          id: "line-b-lemon",
+          daily_pick_id: "pick-b",
+          product_variety_id: LEMON,
+          pallets_picked: 2,
+          leftover_pallets: 0,
+          comment: null,
+          product_varieties: variety(LEMON),
+        },
+      ],
+    },
+  ];
+  const orderFor = (customer: string, pallets: number, comment: string | null): BoardOrder => ({
+    id: `order-${customer}`,
+    customer_company_id: customer,
+    status: "submitted",
+    submitted_at: "2026-11-11T06:00:00+00:00",
+    order_submission_logs: [],
+    daily_order_products: [
+      {
+        id: `ol-${customer}-lemon`,
+        daily_order_id: `order-${customer}`,
+        product_variety_id: LEMON,
+        pallets_ordered: pallets,
+        comment,
+        product_varieties: variety(LEMON),
+      },
+    ],
+  });
+  const withoutPreference = [orderFor("gabbai", 2, "דחוף")];
+  // Gabbai would rather have grower B's lemons, chosen from the two that have
+  // them.
+  const withPreference = [
+    orderFor("gabbai", 2, setPreferredGrower("דחוף", "grower-b", ["grower-a", "grower-b"])),
+  ];
+  const learnedFrom = {
+    history: [],
+    familyOf: {},
+    customers: { gabbai: { generalScore: null, since: null } },
+  };
+
+  it("carries the preference in the line's comment, as the order screen writes it", () => {
+    expect(withPreference[0]!.daily_order_products[0]!.comment).toBe(
+      "דחוף · מגדל מועדף: grower-b",
+    );
+  });
+
+  it("gives the engine the same day with the preference as without it", () => {
+    expect(dayToPropose({ tradeDate, picks, orders: withPreference, records: [] })).toEqual(
+      dayToPropose({ tradeDate, picks, orders: withoutPreference, records: [] }),
+    );
+  });
+
+  it("proposes the same arrangement: the lemons still come from the grower with the most", () => {
+    const expected = [
+      {
+        growerId: "grower-a",
+        varietyId: LEMON,
+        customerId: "gabbai",
+        quantity: 2,
+        forOrder: "suggested",
+      },
+    ];
+    expect(
+      proposeForDay({ tradeDate, picks, orders: withoutPreference, records: [], learnedFrom }),
+    ).toEqual(expected);
+    expect(
+      proposeForDay({ tradeDate, picks, orders: withPreference, records: [], learnedFrom }),
+    ).toEqual(expected);
   });
 });

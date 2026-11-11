@@ -39,6 +39,13 @@ import {
   type DraftLine,
 } from "./order-draft";
 import { OrderProductList, type OrderFamilyRow } from "./order-product-list";
+import {
+  clearPreferredGrower,
+  initialGrowerChoice,
+  readPreferredGrower,
+  setPreferredGrower,
+} from "./preferred-grower";
+import { PreferredGrowerDialog } from "./preferred-grower-dialog";
 import { SubmissionConfirmationDialog } from "./submission-confirmation-dialog";
 
 // A customer's submit found the shop already closed — see submitMutation.
@@ -131,11 +138,26 @@ function OrderLinesEditorBody({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [commentPopupVarietyId, setCommentPopupVarietyId] = useState<string | null>(null);
+  const [growerChooserVarietyId, setGrowerChooserVarietyId] = useState<string | null>(null);
 
   const catalogOptions = customerQueries.catalog(tradingDayId, customerCompanyId);
   const queryKey = catalogOptions.queryKey;
 
   const catalogQuery = useQuery(catalogOptions);
+
+  // Workbook Task 36: the varieties two or more growers have in stock today,
+  // with those growers' names — what the "מגדל מועדף" button offers (migration
+  // 0095). Same host rules as the catalog, so בשם לקוח and the board's pencil
+  // get it too. Read only while the order can be changed, the only time the
+  // button shows. Nothing else here waits for it or depends on it: until it
+  // arrives — and whenever it fails, above all before 0095 has run on the
+  // database — the rows simply have no button, with no error shown and the
+  // send unaffected.
+  const growersQuery = useQuery({
+    ...customerQueries.varietyGrowers(tradingDayId, customerCompanyId),
+    enabled: editing,
+  });
+  const growersByVariety = editing ? growersQuery.data : undefined;
 
   // The comment on the whole order, "הערה כללית" (migration 0093). Its own
   // small read, so every host — the customer's screen, בשם לקוח and the
@@ -198,19 +220,30 @@ function OrderLinesEditorBody({
         familyId: family.familyId,
         familyName: family.familyName,
         imageUrl: family.imageUrl,
-        varieties: family.varieties.map((row) => ({
-          varietyId: row.variety_id,
-          varietyName: formatVarietyName(row.variety_name, row.sizes),
-          priceLabel: formatPrice(row),
-          packType: row.pack_type,
-          pallets: draft[row.variety_id]?.pallets ?? "",
-          comment: draft[row.variety_id]?.comment ?? "",
-          outOfStock: !row.is_orderable,
-          imageUrl: row.variety_image_url,
-          ...(showsLimit ? { limit: orderLimit(row) } : {}),
-        })),
+        varieties: family.varieties.map((row) => {
+          const comment = draft[row.variety_id]?.comment ?? "";
+          const growers = growersByVariety?.get(row.variety_id) ?? [];
+          const choosesGrower = growers.length >= 2;
+          return {
+            varietyId: row.variety_id,
+            varietyName: formatVarietyName(row.variety_name, row.sizes),
+            priceLabel: formatPrice(row),
+            packType: row.pack_type,
+            pallets: draft[row.variety_id]?.pallets ?? "",
+            comment,
+            outOfStock: !row.is_orderable,
+            imageUrl: row.variety_image_url,
+            ...(showsLimit ? { limit: orderLimit(row) } : {}),
+            choosesGrower,
+            // Read here, against the same growers the chooser offers, so the
+            // row's "✓" and the chooser agree on what the comment names
+            // (preferred-grower.ts). A string, so the memoized row still
+            // receives only primitives.
+            preferredGrower: choosesGrower ? readPreferredGrower(comment, growers) : null,
+          };
+        }),
       })),
-    [catalogQuery.data, draft, showsLimit],
+    [catalogQuery.data, draft, showsLimit, growersByVariety],
   );
 
   // How many varieties this draft actually asks for. Shown in the pinned
@@ -366,6 +399,25 @@ function OrderLinesEditorBody({
     [updateLine],
   );
 
+  // "מגדל מועדף" (workbook Task 36): the choice is written into the line's own
+  // comment and nowhere else — "מגדל מועדף: <name>", kept beside whatever the
+  // comment already says (preferred-grower.ts). So it is sent, saved and
+  // shown as any line comment is: with the line's quantity, on "שמור", and
+  // the customer may still change it by hand in "✎ הערה". Today's growers
+  // go along: they are what tells the name already there apart from the
+  // customer's own words typed after it. A choice that leaves the comment as
+  // it was (the same grower again, or "ללא העדפה" with none chosen) is not an
+  // edit.
+  function chooseGrower(varietyId: string, growerName: string | null) {
+    const current = draft[varietyId]?.comment ?? "";
+    const growers = growersByVariety?.get(varietyId) ?? [];
+    const next =
+      growerName === null
+        ? clearPreferredGrower(current, growers)
+        : setPreferredGrower(current, growerName, growers);
+    if (next !== current) updateLine(varietyId, { comment: next });
+  }
+
   // The order with no unsaved edits — what "בטל שינויים" puts back, and what
   // the draft is measured against to decide whether either button has
   // anything to do.
@@ -442,6 +494,14 @@ function OrderLinesEditorBody({
   }
 
   const activeComment = commentPopupVarietyId ? (draft[commentPopupVarietyId]?.comment ?? "") : "";
+  // The row the "מגדל מועדף" chooser is open for, and what it offers.
+  const chooserRow = growerChooserVarietyId
+    ? catalogQuery.data?.find((row) => row.variety_id === growerChooserVarietyId)
+    : undefined;
+  const chooserGrowers = growerChooserVarietyId
+    ? (growersByVariety?.get(growerChooserVarietyId) ?? [])
+    : [];
+  const chooserLine = growerChooserVarietyId ? draft[growerChooserVarietyId] : undefined;
 
   return (
     <div className="flex flex-col gap-4">
@@ -467,6 +527,7 @@ function OrderLinesEditorBody({
           editable={editing}
           onChangePallets={changePallets}
           onOpenComment={setCommentPopupVarietyId}
+          onChooseGrower={setGrowerChooserVarietyId}
         />
       </div>
 
@@ -527,6 +588,20 @@ function OrderLinesEditorBody({
         onClose={() => setCommentPopupVarietyId(null)}
         onConfirm={(comment) => {
           if (commentPopupVarietyId) updateLine(commentPopupVarietyId, { comment });
+        }}
+      />
+
+      <PreferredGrowerDialog
+        // Closed, too, if the order stops being editable while it is open
+        // (the shop closed meanwhile): there is no longer a choice to make.
+        open={editing && growerChooserVarietyId !== null}
+        varietyName={chooserRow ? formatVarietyName(chooserRow.variety_name, chooserRow.sizes) : ""}
+        growers={chooserGrowers}
+        initialChoice={initialGrowerChoice(chooserLine?.comment ?? "", chooserGrowers)}
+        hasQuantity={Number(chooserLine?.pallets || 0) > 0}
+        onClose={() => setGrowerChooserVarietyId(null)}
+        onConfirm={(growerName) => {
+          if (growerChooserVarietyId) chooseGrower(growerChooserVarietyId, growerName);
         }}
       />
 

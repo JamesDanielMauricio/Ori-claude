@@ -100,6 +100,35 @@ describe("errorMessage", () => {
     expect(errorMessage("text")).toBe("שגיאה לא ידועה");
   });
 
+  it("explains save_pick_lines' refusals, from the function's own messages (migration 0076)", () => {
+    expect(
+      errorMessage({
+        code: "P0006",
+        message:
+          "CONFLICT: cannot reduce pallets picked + leftover to 3 — 5.00 pallets already arranged to customers for this line",
+      }),
+    ).toBe("כבר סודרו 5 משטחים מאחד המוצרים ללקוחות, ואי אפשר להוריד את מה שנקטף ואת העודף שלו מתחת לזה.");
+    expect(
+      errorMessage({ code: "P0007", message: "INVALID_STATE: this pick is closed — no further edits are permitted" }),
+    ).toBe("הליקוט סגור, ואי אפשר לשנות אותו.");
+    expect(
+      errorMessage({
+        code: "P0002",
+        message: "NOT_FOUND: pick product line 11111111-1111-4111-8111-111111111111 does not exist",
+      }),
+    ).toBe("אחד המוצרים כבר לא בליקוט. רעננו את הדף ונסו שוב.");
+    expect(errorMessage({ code: "42501", message: "FORBIDDEN: not this pick's grower" })).toBe(
+      "אין הרשאה לשנות את הליקוט הזה.",
+    );
+  });
+
+  it("leaves the same codes alone when another function raised them", () => {
+    const proposal = "CONFLICT: 2 cell(s) of this proposal were filled after it was read";
+    expect(errorMessage({ code: "P0006", message: proposal })).toBe(proposal);
+    const submit = "INVALID_STATE: pick 1 is submitted — can only submit from draft";
+    expect(errorMessage({ code: "P0007", message: submit })).toBe(submit);
+  });
+
   it("explains a delete refused because the record is in use, and only a delete", () => {
     expect(
       errorMessage({

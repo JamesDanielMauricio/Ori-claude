@@ -9,6 +9,8 @@ import { ProductThumbnail } from "@/components/ui/product-thumbnail";
 import { blockWheel } from "@/lib/integer-input";
 import { limitToOneDecimal } from "@/lib/pallet-input";
 
+import { PREFERRED_GROWER_LABEL } from "./preferred-grower";
+
 export interface OrderVarietyRow {
   varietyId: string;
   varietyName: string;
@@ -27,6 +29,16 @@ export interface OrderVarietyRow {
   // the read-only historical view builds its rows from already-submitted
   // lines, which carry no live stock figure.
   limit?: number;
+  // Two or more growers have this variety in stock today, so the order can
+  // name the one it would prefer — the "מגדל מועדף" button (workbook Task 36,
+  // migration 0095). Shown only while the row is editable; the choice itself
+  // lives in `comment` (preferred-grower.ts).
+  choosesGrower?: boolean;
+  // The grower `comment` names as preferred, or null: read by the host
+  // against the same growers its chooser offers (preferred-grower.ts), so a
+  // preference typed or removed by hand shows here too, and the row and the
+  // chooser never disagree about it.
+  preferredGrower?: string | null;
 }
 
 const PACK_TYPE_LABEL: Record<"pallets" | "crates", string> = {
@@ -49,7 +61,8 @@ export interface OrderFamilyRow {
 // varieties — each with its own price/quantity/comment. One shared
 // presentation for both the live order screen (editable) and the
 // read-only historical order view (past, closed trading days);
-// `onChangePallets`/`onOpenComment` are omitted in the read-only case.
+// `onChangePallets`/`onOpenComment`/`onChooseGrower` are omitted in the
+// read-only case.
 //
 // The quantity is one typed number box everywhere, in steps of 0.1 (workbook
 // Task 35: a fraction of a pallet can be ordered). It replaced a dropdown on
@@ -63,11 +76,13 @@ export function OrderProductList({
   editable,
   onChangePallets,
   onOpenComment,
+  onChooseGrower,
 }: {
   families: OrderFamilyRow[];
   editable: boolean;
   onChangePallets?: (varietyId: string, value: string) => void;
   onOpenComment?: (varietyId: string) => void;
+  onChooseGrower?: (varietyId: string) => void;
 }) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   // The picture a "לחצו כאן לתמונה עדכנית" link opened (migration 0094). The
@@ -159,6 +174,7 @@ export function OrderProductList({
                         editable={editable}
                         onChangePallets={onChangePallets}
                         onOpenComment={onOpenComment}
+                        onChooseGrower={onChooseGrower}
                         onOpenPicture={setPictureFor}
                       />
                     ))}
@@ -194,12 +210,14 @@ const OrderVarietyItem = memo(function OrderVarietyItem({
   editable,
   onChangePallets,
   onOpenComment,
+  onChooseGrower,
   onOpenPicture,
   ...variety
 }: OrderVarietyRow & {
   editable: boolean;
   onChangePallets?: ((varietyId: string, value: string) => void) | undefined;
   onOpenComment?: ((varietyId: string) => void) | undefined;
+  onChooseGrower?: ((varietyId: string) => void) | undefined;
   onOpenPicture?: ((picture: { name: string; url: string }) => void) | undefined;
 }) {
   const limit = variety.limit;
@@ -208,6 +226,11 @@ const OrderVarietyItem = memo(function OrderVarietyItem({
   // stops until it is lowered (OrderLinesEditor).
   const overLimit = limit !== undefined && Number(variety.pallets || 0) > limit;
   const limitId = `order-limit-${variety.varietyId}`;
+  const showsGrowerButton = editable && variety.choosesGrower === true;
+  const preferredGrower = showsGrowerButton ? (variety.preferredGrower ?? null) : null;
+  const preferredGrowerText = preferredGrower
+    ? `${PREFERRED_GROWER_LABEL}: ${preferredGrower}`
+    : undefined;
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/70 px-4 py-3 transition-colors duration-150 last:border-b-0 hover:bg-surface">
       {/* `w-full` in the narrow layout takes a whole flex
@@ -233,12 +256,27 @@ const OrderVarietyItem = memo(function OrderVarietyItem({
           A row that shows its limit ("מקסימום 2.6", 72px
           wide plus an 8px gap) waits for `@lg` (a 512px
           list) instead: 294 of controls leaves this name
-          186px there, where `@md` would have left it 122. */}
+          186px there, where `@md` would have left it 122.
+
+          A row with the "מגדל מועדף" button (workbook Task
+          36) has one more control: about 96px — "+ הערה"'s
+          62 plus the six more characters of its label, at
+          the same size (worked out, not measured) — and one
+          more 12px gap. That is 322 of controls, or 402
+          with the limit, so such a row waits for `@xl` (a
+          576px list, leaving the name 222px) or `@2xl`
+          (672px, 238px); one step sooner would leave it 158
+          or 142. Below that the button wraps, see its own
+          note. */}
       <div
         className={
-          limit === undefined
-            ? "w-full min-w-0 @md:w-auto @md:flex-1"
-            : "w-full min-w-0 @lg:w-auto @lg:flex-1"
+          showsGrowerButton
+            ? limit === undefined
+              ? "w-full min-w-0 @xl:w-auto @xl:flex-1"
+              : "w-full min-w-0 @2xl:w-auto @2xl:flex-1"
+            : limit === undefined
+              ? "w-full min-w-0 @md:w-auto @md:flex-1"
+              : "w-full min-w-0 @lg:w-auto @lg:flex-1"
         }
       >
         {/* A wrapping flex row, not an inline badge after the
@@ -289,6 +327,46 @@ const OrderVarietyItem = memo(function OrderVarietyItem({
             הערה: {variety.comment}
           </p>
         )
+      )}
+      {showsGrowerButton && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          // `min-h-10` for the same reason as "+ הערה": it
+          // repeats down the catalogue.
+          //
+          // `order-last` until the row's own threshold (see
+          // the name's note): it goes after the quantity, onto
+          // a line of its own when there is no room for it, so
+          // the quantity box stays on the line it has on a
+          // stacked row without the button, instead of
+          // dropping one on just these rows. From the
+          // threshold on it sits beside "+ הערה".
+          //
+          // Not below `@xs` (a 320px list: a phone under
+          // 360px) on a row that shows its limit. At about
+          // that width "+ הערה" and the quantity (62 + 12 +
+          // 208 = 282, plus the row's 32 of padding) stop
+          // fitting on one line on every row, so the quantity
+          // drops under "+ הערה" everywhere, and the button can
+          // share "+ הערה"'s line instead — after the quantity
+          // it would only add a fourth line.
+          //
+          // Tab and screen readers keep the DOM order
+          // throughout: "+ הערה", this, then the quantity.
+          className={`min-h-10 ${limit === undefined ? "order-last @xl:order-none" : "@xs:order-last @2xl:order-none"}`}
+          // "✓" once a grower is chosen, as "✎ הערה" marks a
+          // comment. The name itself is in the comment, and in
+          // the button's name for screen readers and its
+          // tooltip, so the button keeps one width whatever
+          // the name's length.
+          aria-label={preferredGrowerText}
+          title={preferredGrowerText}
+          onClick={() => onChooseGrower?.(variety.varietyId)}
+        >
+          {preferredGrower ? `✓ ${PREFERRED_GROWER_LABEL}` : `+ ${PREFERRED_GROWER_LABEL}`}
+        </Button>
       )}
       {/* Quantity + pack type together, matching the reference
           design's single pill-shaped control, and — on the
