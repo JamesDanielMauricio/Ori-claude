@@ -18,7 +18,7 @@ import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import {
   NO_HEADER_MESSAGE,
-  PICK_UPLOAD_SHEET,
+  PICK_UPLOAD_INSTRUCTIONS_SHEET,
   PICK_UPLOAD_TEMPLATE_URL,
   mostlyNotInPick,
   pickFileProblem,
@@ -26,6 +26,7 @@ import {
   planChangedSince,
   planPickImport,
   readPickFileRows,
+  sheetLabel,
   toImportLines,
   toSavePickLines,
   type PickFileRow,
@@ -55,7 +56,9 @@ export interface PickUploadTarget {
 // reads it — in the browser (lib/xlsx-reader.ts), checked against the pick's
 // lines and what is already arranged from them (lib/picking-import.ts holds
 // every rule) — and shows what it would change, what it leaves alone, what it
-// skips, and what has to be fixed first.
+// skips, and what has to be fixed first. Beside the file's name it shows the
+// tab its numbers came from: the file's only visible one besides "הוראות",
+// whatever it is called.
 //
 // Confirming saves the way the pencil's "שמור" does on this screen: one
 // save_pick_lines call, then the pick is SENT if it is still a draft. The
@@ -107,12 +110,15 @@ export function PickUploadDialog({
 type Stage =
   | { kind: "empty" }
   | { kind: "reading"; fileName: string }
-  | { kind: "failed"; fileName: string; message: string }
+  /** `sheetName`: the tab read, when the file got that far. */
+  | { kind: "failed"; fileName: string; sheetName: string | null; message: string }
   | PreviewStage;
 
 interface PreviewStage {
   kind: "preview";
   fileName: string;
+  /** The tab the rows were read from, as the preview names it. */
+  sheetName: string;
   /** The file's rows, kept so the plan can be made again over fresh lines. */
   rows: PickFileRow[];
   plan: PickImportPlan;
@@ -175,34 +181,42 @@ function PickUploadForm({
 
     const problem = pickFileProblem(file);
     if (problem) {
-      setStage({ kind: "failed", fileName: file.name, message: problem });
+      setStage({ kind: "failed", fileName: file.name, sheetName: null, message: problem });
       return;
     }
     setStage({ kind: "reading", fileName: file.name });
 
+    // Known once the tab is read, so a tab refused for its columns is named.
+    let sheetName: string | null = null;
     let rows: PickFileRow[] | null;
     try {
+      // The template's instructions are set aside; the one other visible tab
+      // is read, whatever its name, and a file with more is refused.
       const sheet = await readXlsxSheet(new Uint8Array(await file.arrayBuffer()), {
-        sheetName: PICK_UPLOAD_SHEET,
+        ignoreSheets: [PICK_UPLOAD_INSTRUCTIONS_SHEET],
       });
+      sheetName = sheetLabel(sheet.name);
       rows = readPickFileRows(sheet);
     } catch (error) {
-      if (isLatest()) setStage({ kind: "failed", fileName: file.name, message: pickFileReadErrorMessage(error) });
+      if (isLatest()) {
+        setStage({ kind: "failed", fileName: file.name, sheetName, message: pickFileReadErrorMessage(error) });
+      }
       return;
     }
     if (!rows) {
-      if (isLatest()) setStage({ kind: "failed", fileName: file.name, message: NO_HEADER_MESSAGE });
+      if (isLatest()) setStage({ kind: "failed", fileName: file.name, sheetName, message: NO_HEADER_MESSAGE });
       return;
     }
 
     try {
       const { plan } = await planNow(rows);
-      if (isLatest()) setStage({ kind: "preview", fileName: file.name, rows, plan, notice: null });
+      if (isLatest()) setStage({ kind: "preview", fileName: file.name, sheetName, rows, plan, notice: null });
     } catch (error) {
       if (isLatest()) {
         setStage({
           kind: "failed",
           fileName: file.name,
+          sheetName,
           message: `לא ניתן היה לקרוא את הליקוט של המגדל: ${errorMessage(error)}`,
         });
       }
@@ -289,6 +303,7 @@ function PickUploadForm({
   const saving = saveMutation.isPending;
   const plan = stage.kind === "preview" ? stage.plan : null;
   const fileName = stage.kind === "empty" ? null : stage.fileName;
+  const sheetName = stage.kind === "preview" || stage.kind === "failed" ? stage.sheetName : null;
   const nothingToSave = plan !== null && plan.errors.length === 0 && plan.changes.length === 0;
   const readyToSave = plan !== null && plan.errors.length === 0 && plan.changes.length > 0 && !pickClosed;
   const canConfirm = readyToSave && !saving;
@@ -314,7 +329,17 @@ function PickUploadForm({
           {fileName === null ? "בחירת קובץ" : "בחירת קובץ אחר"}
         </Button>
         {fileName !== null && (
-          <bdi className="min-w-0 max-w-full truncate text-sm font-medium text-ink">{fileName}</bdi>
+          <span className="flex min-w-0 max-w-full flex-col">
+            <bdi className="truncate text-sm font-medium text-ink">{fileName}</bdi>
+            {/* Which tab the numbers come from, seen before confirming: the
+                one visible tab besides the instructions is read, whatever
+                it is called. */}
+            {sheetName !== null && (
+              <span className="truncate text-xs text-ink-muted">
+                נקרא מהגיליון "<bdi className="font-medium text-ink">{sheetName}</bdi>"
+              </span>
+            )}
+          </span>
         )}
         <a
           href={PICK_UPLOAD_TEMPLATE_URL}

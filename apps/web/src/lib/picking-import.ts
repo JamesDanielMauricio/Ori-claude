@@ -28,8 +28,25 @@ import { XlsxError, type XlsxCellValue, type XlsxSheet } from "@/lib/xlsx-reader
 //   - Nothing is saved before the preview is confirmed.
 // One file per grower, so there is no grower column: the upload runs from the
 // grower's own row, and that row decides whose pick it is.
+//
+// Three more rules are about what a spreadsheet program can do to the file,
+// not what a grower fills in, and the template does not state them; the
+// preview explains each one where it applies:
+//   - The tab read is the file's one visible sheet besides "הוראות", whatever
+//     its name, and the preview names it. A file with more than one is
+//     refused, naming them: a copy of the tab ("ליקוט (2)") or a tab per
+//     grower is another grower's numbers waiting to be saved into this pick.
+//   - A row hidden in the file (by a filter, a collapsed group, or by hand) is
+//     not imported: nobody checked a row they could not see, and one can
+//     still hold yesterday's numbers. One that would have imported something
+//     is listed as skipped. Listed or not, the product it names still counts
+//     toward the warning that the file may be another grower's.
+//   - A quantity the file shows as a date or a time is refused: what is
+//     stored is the date's day count (46054), not pallets.
 
 export const PICK_UPLOAD_SHEET = "ליקוט";
+// The template's instructions: never the tab that is read (lib/xlsx-reader.ts).
+export const PICK_UPLOAD_INSTRUCTIONS_SHEET = "הוראות";
 export const PICK_UPLOAD_HEADERS = { product: "מוצר", picked: "משטחים שנקטפו" } as const;
 export const PICK_UPLOAD_TEMPLATE_URL = "/templates/ori-picking-upload-template.xlsx";
 // A filled-in template is a few kilobytes; 2 MB leaves room for one with
@@ -98,6 +115,15 @@ export interface PickFileRow {
   product: string;
   /** The "משטחים שנקטפו" cell, as read — text cut to MAX_CELL_TEXT. */
   quantity: XlsxCellValue;
+  /**
+   * Present, and true, when the file hides the row: it is never imported.
+   * Only rows that name a product are kept then — listed as not imported when
+   * they hold a quantity too, and otherwise only counted, as their product
+   * still says whose file this is (mostlyNotInPick).
+   */
+  hidden?: true;
+  /** Present, and true, when the quantity is a number the file shows as a date or a time. */
+  quantityIsDate?: true;
 }
 
 // The most of one cell's text the upload looks at. A label is a name and a
@@ -112,19 +138,53 @@ export interface PickFileRow {
 // pick, and is not a number.
 const MAX_CELL_TEXT = 200;
 
+function cutText(text: string): string {
+  return text.length > MAX_CELL_TEXT ? `${text.slice(0, MAX_CELL_TEXT)}…` : text;
+}
+
 function cut(cell: XlsxCellValue): XlsxCellValue {
-  return typeof cell === "string" && cell.length > MAX_CELL_TEXT ? `${cell.slice(0, MAX_CELL_TEXT)}…` : cell;
+  return typeof cell === "string" ? cutText(cell) : cell;
+}
+
+/** A tab's name from the file, for showing back: cut, its spaces collapsed, invisible marks dropped. */
+export function sheetLabel(name: string): string {
+  return displayText(cutText(name));
 }
 
 function isBlank(cell: XlsxCellValue): boolean {
   return cell === null || (typeof cell === "string" && displayText(cell) === "");
 }
 
+/** A file refused for how its picking tab is laid out. The message is for the person uploading it. */
+export class PickFileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PickFileError";
+  }
+}
+
+// A column as Excel letters it: 0 is A, 25 is Z, 26 is AA.
+function columnName(column: number): string {
+  let name = "";
+  for (let rest = column + 1; rest > 0; rest = Math.floor((rest - 1) / 26)) {
+    name = String.fromCharCode(0x41 + ((rest - 1) % 26)) + name;
+  }
+  return name;
+}
+
+function repeatedHeaderMessage(title: string, columns: readonly number[]): string {
+  return `בשורת הכותרות יש יותר מעמודה אחת בשם "${title}" (עמודות ${isolate(columns.map(columnName).join(", "))}), ואי אפשר לדעת מאיזו מהן לקרוא. השאירו עמודה אחת בשם הזה ונסו שוב. אם אחת העמודות מוסתרת, הציגו אותה ב-Excel.`;
+}
+
 // The rows under the template's header, by the header's own columns rather
 // than by fixed letters — so a sheet with the columns moved, or a column
 // added, still reads. The legend beside the table (column D) is never looked
-// at. Rows with neither a product nor a quantity are left out; null when no
-// row in the first few holds both headers.
+// at. Rows with neither a product nor a quantity are left out, and so are
+// hidden rows without a product: never imported, a hidden row is kept only
+// for the product it names, which still says whose file this is. Null when
+// no row in the first few holds both headers — looked for in hidden rows
+// too, as before. A header row that gives either title to more than one
+// column throws a PickFileError naming the columns.
 export function readPickFileRows(sheet: XlsxSheet): PickFileRow[] | null {
   const productHeader = normalizeLabel(PICK_UPLOAD_HEADERS.product);
   const pickedHeader = normalizeLabel(PICK_UPLOAD_HEADERS.picked);
@@ -138,19 +198,32 @@ export function readPickFileRows(sheet: XlsxSheet): PickFileRow[] | null {
     const productColumn = titles.indexOf(productHeader);
     const pickedColumn = titles.indexOf(pickedHeader);
     if (productColumn === -1 || pickedColumn === -1) continue;
+    // A title over more than one column is refused, never read from the
+    // first: that is how a hidden column of yesterday's numbers, kept beside
+    // today's under the same title, would be saved as today's. Which column
+    // is meant is the person's to say.
+    for (const [title, normalized] of [
+      [PICK_UPLOAD_HEADERS.product, productHeader],
+      [PICK_UPLOAD_HEADERS.picked, pickedHeader],
+    ] as const) {
+      const columns = titles.flatMap((cell, column) => (cell === normalized ? [column] : []));
+      if (columns.length > 1) throw new PickFileError(repeatedHeaderMessage(title, columns));
+    }
     return sheet.rows
       .filter((row) => row.rowNumber > header.rowNumber)
       .flatMap((row) => {
         const product = cut(row.cells[productColumn] ?? null);
         const quantity = cut(row.cells[pickedColumn] ?? null);
         if (isBlank(product) && isBlank(quantity)) return [];
-        return [
-          {
-            rowNumber: row.rowNumber,
-            product: product === null ? "" : displayText(String(product)),
-            quantity,
-          },
-        ];
+        if (row.hidden && isBlank(product)) return [];
+        const fileRow: PickFileRow = {
+          rowNumber: row.rowNumber,
+          product: product === null ? "" : displayText(String(product)),
+          quantity,
+        };
+        if (row.hidden) fileRow.hidden = true;
+        if (typeof quantity === "number" && row.dateColumns?.includes(pickedColumn)) fileRow.quantityIsDate = true;
+        return [fileRow];
       });
   }
   return null;
@@ -183,11 +256,28 @@ function writtenAs(cell: XlsxCellValue): string {
   return typeof cell === "number" ? String(cell) : displayText(cell);
 }
 
+// A skipped row's quantity, shown beside the reason it is skipped: as the
+// file holds it, except a number the file shows as a date or a time, which
+// is named as one. Its day count (46054) would read as that many pallets.
+function skippedQuantity(row: PickFileRow): string {
+  return row.quantityIsDate ? "תאריך או שעה" : writtenAs(row.quantity);
+}
+
+// A date or a time where the count should be. Excel turns "1/2" or "5-6"
+// typed into a cell into a date, kept under a date format as a day count
+// (46054 is 1 February 2026) — which the template's whole-number check lets
+// through, a day count being a whole number. Typing the count again does not
+// undo it, as the cell keeps its date format; hence the advice.
+const DATE_QUANTITY =
+  "בעמודת המשטחים יש תאריך או שעה, לא מספר — כנראה Excel הפך את מה שהוקלד לתאריך. החזירו את התא לעיצוב מספר רגיל והזינו בו מספר שלם של משטחים.";
+
 // A number cell, or text that is a number ("7" typed into a cell formatted as
 // text). Decimals are refused, never rounded: 2.5 pallets is a mistake to fix
-// in the file, and rounding it either way would be the upload guessing.
-function parseQuantity(cell: XlsxCellValue): Quantity {
+// in the file, and rounding it either way would be the upload guessing. So is
+// a number shown as a date or a time, whatever it is.
+function parseQuantity(cell: XlsxCellValue, shownAsDate: boolean): Quantity {
   if (isBlank(cell)) return { kind: "blank" };
+  if (shownAsDate) return { kind: "invalid", message: DATE_QUANTITY };
   const written = writtenAs(cell);
   let value: number;
   if (typeof cell === "number") {
@@ -261,7 +351,7 @@ export interface PickImportError {
 }
 
 export interface PickImportPlan {
-  /** Rows under the header that hold anything at all. */
+  /** Rows under the header that hold anything at all — of the hidden ones, those listed in notImported. */
   rowCount: number;
   /** Lines whose picked count the file changes — the only lines saved. */
   changes: PickImportChange[];
@@ -271,9 +361,18 @@ export interface PickImportPlan {
   notImported: PickImportSkipped[];
   /** What must be fixed in the file first. Any one of them blocks the whole upload. */
   errors: PickImportError[];
+  /**
+   * Present when the file hides rows that name a product: how many, listed in
+   * notImported or not (one with no quantity is not shown at all), and how
+   * many of them name no line of this pick. None of them is imported, but
+   * their products still say whose file this is (mostlyNotInPick).
+   */
+  hiddenProducts?: { count: number; notInPick: number };
 }
 
 export const NOT_IN_PICK = "לא נמצא בליקוט של המגדל";
+// No closing period: the preview follows a reason with the row's quantity.
+export const HIDDEN_ROW = "השורה מוסתרת בקובץ ולא תיקלט. הציגו אותה ב-Excel והעלו שוב אם צריך";
 const NO_PRODUCT = "חסר שם מוצר";
 const AMBIGUOUS =
   "השם מתאים ליותר ממוצר אחד בליקוט של המגדל, ואי אפשר לדעת לאיזה מהם הכוונה. עדכנו את המוצר הזה בעריכת הליקוט (העיפרון).";
@@ -316,17 +415,40 @@ export function planPickImport(
     }
   }
 
-  const plan: PickImportPlan = { rowCount: rows.length, changes: [], unchanged: 0, notImported: [], errors: [] };
+  const plan: PickImportPlan = { rowCount: 0, changes: [], unchanged: 0, notImported: [], errors: [] };
   const rowsByLine = new Map<string, { line: PickLineForImport; rows: PickFileRow[] }>();
 
   for (const row of rows) {
     const key = normalizeLabel(row.product);
     const matches = key === "" ? [] : (linesByLabel.get(key) ?? []);
+    // Hidden in the file: never imported — no change, its quantity not
+    // checked, and no duplicate of a visible row that names the same
+    // product. Its product is looked up only to be counted (hiddenProducts),
+    // and the row is listed only if it held a quantity: one with none has
+    // nothing to show.
+    if (row.hidden) {
+      if (key !== "") {
+        const hidden = (plan.hiddenProducts ??= { count: 0, notInPick: 0 });
+        hidden.count++;
+        if (matches.length === 0) hidden.notInPick++;
+      }
+      if (isBlank(row.quantity)) continue;
+      plan.rowCount++;
+      plan.notImported.push({
+        rowNumber: row.rowNumber,
+        product: row.product,
+        quantity: skippedQuantity(row),
+        reason: HIDDEN_ROW,
+        suggestions: [],
+      });
+      continue;
+    }
+    plan.rowCount++;
     if (matches.length === 0) {
       plan.notImported.push({
         rowNumber: row.rowNumber,
         product: row.product,
-        quantity: writtenAs(row.quantity),
+        quantity: skippedQuantity(row),
         reason: key === "" ? NO_PRODUCT : NOT_IN_PICK,
         suggestions: key === "" ? [] : (labelsByName.get(key) ?? []),
       });
@@ -355,7 +477,7 @@ export function planPickImport(
       }
       continue;
     }
-    const quantity = parseQuantity(first.quantity);
+    const quantity = parseQuantity(first.quantity, first.quantityIsDate === true);
     if (quantity.kind === "invalid") {
       plan.errors.push({ rowNumber: first.rowNumber, product: first.product, message: quantity.message });
       continue;
@@ -393,10 +515,16 @@ export function planPickImport(
 // from the wrong row — and the products the two growers share would still be
 // saved into this one's pick. A product the pick doesn't have never blocks
 // the upload, so neither does this; the dialog warns by the grower's name.
+// A hidden row counts like any other, listed or not: it is saved into no
+// pick, but the product it names is still the file's. A filter showing only
+// the rows filled in today would otherwise hide most of the evidence.
 export function mostlyNotInPick(plan: PickImportPlan): boolean {
-  const notInPick = plan.notImported.filter((skip) => skip.reason === NOT_IN_PICK).length;
-  const named = plan.rowCount - plan.notImported.filter((skip) => skip.reason === NO_PRODUCT).length;
-  return notInPick * 2 > named;
+  const listed = (reason: string) => plan.notImported.filter((skip) => skip.reason === reason).length;
+  const hidden = plan.hiddenProducts ?? { count: 0, notInPick: 0 };
+  // The visible rows that name a product: every row shown, less those that
+  // name none and the hidden ones, which hiddenProducts counts listed or not.
+  const visibleNamed = plan.rowCount - listed(NO_PRODUCT) - listed(HIDDEN_ROW);
+  return (listed(NOT_IN_PICK) + hidden.notInPick) * 2 > visibleNamed + hidden.count;
 }
 
 // Whether the plan made again from the lines as they are NOW (re-read when
@@ -460,10 +588,30 @@ export function pickFileProblem(file: { name: string; size: number }): string | 
   return null;
 }
 
-/** A failure to read the chosen file (readXlsxSheet's, or the browser's), in words. */
+// The most tab names a message lists: a workbook can hold hundreds.
+const MAX_LISTED_SHEETS = 5;
+
+// Tab names in a sentence, each quoted and isolated (a name may be English,
+// or end in "(2)"), and any past the first few counted rather than listed.
+function sheetList(names: readonly string[]): string {
+  const listed = names.slice(0, MAX_LISTED_SHEETS).map((name) => `"${isolate(sheetLabel(name))}"`);
+  const more = names.length - listed.length;
+  return more > 0 ? `${listed.join(", ")} ועוד ${more}` : listed.join(", ");
+}
+
+const NO_SHEET_MESSAGE = `בקובץ אין גיליון ליקוט גלוי: הגיליון "${PICK_UPLOAD_INSTRUCTIONS_SHEET}" וגיליונות מוסתרים לא נקראים. אם גיליון הליקוט מוסתר, הציגו אותו ב-Excel ונסו שוב. ${USE_TEMPLATE}`;
+
+/** A failure to read the chosen file (readXlsxSheet's, readPickFileRows', or the browser's), in words. */
 export function pickFileReadErrorMessage(error: unknown): string {
+  if (error instanceof PickFileError) return error.message;
   if (!(error instanceof XlsxError)) return "לא ניתן היה לקרוא את הקובץ. בחרו אותו שוב.";
   switch (error.code) {
+    // Which tab to read is the person's to say: reading one of several is
+    // how one grower's numbers were saved into another's pick.
+    case "several_sheets":
+      return `בקובץ יש כמה גיליונות: ${sheetList(error.sheetNames)}. השאירו בקובץ גיליון ליקוט אחד — קובץ אחד לכל מגדל — ונסו שוב.`;
+    case "no_sheets":
+      return NO_SHEET_MESSAGE;
     case "legacy_or_encrypted":
     case "encrypted":
       return `זה קובץ אקסל בפורמט ישן או קובץ מוגן בסיסמה. שמרו אותו כקובץ ${XLSX} רגיל, בלי סיסמה. ${USE_TEMPLATE}`;

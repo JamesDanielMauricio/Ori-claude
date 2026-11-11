@@ -2,14 +2,15 @@
 // reader behind the "בשם מגדל" picking upload (workbook Task 38).
 //
 // Hand-written rather than a spreadsheet package, on purpose. The upload
-// needs one thing from a file: the text and numbers in one sheet's cells. The
+// needs little from a file: the text and numbers in one sheet's cells, which
+// of its rows are hidden, and which of its numbers are shown as dates. The
 // libraries that do that carry a whole spreadsheet engine (formulas, styles,
 // writing, a dozen file formats) into the bundle, and they are exactly the
 // kind of parser that has shipped prototype-pollution and zip-bomb bugs. What
 // an .xlsx actually is fits in this file: a ZIP archive of XML parts, where
 // xl/workbook.xml names the sheets, its relationships file says which part
-// holds each one, and xl/sharedStrings.xml holds the text the sheets point to
-// by number.
+// holds each one, xl/sharedStrings.xml holds the text the sheets point to by
+// number, and xl/styles.xml the number formats their cells point to.
 //
 // Pure: no DOM. It runs the same in the browser and under vitest's node
 // environment, which has no DOMParser — hence the small XML tokenizer below
@@ -41,20 +42,40 @@ export interface XlsxRow {
    * file holds it — not trimmed.
    */
   cells: XlsxCellValue[];
+  /**
+   * Present, and true, when the file hides the row (`<row hidden="1">`): a
+   * row a filter leaves out, one inside a collapsed group, or one hidden by
+   * hand. Its cells are read all the same; what to do with them is the
+   * caller's business.
+   */
+  hidden?: true;
+  /**
+   * Present when some of the row's numbers are shown as dates or times — the
+   * cell's style has a date or time number format (xl/styles.xml) — and then
+   * their columns (A = 0), in order. The numbers in `cells` are as stored: a
+   * date is a count of days (46054 is 1 February 2026), a time a fraction of
+   * a day.
+   */
+  dateColumns?: number[];
 }
 
 export interface XlsxSheet {
-  /** The name of the sheet that was read. */
+  /**
+   * The name of the sheet that was read: the workbook's one visible
+   * worksheet, besides any set aside by `ReadXlsxOptions.ignoreSheets`.
+   */
   name: string;
-  /** True when `sheetName` was asked for, not found, and the first sheet was read instead. */
-  isFallback: boolean;
   /** Only the rows with at least one non-empty cell, in the file's order. */
   rows: XlsxRow[];
 }
 
 export interface ReadXlsxOptions {
-  /** The sheet to read, by its tab name. Falls back to the first sheet. */
-  sheetName?: string;
+  /**
+   * Tabs that are never the data, by name — a template's instructions. They
+   * are not read, and not counted when looking for the one tab that is.
+   * Matched whatever their case, and without surrounding spaces.
+   */
+  ignoreSheets?: readonly string[];
   /** Bytes the whole read may decompress, across every part it opens. */
   maxUncompressedBytes?: number;
   /** Entries the archive may list at all. */
@@ -80,17 +101,26 @@ export type XlsxErrorCode =
   | "corrupt"
   /** A ZIP, but not a workbook (a .docx, an .ods). */
   | "not_xlsx"
+  /**
+   * Worksheets, but none to read: every one is hidden or set aside
+   * (`ignoreSheets`). A workbook with no worksheet at all is "corrupt".
+   */
   | "no_sheets"
+  /** More than one visible worksheet that could be the data; `XlsxError.sheetNames` names them. */
+  | "several_sheets"
   /** No DecompressionStream("deflate-raw") here — an outdated browser. */
   | "unsupported_runtime";
 
 export class XlsxError extends Error {
   readonly code: XlsxErrorCode;
+  /** For "several_sheets": the tabs that could each be the data, in the workbook's order. Empty otherwise. */
+  readonly sheetNames: readonly string[];
 
-  constructor(code: XlsxErrorCode, message: string) {
+  constructor(code: XlsxErrorCode, message: string, sheetNames: readonly string[] = []) {
     super(message);
     this.name = "XlsxError";
     this.code = code;
+    this.sheetNames = sheetNames;
   }
 }
 
@@ -366,17 +396,25 @@ function openArchive(bytes: Uint8Array, limits: Limits): Archive {
     const end = start + entry.compressedSize;
     if (end > bytes.length) throw corrupt("an entry runs past the end of the file");
 
+    // Charged now, at the size the archive declares, not once the part has
+    // read correctly. That is what a part read whole decompresses to, and
+    // about what a damaged one gets through before decompression stops on
+    // it, so a part that fails has still cost it. The read can carry on past
+    // one (a damaged styles part costs the file only its dates), so the cost
+    // must not come back.
+    const allowance = budget;
+    budget -= entry.uncompressedSize;
+
     let output: Uint8Array;
     if (entry.method === 0) {
       if (entry.compressedSize !== entry.uncompressedSize) throw corrupt("a stored entry's sizes disagree");
       output = bytes.subarray(start, end);
     } else if (entry.method === 8) {
-      output = await inflateRaw(bytes.slice(start, end), entry.uncompressedSize, budget);
+      output = await inflateRaw(bytes.slice(start, end), entry.uncompressedSize, allowance);
     } else {
       throw new XlsxError("unsupported_compression", `ZIP compression method ${entry.method} is not supported.`);
     }
     if (crc32(output) !== entry.crc32) throw corrupt("an entry's checksum does not match");
-    budget -= output.byteLength;
     return output;
   }
 
@@ -736,6 +774,133 @@ function readSharedStrings(xml: string): string[] {
   return strings;
 }
 
+// ------------------------------------------------------------------ styles
+
+// What a number in a cell is, its style says. Excel keeps a date as a count
+// of days and a time as a fraction of one, and only the cell's number format
+// — in xl/styles.xml — says that the number is a date. Excel also turns what
+// is typed into a date whenever it looks like one: "1/2" or "5-6" typed as a
+// quantity becomes 1 February or 5 June, stored as 46054 or 46178 under a
+// date format, which read as a plain number is that many pallets. So of all
+// that the styles part says about how cells look, this reads one thing:
+// which cell styles show a number as a date or a time.
+
+// The built-in number formats, which a style names by number alone, without
+// writing their code out: 14–22 are the dates and times of every edition of
+// Excel, 45–47 its minutes and seconds, and 27–36 and 50–58 the dates of its
+// East Asian editions.
+function isBuiltInDateFormat(id: number): boolean {
+  return (id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 45 && id <= 47) || (id >= 50 && id <= 58);
+}
+
+// A bracketed section that is elapsed time — [h], [mm], [ss] — rather than a
+// color, a condition, a currency or a locale ([Red], [>100], [$₪-40D]).
+const ELAPSED_TIME = /^(?:h+|m+|s+)$/i;
+const AM_PM = /^a(?:m\/pm|\/p)/i;
+
+/**
+ * Whether a custom number format's code shows a date or a time ("dd/mm/yyyy",
+ * "h:mm", "[h]:mm:ss") rather than a number ("0", "#,##0", "0.00E+00",
+ * `0" משטחים"`). Quoted text and an escaped character (\d) are shown as
+ * written, and a bracketed section is a color, a condition, a currency or a
+ * locale, so all three are passed over — except elapsed time ([h], [mm],
+ * [ss]), which is a time. What is left is a date or a time if it holds a d,
+ * m, y, h or s, in either case, or AM/PM or A/P. "General" holds none.
+ *
+ * One pass, left to right, every step past the landmark it looked for, and
+ * an unclosed quote or bracket ends it: a code from a file costs no more than
+ * its length, however it is built.
+ */
+export function isDateFormatCode(code: string): boolean {
+  for (let index = 0; index < code.length; index++) {
+    const char = code.charCodeAt(index);
+    if (char === 0x22 /* " */) {
+      const end = code.indexOf('"', index + 1);
+      // Never closed: the rest of the code is text.
+      if (end === -1) return false;
+      index = end;
+    } else if (char === 0x5c /* \ */) {
+      index++;
+    } else if (char === 0x5b /* [ */) {
+      const end = code.indexOf("]", index + 1);
+      if (end === -1) return false;
+      if (ELAPSED_TIME.test(code.slice(index + 1, end))) return true;
+      index = end;
+    } else {
+      const lower = char | 0x20; // lower-cased, for ASCII letters
+      if (lower === 0x64 || lower === 0x6d || lower === 0x79 || lower === 0x68 || lower === 0x73) return true; // d m y h s
+      if (lower === 0x61 /* a */ && AM_PM.test(code.slice(index, index + 5))) return true;
+    }
+  }
+  return false;
+}
+
+/** Whether a number format shows a date or a time: by its id when it is a built-in one, or by its code. */
+export function isDateNumberFormat(id: number, code?: string): boolean {
+  return isBuiltInDateFormat(id) || (code !== undefined && isDateFormatCode(code));
+}
+
+// An id or an index as the styles part and a cell's `s` write one: digits,
+// nothing else. Null for anything that is not one.
+function indexValue(text: string): number | null {
+  const trimmed = text.trim();
+  return /^\d{1,9}$/.test(trimmed) ? Number(trimmed) : null;
+}
+
+// The cell styles that show a number as a date or a time, by their place in
+// cellXfs — the list a cell's `s` counts into. Each names its number format
+// by id: a built-in one, or one of the codes numFmts lists. A numFmt
+// anywhere else (inside a dxf: what a conditional format applies) and the
+// xf records of cellStyleXfs (the named styles that cell styles derive from)
+// are no cell's own style, and are passed over.
+function readDateStyles(xml: string): Set<number> {
+  const codes = new Map<number, string>();
+  const formatIds: Array<number | null> = [];
+  let inNumFmts = false;
+  let inCellXfs = false;
+  // An xf's own children (alignment, protection) are not more styles.
+  let xfDepth = 0;
+  scanXml(xml, {
+    open(name, attributes) {
+      if (name === "numFmts") {
+        inNumFmts = true;
+      } else if (name === "cellXfs") {
+        inCellXfs = true;
+        xfDepth = 0;
+      } else if (name === "numFmt" && inNumFmts) {
+        const id = attributes.get("numFmtId");
+        const code = attributes.get("formatCode");
+        const formatId = id === undefined ? null : indexValue(id);
+        if (formatId !== null && code !== undefined) codes.set(formatId, code);
+      } else if (name === "xf" && inCellXfs) {
+        // A style that names no format has format 0, General.
+        const id = attributes.get("numFmtId");
+        if (xfDepth === 0) formatIds.push(id === undefined ? 0 : indexValue(id));
+        xfDepth++;
+      }
+    },
+    close(name) {
+      if (name === "numFmts") inNumFmts = false;
+      else if (name === "cellXfs") inCellXfs = false;
+      else if (name === "xf" && inCellXfs) xfDepth = Math.max(0, xfDepth - 1);
+    },
+  });
+  // Each format is judged once, however many styles share it: a file can
+  // give a hundred thousand styles the same very long code.
+  const isDateById = new Map<number, boolean>();
+  const dateStyles = new Set<number>();
+  formatIds.forEach((id, index) => {
+    if (id === null) return;
+    let isDate = isDateById.get(id);
+    if (isDate === undefined) {
+      isDate = isDateNumberFormat(id, codes.get(id));
+      isDateById.set(id, isDate);
+    }
+    if (isDate) dateStyles.add(index);
+  });
+  return dateStyles;
+}
+
 // "B12" -> 1. Letters only; null for a reference without any.
 function columnOf(reference: string): number | null {
   let column = 0;
@@ -784,16 +949,31 @@ function cellValue(
   }
 }
 
-function readSheetRows(xml: string, sharedStrings: readonly string[], limits: Limits): XlsxRow[] {
+// A flag as the sheet writes it: "1" or "true" (LibreOffice writes the word).
+function isTrue(flag: string | undefined): boolean {
+  const written = flag?.trim().toLowerCase();
+  return written === "1" || written === "true";
+}
+
+function readSheetRows(
+  xml: string,
+  sharedStrings: readonly string[],
+  dateStyles: ReadonlySet<number>,
+  limits: Limits,
+): XlsxRow[] {
   const rows: XlsxRow[] = [];
   let inSheetData = false;
   let rowNumber = 0;
   let rowCells: Map<number, XlsxCellValue> | null = null;
+  let rowHidden = false;
+  // The row's columns whose number is shown as a date or a time.
+  let rowDates: Set<number> | null = null;
   let lastColumn = -1;
 
   // The cell being read.
   let cellColumn: number | null = null;
   let cellType = "n";
+  let cellIsDateStyle = false;
   let value: string | null = null;
   let inlineText: string | null = null;
   let capture: "value" | "inline" | null = null;
@@ -811,6 +991,8 @@ function readSheetRows(xml: string, sharedStrings: readonly string[], limits: Li
         const declared = Number(attributes.get("r"));
         rowNumber = Number.isInteger(declared) && declared > 0 ? declared : rowNumber + 1;
         rowCells = new Map();
+        rowHidden = isTrue(attributes.get("hidden"));
+        rowDates = null;
         lastColumn = -1;
       } else if (name === "c" && rowCells) {
         const reference = attributes.get("r");
@@ -818,6 +1000,11 @@ function readSheetRows(xml: string, sharedStrings: readonly string[], limits: Li
         cellColumn = column ?? lastColumn + 1;
         lastColumn = cellColumn;
         cellType = attributes.get("t") ?? "n";
+        // A cell without `s` has style 0, the workbook's default; one whose
+        // `s` names no style there is not a date.
+        const style = attributes.get("s");
+        const styleIndex = style === undefined ? 0 : indexValue(style);
+        cellIsDateStyle = styleIndex !== null && dateStyles.has(styleIndex);
         value = null;
         inlineText = null;
         inInline = false;
@@ -847,7 +1034,13 @@ function readSheetRows(xml: string, sharedStrings: readonly string[], limits: Li
         inInline = false;
       } else if (name === "c" && cellColumn !== null && rowCells) {
         const cell = cellValue(cellType, value, inlineText, sharedStrings);
-        if (cell !== null && cell !== "" && cellColumn < limits.maxColumns) rowCells.set(cellColumn, cell);
+        if (cell !== null && cell !== "" && cellColumn < limits.maxColumns) {
+          rowCells.set(cellColumn, cell);
+          // Only a number is a date in disguise: text, a boolean or an error
+          // shows as itself, whatever its style.
+          if (typeof cell === "number" && cellIsDateStyle) (rowDates ??= new Set()).add(cellColumn);
+          else rowDates?.delete(cellColumn);
+        }
         cellColumn = null;
         capture = null;
       } else if (name === "row" && rowCells) {
@@ -857,7 +1050,10 @@ function readSheetRows(xml: string, sharedStrings: readonly string[], limits: Li
           }
           const width = Math.max(...rowCells.keys()) + 1;
           const cells = rowCells;
-          rows.push({ rowNumber, cells: Array.from({ length: width }, (_, column) => cells.get(column) ?? null) });
+          const row: XlsxRow = { rowNumber, cells: Array.from({ length: width }, (_, column) => cells.get(column) ?? null) };
+          if (rowHidden) row.hidden = true;
+          if (rowDates && rowDates.size > 0) row.dateColumns = [...rowDates].sort((a, b) => a - b);
+          rows.push(row);
         }
         rowCells = null;
       }
@@ -873,6 +1069,69 @@ function readSheetRows(xml: string, sharedStrings: readonly string[], limits: Li
 function sameSheetName(a: string, b: string): boolean {
   const normalize = (name: string) => name.normalize("NFC").trim().toLowerCase();
   return normalize(a) === normalize(b);
+}
+
+// Which tab is read: the workbook's one visible worksheet, not counting the
+// ones the caller sets aside by name (the picking template's instructions).
+// A tab nobody can see, hidden or "very hidden", is not a candidate at all,
+// and neither is a chart sheet (readWorkbookSheets keeps worksheets only):
+// none of them is what the person filled in and looked at. More than one
+// candidate is refused, never chosen between. Taking the one with the
+// expected name, or the first, is how a copy of the picking tab — Excel's
+// "Move or Copy" makes "ליקוט (2)", Google Sheets "עותק של ליקוט",
+// LibreOffice "ליקוט_2" — or a tab per grower had one tab's numbers read and
+// saved while the person meant another's, with nothing on the screen to say
+// which tab it was. Only the person knows which one they meant.
+function chooseSheet(sheets: readonly SheetEntry[], ignoreSheets: readonly string[]): SheetEntry {
+  // No worksheet at all: the workbook's list of its sheets, or the
+  // relationships that place them, are damaged, or it holds charts alone.
+  // That is not a file whose picking tab is hidden, which is what
+  // "no_sheets" tells the person to look for, so it is refused as a file
+  // that cannot be read.
+  if (sheets.length === 0) throw corrupt("the workbook lists no worksheet");
+  const candidates = sheets.filter(
+    (sheet) => !sheet.hidden && !ignoreSheets.some((name) => sameSheetName(sheet.name, name)),
+  );
+  if (candidates.length > 1) {
+    throw new XlsxError(
+      "several_sheets",
+      `The workbook has ${candidates.length} visible sheets that could be the data.`,
+      candidates.map((sheet) => sheet.name),
+    );
+  }
+  const [sheet] = candidates;
+  if (!sheet) throw new XlsxError("no_sheets", "The workbook has no visible worksheet to read.");
+  return sheet;
+}
+
+// The workbook's own part of a kind (its shared strings, its styles): where
+// its relationship says, or where every program puts it when none does.
+function workbookPartPath(
+  workbookPath: string,
+  relationships: ReadonlyMap<string, Relationship>,
+  type: string,
+  conventionalName: string,
+): string {
+  for (const relationship of relationships.values()) {
+    if (relationship.type.endsWith(type)) return resolveTarget(workbookPath, relationship.target);
+  }
+  return resolveTarget(workbookPath, conventionalName);
+}
+
+// The styles that show dates, or none when the styles part is missing,
+// damaged or not XML: the file is still read, only its dates go untold, as
+// they did before this reader looked at styles at all. A styles part over a
+// cap is refused like any other part, though — through the same slice-by-
+// slice decompression and the same budget for the whole read, which a
+// damaged one has still spent (openArchive).
+async function readDateStylesPart(archive: Archive, path: string): Promise<ReadonlySet<number>> {
+  try {
+    const xml = await archive.readText(path);
+    return xml === null ? new Set() : readDateStyles(xml);
+  } catch (error) {
+    if (error instanceof XlsxError && error.code === "too_large") throw error;
+    return new Set();
+  }
 }
 
 // --------------------------------------------------------------------- read
@@ -906,30 +1165,19 @@ export async function readXlsxSheet(
   const workbookRelationshipsXml = await archive.readText(relationshipsPathOf(workbookPath));
   const relationships = workbookRelationshipsXml === null ? new Map<string, Relationship>() : readRelationships(workbookRelationshipsXml);
 
-  const sheets = readWorkbookSheets(workbook, workbookPath, relationships);
-  // "The first sheet" is the first tab a person can see: a hidden sheet ahead
-  // of it is not the one they filled in.
-  const firstSheet = sheets.find((sheet) => !sheet.hidden) ?? sheets[0];
-  if (!firstSheet) throw new XlsxError("no_sheets", "The workbook has no worksheets.");
-  const { sheetName } = options;
-  const named = sheetName === undefined ? undefined : sheets.find((sheet) => sameSheetName(sheet.name, sheetName));
-  const sheet = named ?? firstSheet;
+  // Chosen before anything else is read: a workbook refused for its tabs
+  // costs no more decompressing.
+  const sheet = chooseSheet(readWorkbookSheets(workbook, workbookPath, relationships), options.ignoreSheets ?? []);
 
-  let sharedStringsPath = resolveTarget(workbookPath, "sharedStrings.xml");
-  for (const relationship of relationships.values()) {
-    if (relationship.type.endsWith("/sharedStrings")) {
-      sharedStringsPath = resolveTarget(workbookPath, relationship.target);
-      break;
-    }
-  }
+  const sharedStringsPath = workbookPartPath(workbookPath, relationships, "/sharedStrings", "sharedStrings.xml");
   const sharedStringsXml = archive.has(sharedStringsPath) ? await archive.readText(sharedStringsPath) : null;
   const sharedStrings = sharedStringsXml === null ? [] : readSharedStrings(sharedStringsXml);
+  const dateStyles = await readDateStylesPart(
+    archive,
+    workbookPartPath(workbookPath, relationships, "/styles", "styles.xml"),
+  );
 
   const sheetXml = await archive.readText(sheet.path);
   if (sheetXml === null) throw corrupt(`the sheet "${sheet.name}" is missing`);
-  return {
-    name: sheet.name,
-    isFallback: sheetName !== undefined && named === undefined,
-    rows: readSheetRows(sheetXml, sharedStrings, limits),
-  };
+  return { name: sheet.name, rows: readSheetRows(sheetXml, sharedStrings, dateStyles, limits) };
 }
