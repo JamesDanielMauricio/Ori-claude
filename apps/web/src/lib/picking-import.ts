@@ -520,36 +520,14 @@ function labelOf(line: PickLineForImport): string {
   return formatVarietyName(line.name, line.sizes);
 }
 
-// A code's last group, the part of it that differs most at a glance.
-function codeEnding(varietyId: string): string {
-  const code = varietyId.toLowerCase();
-  return code.slice(code.lastIndexOf("-") + 1);
-}
-
-// What the preview shows a change as: Ori's label for its line — and when
-// other lines of the pick share that label (`sameLabel`, the line among
-// them), what tells this one apart. Nothing makes a variety's name and size
-// unique: its family and its pack type tell varieties apart too. A row's
-// code chooses between such lines with nothing from the name to check it,
-// so the label alone would show a row with the neighbouring variety's code
-// exactly as it shows the right one. The family, as the pick editor groups
-// its lines by family; where that is shared too, the end of the code,
-// which the products screen shows in full — or the whole code, should even
-// that be shared. The code is set left to right in its own isolate, so the
-// ellipsis stays on the left of it, where its cut-off start is.
+// What the preview shows a change as: Ori's label for its line, with its
+// family before it when another line of the pick (`sameLabel` holds them
+// all, this one included) has the same label. A variety's name and size are
+// not unique across families, and a row's code chooses between such lines
+// with nothing in the name to check it by.
 function changeLabel(line: PickLineForImport, sameLabel: readonly PickLineForImport[]): string {
   const label = labelOf(line);
-  const others = sameLabel.filter((other) => other !== line);
-  if (others.length === 0) return label;
-  const family = normalizeLabel(line.familyName ?? "");
-  if (family !== "" && others.every((other) => normalizeLabel(other.familyName ?? "") !== family)) {
-    return `${line.familyName} — ${label}`;
-  }
-  const ending = codeEnding(line.varietyId);
-  const code = others.some((other) => codeEnding(other.varietyId) === ending)
-    ? line.varietyId.toLowerCase()
-    : `…${ending}`;
-  return `${label} (קוד \u2066${code}\u2069)`;
+  return sameLabel.length > 1 && line.familyName ? `${line.familyName} — ${label}` : label;
 }
 
 // The row's code and its name say two different lines of the pick. One of

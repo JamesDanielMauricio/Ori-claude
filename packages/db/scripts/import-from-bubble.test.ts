@@ -77,8 +77,6 @@ function previousIdsOf(plan: ReturnType<typeof planReference>): PreviousIds {
 }
 
 const loginsOf = (plan: ReturnType<typeof planReference>) => new Map(plan.users.map((user) => [user.bubbleId, `login-${user.bubbleId}`]));
-const notKeptIssues = (report: Report) =>
-  report.issues.filter((issue) => issue.code.endsWith(".id_not_kept")).map((issue) => [issue.severity, issue.code, issue.bubbleId]);
 
 describe("planReference: a repeat import keeps ids (Task 20)", () => {
   it("keeps every company's, family's and variety's id; what is new in Bubble gets a new one", () => {
@@ -93,8 +91,7 @@ describe("planReference: a repeat import keeps ids (Task 20)", () => {
       { _id: "v-pepper", "Created Date": at(6), "Product Family": "f-pepper", Variety: "פלפל אדום" },
       { _id: "v-cherry", "Created Date": at(6), "Product Family": "f-tomato", Variety: "שרי" },
     );
-    const report = new Report();
-    const after = previousIdsOf(planReference(data, report, before));
+    const after = previousIdsOf(planReference(data, new Report(), before));
 
     for (const type of ["company", "productfamily", "productvarieties"] as const) {
       for (const [bubbleId, id] of before[type]) expect(after[type].get(bubbleId)).toBe(id);
@@ -104,7 +101,6 @@ describe("planReference: a repeat import keeps ids (Task 20)", () => {
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
       expect(earlier.has(id!)).toBe(false);
     }
-    expect(notKeptIssues(report)).toEqual([]);
   });
 
   it("every row that names a product names it by its kept id", () => {
@@ -132,44 +128,6 @@ describe("planReference: a repeat import keeps ids (Task 20)", () => {
     const tomatoPickLine = rows.daily_pick_products.find((row) => row.product_variety_id === tomato)?.id;
     expect(rows.arrangement_records.map((row) => [row.daily_pick_product_id, row.daily_order_product_id])).toEqual([
       [tomatoPickLine, rows.daily_order_products[0]?.id],
-    ]);
-  });
-
-  it("an earlier id that is not a uuid, or that two records had, is not kept: the row gets a new id and the report says so", () => {
-    const shared = "0b7e9c3a-5d21-4f8b-9a64-2c3d4e5f6a7b";
-    const report = new Report();
-    const plan = planReference(bubbleExport(), report, {
-      company: new Map(),
-      productfamily: new Map([["f-tomato", "not-an-id"]]),
-      productvarieties: new Map([["v-tomato", shared], ["v-cucumber", shared]]),
-    });
-
-    const varietyIds = plan.productVarieties.map((row) => row.id);
-    expect(varietyIds).not.toContain(shared);
-    expect(new Set(varietyIds).size).toBe(2);
-    expect(plan.productFamilies.map((row) => row.id)).not.toContain("not-an-id");
-    // The tomato points at its family's new id.
-    expect(plan.productVarieties[0]?.family_id).toBe(plan.productFamilies[0]?.id);
-    expect(notKeptIssues(report)).toEqual([
-      ["warning", "family.id_not_kept", "f-tomato"],
-      ["warning", "variety.id_not_kept", "v-tomato"],
-      ["warning", "variety.id_not_kept", "v-cucumber"],
-    ]);
-  });
-
-  it("a family and a variety that had one id keep neither, so no two rows share it", () => {
-    const one = "6f1c2b9e-3a4d-4c5e-8f70-1a2b3c4d5e6f";
-    const report = new Report();
-    const plan = planReference(bubbleExport(), report, {
-      company: new Map(),
-      productfamily: new Map([["f-tomato", one]]),
-      productvarieties: new Map([["v-cucumber", one]]),
-    });
-
-    expect([...plan.productFamilies, ...plan.productVarieties].map((row) => row.id)).not.toContain(one);
-    expect(notKeptIssues(report)).toEqual([
-      ["warning", "family.id_not_kept", "f-tomato"],
-      ["warning", "variety.id_not_kept", "v-cucumber"],
     ]);
   });
 });

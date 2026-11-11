@@ -70,7 +70,6 @@ import {
   supabasePictureStore,
   varietyPictureFromBubble,
 } from "./lib/bubble-extras";
-import { keepEarlierIds } from "./lib/kept-ids";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -619,11 +618,7 @@ export function planReference(data: ExportData, report: Report, previousIds: Pre
   // A family or variety imported before keeps its id, as a company does
   // (Task 20). A variety's id is also its product code, which staff copy into
   // picking upload files: kept, a code copied before this import still names
-  // the same product after it. One chooser for both tables, so a family and a
-  // variety never share an id either; a Bubble id is never in both maps, as
-  // it is the id record's key. The rule, and when an earlier id is not kept,
-  // is in lib/kept-ids.ts.
-  const catalogIdFor = keepEarlierIds(new Map([...previousIds.productfamily, ...previousIds.productvarieties]));
+  // the same product after it.
   const productFamilies: Row[] = [];
   const familyIdByBubbleId = new Map<string, string>();
   for (const family of data.productfamily) {
@@ -641,8 +636,7 @@ export function planReference(data: ExportData, report: Report, previousIds: Pre
       report.note("warning", "productfamily", family._id, "family.unknown_category", `"${name}" has a category this app does not know (${categoryLabels.join(", ")}) — imported without one.`);
     }
     const image = text(family, "image");
-    const { id, notKept } = catalogIdFor(family._id);
-    if (notKept) report.note("warning", "productfamily", family._id, "family.id_not_kept", `"${name}": ${notKept} — given a new id.`);
+    const id = previousIds.productfamily.get(family._id) ?? randomUUID();
     productFamilies.push({
       id,
       name,
@@ -695,10 +689,7 @@ export function planReference(data: ExportData, report: Report, previousIds: Pre
       cap = null;
     }
 
-    const { id, notKept } = catalogIdFor(variety._id);
-    if (notKept) {
-      report.note("warning", "productvarieties", variety._id, "variety.id_not_kept", `"${name}": ${notKept} — given a new id, so a product code copied before this import no longer finds it.`);
-    }
+    const id = previousIds.productvarieties.get(variety._id) ?? randomUUID();
     productVarieties.push({
       id,
       family_id: familyId,

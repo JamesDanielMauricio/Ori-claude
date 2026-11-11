@@ -1319,11 +1319,7 @@ describe("planPickImport — by code", () => {
     const plum2 = "22222222-2222-4222-8222-222222222222";
     const lines = [line("P1", "שזיף", null, 1, 0, null, plum1), line("P2", "שזיף", null, 2, 0, null, plum2)];
     const result = planPickImport(codeRows([plum2, "שזיף", 4]), lines, NOTHING_ARRANGED);
-    // Shown with the end of its code, as the two lines share a label and a
-    // family (none): the preview tells them apart (next test).
-    expect(result.changes).toEqual([
-      { rowNumber: 2, lineId: "P2", product: "שזיף (קוד \u2066…222222222222\u2069)", from: 2, to: 4 },
-    ]);
+    expect(result.changes).toEqual([{ rowNumber: 2, lineId: "P2", product: "שזיף", from: 2, to: 4 }]);
     expect(result.errors).toEqual([]);
     // Without its code, the same row is the shared name it always was.
     expect(planPickImport(codeRows([null, "שזיף", 4]), lines, NOTHING_ARRANGED).errors[0]?.message).toMatch(
@@ -1334,13 +1330,10 @@ describe("planPickImport — by code", () => {
   // The final review: nothing makes a variety's name and size unique, and a
   // row whose code was the neighbouring variety's showed in the preview
   // exactly as the right one would.
-  it("shows a change to a line that shares its label with what tells it apart: its family, or its code", () => {
+  it("shows a change to a line that shares its label with its family's name", () => {
     const ids = {
       romaine: "11111111-1111-4111-8111-1111111111a1",
       iceberg: "22222222-2222-4222-8222-2222222222b2",
-      leaf: "33333333-3333-4333-8333-3333333333c3",
-      // Ends as romaine's does.
-      leafAlike: "44444444-4444-4444-8444-1111111111a1",
     };
     const lettuce = (id: string, varietyId: string, familyName: string | null) =>
       line(id, "חסה", "גדול", 0, 0, null, varietyId, familyName);
@@ -1351,35 +1344,16 @@ describe("planPickImport — by code", () => {
         NOTHING_ARRANGED,
       ).changes.map((change) => [change.lineId, plain(change.product)]);
 
-    // Two families: each line by its family, as the pick editor groups them.
+    // Each line by its family, as the pick editor groups them.
     const twoFamilies = [lettuce("A", ids.romaine, "חסות"), lettuce("B", ids.iceberg, "עלים")];
     expect(changes(twoFamilies, ids.romaine, ids.iceberg)).toEqual([
       ["A", "חסות — חסה גדול"],
       ["B", "עלים — חסה גדול"],
     ]);
-    // One family, or none: the end of each code, the start cut off.
-    const oneFamily = [lettuce("A", ids.romaine, "חסות"), lettuce("B", ids.iceberg, " חסות ")];
-    expect(changes(oneFamily, ids.romaine, ids.iceberg)).toEqual([
-      ["A", "חסה גדול (קוד …1111111111a1)"],
-      ["B", "חסה גדול (קוד …2222222222b2)"],
-    ]);
+    // A line that came without its family is shown by its label.
     expect(changes([lettuce("A", ids.romaine, null), lettuce("B", ids.iceberg, null)], ids.iceberg)).toEqual([
-      ["B", "חסה גדול (קוד …2222222222b2)"],
+      ["B", "חסה גדול"],
     ]);
-    // Three lines, two of one family: the third by its family, the two by their codes.
-    const threeLines = [...oneFamily, lettuce("C", ids.leaf, "עלים")];
-    expect(changes(threeLines, ids.romaine, ids.leaf)).toEqual([
-      ["A", "חסה גדול (קוד …1111111111a1)"],
-      ["C", "עלים — חסה גדול"],
-    ]);
-    // Codes that end alike, which no two real ones do: the whole code.
-    expect(changes([lettuce("A", ids.romaine, "חסות"), lettuce("D", ids.leafAlike, "חסות")], ids.leafAlike)).toEqual([
-      ["D", `חסה גדול (קוד ${ids.leafAlike})`],
-    ]);
-
-    // Set left to right, so the ellipsis stays left of the code in a right-to-left line.
-    const [change] = planPickImport(codeRows([ids.romaine, null, 1]), oneFamily, NOTHING_ARRANGED).changes;
-    expect(change?.product).toBe("חסה גדול (קוד \u2066…1111111111a1\u2069)");
     // A label no other line shares is the label alone, as it always was.
     expect(planPickImport(codeRows([CODE.L1, null, 7]), [...LINES, ...twoFamilies], NOTHING_ARRANGED).changes).toEqual([
       { rowNumber: 2, lineId: "L1", product: "רד-דיימונד גדול", from: 3, to: 7 },
