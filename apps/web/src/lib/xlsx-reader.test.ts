@@ -11,11 +11,13 @@ import {
   type XlsxSheet,
 } from "./xlsx-reader";
 
-// Real files, not hand-built byte arrays: the shipped template itself, the
-// template filled in by openpyxl, and parts written the way Excel and other
-// generators write them (shared strings, rich text, prefixes, stored entries).
-// They are built by a script kept outside the repo; what each one holds is
-// spelled out in the test that reads it.
+// Real files, not hand-built byte arrays: the shipped template itself (read
+// from public/), the two-column template it replaced (template-empty.xlsx,
+// a byte copy of it) and that template filled in by openpyxl, and parts
+// written the way Excel and other generators write them (shared strings,
+// rich text, prefixes, stored entries). They are built by scripts kept
+// outside the repo; what each one holds is spelled out in the test that
+// reads it.
 function fixture(name: string): Uint8Array {
   return readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url));
 }
@@ -98,6 +100,17 @@ const LEGEND = [
   "הסבר מלא ושורה לדוגמה בגיליון 'הוראות'.",
 ];
 
+// The legend of the template offered since the code column, in column E.
+const CODE_LEGEND = [
+  "ממלאים את התאים הצהובים — שורה לכל מוצר.",
+  "את הקוד מעתיקים ממסך המוצרים: עמודת 'קוד מוצר', כפתור ההעתקה.",
+  "כשיש בשורה קוד, הקוד קובע איזה מוצר זה; בלי קוד — לפי השם.",
+  "קובץ אחד לכל מגדל; מעלים אותו מהשורה שלו במסך 'בשם מגדל'.",
+  "תא ריק משאיר את הכמות כפי שהיא באורי; 0 מאפס.",
+  "כמויות במשטחים שלמים. העודף לא משתנה בהעלאה.",
+  "הסבר מלא ושורה לדוגמה בגיליון 'הוראות'.",
+];
+
 // Two growers' numbers for the same two products, each filled into a copy of
 // the template's ליקוט sheet (rows 2 and 3, beside the legend) in the files
 // that hold more than one tab.
@@ -112,6 +125,7 @@ const GROWER_B = [
 const filledRows = (sheet: XlsxSheet) => sheet.rows.filter((row) => row.rowNumber === 2 || row.rowNumber === 3);
 
 describe("readXlsxSheet — the picking template", () => {
+  // The two-column template, as the screen offered it before the code column.
   it("reads the empty template: the header row and the legend beside it, and no empty rows", async () => {
     const sheet = await readXlsxSheet(fixture("template-empty.xlsx"), TEMPLATE);
     expect(sheet.name).toBe("ליקוט");
@@ -125,9 +139,21 @@ describe("readXlsxSheet — the picking template", () => {
     ]);
   });
 
-  it("is reading the very file the screen offers for download", () => {
+  // The very file the screen offers for download, read where it is shipped
+  // from. template-empty.xlsx was a byte copy of it until the code column;
+  // it is kept as the two-column template, which files filled in before
+  // then still are, and they are read as they always were.
+  it("reads the template the screen offers for download now: the code first, the legend a column further out", async () => {
     const shipped = readFileSync(new URL("../../public/templates/ori-picking-upload-template.xlsx", import.meta.url));
-    expect(Buffer.compare(Buffer.from(fixture("template-empty.xlsx")), shipped)).toBe(0);
+    const sheet = await readXlsxSheet(shipped, TEMPLATE);
+    expect(sheet.name).toBe("ליקוט");
+    // Rows 2-61 are styled (yellow) but empty: only the legend's rows are left.
+    expect(sheet.rows).toEqual(
+      CODE_LEGEND.map((legend, index) => ({
+        rowNumber: index + 1,
+        cells: index === 0 ? ["קוד מוצר", "מוצר", "משטחים שנקטפו", null, legend] : [null, null, null, null, legend],
+      })),
+    );
   });
 
   it("reads a filled-in template: Hebrew text, numbers, numeric text, blank cells, the legend", async () => {
@@ -302,6 +328,45 @@ describe("readXlsxSheet — hidden rows", () => {
 
   it('marks rows hidden by hand, written "1" or "true", and not those written "0" or "false"', async () => {
     expect(hiddenRows(await readXlsxSheet(fixture("hidden-rows-manual.xlsx"), TEMPLATE))).toEqual([3, 4, 5, 6, 9]);
+  });
+});
+
+describe("readXlsxSheet — hidden columns", () => {
+  it("names the columns the file hides, and reads their cells like any other", async () => {
+    // openpyxl, the template's code column (A) hidden as Excel's Hide writes
+    // it: <col hidden="1" min="1" max="1">.
+    const sheet = await readXlsxSheet(fixture("code-column-hidden.xlsx"), TEMPLATE);
+    expect(sheet.hiddenColumns).toEqual([0]);
+    expect(sheet.rows[1]).toEqual({
+      rowNumber: 2,
+      cells: ["6f1c2b9e-3d4a-4e8b-9a71-0c5d2e8f4b13", "רד-דיימונד גדול", 5, null, CODE_LEGEND[1]],
+    });
+    // Yesterday's quantities, hidden beside today's.
+    expect((await readXlsxSheet(fixture("columns-hidden-repeat.xlsx"), TEMPLATE)).hiddenColumns).toEqual([1]);
+  });
+
+  it('tells hidden "1" or "true" from "0" or "false", and a range, as far as columns are read', async () => {
+    // A hidden="true" (LibreOffice's spelling); B "false" and C "0", both in
+    // view; D:E as one range; and G to the sheet's last column, as hiding
+    // "the rest" writes it — as far as the 100 columns read.
+    const sheet = await readXlsxSheet(fixture("hidden-columns.xlsx"), TEMPLATE);
+    expect(sheet.hiddenColumns).toEqual([0, 3, 4, ...Array.from({ length: 94 }, (_, index) => index + 6)]);
+    expect(sheet.rows[0]?.cells.slice(0, 3)).toEqual(["קוד מוצר", "מוצר", "משטחים שנקטפו"]);
+    const narrow = await readXlsxSheet(fixture("hidden-columns.xlsx"), { ...TEMPLATE, maxColumns: 4 });
+    expect(narrow.hiddenColumns).toEqual([0, 3]);
+  });
+
+  it("says nothing of columns in a sheet that hides none", async () => {
+    const shipped = readFileSync(new URL("../../public/templates/ori-picking-upload-template.xlsx", import.meta.url));
+    const sheets = [
+      await readXlsxSheet(shipped, TEMPLATE),
+      ...(await Promise.all(
+        ["template-empty.xlsx", "filled.xlsx", "excel-style.xlsx", "hidden-rows-filter.xlsx"].map((name) =>
+          readXlsxSheet(fixture(name), TEMPLATE),
+        ),
+      )),
+    ];
+    expect(sheets.map((sheet) => "hiddenColumns" in sheet)).toEqual([false, false, false, false, false]);
   });
 });
 

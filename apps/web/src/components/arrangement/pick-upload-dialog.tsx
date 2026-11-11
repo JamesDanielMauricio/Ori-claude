@@ -60,6 +60,15 @@ export interface PickUploadTarget {
 // tab its numbers came from: the file's only visible one besides "הוראות",
 // whatever it is called.
 //
+// Each row of the file names its product by its code — the variety's id,
+// which the products screen shows and copies in its "קוד מוצר" column — by
+// its name, or by both; with a code, the code decides, and only a name that
+// is exactly another line of the pick stops the upload. Any other name is
+// not checked against the code, which is why the preview always shows Ori's
+// own label for a line it changes: a row known only by its code still reads
+// as a product, and a row whose name is mistyped shows the product its code
+// will save into. A skipped row without a name shows its code.
+//
 // Confirming saves the way the pencil's "שמור" does on this screen: one
 // save_pick_lines call, then the pick is SENT if it is still a draft. The
 // lines are read again first, so each line sent carries its leftover and
@@ -460,8 +469,8 @@ function PlanPreview({ plan }: { plan: PickImportPlan }) {
   if (plan.rowCount === 0) {
     return (
       <p className="text-sm text-ink-muted">
-        אין בקובץ שורות מתחת לכותרות. ממלאים שורה לכל מוצר: שם המוצר בעמודה "מוצר", ומספר המשטחים
-        בעמודה "משטחים שנקטפו".
+        אין בקובץ שורות מתחת לכותרות. ממלאים שורה לכל מוצר: קוד המוצר בעמודה "קוד מוצר" או שם המוצר
+        בעמודה "מוצר", ומספר המשטחים בעמודה "משטחים שנקטפו".
       </p>
     );
   }

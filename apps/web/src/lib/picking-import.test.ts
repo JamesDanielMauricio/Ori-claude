@@ -6,10 +6,15 @@ import { describe, expect, it } from "vitest";
 import type { PickProductLineRow } from "@/lib/queries/grower";
 
 import {
+  CODE_NOT_IN_PICK,
   HIDDEN_ROW,
+  INVALID_CODE,
+  INVALID_CODE_WITHOUT_NAME,
   mostlyNotInPick,
+  NO_HEADER_MESSAGE,
   NOT_IN_PICK,
   normalizeLabel,
+  normalizeProductCode,
   PICK_UPLOAD_INSTRUCTIONS_SHEET,
   PickFileError,
   pickFileProblem,
@@ -26,6 +31,22 @@ import {
 } from "./picking-import";
 import { readXlsxSheet, XlsxError, type XlsxCellValue, type XlsxRow, type XlsxSheet } from "./xlsx-reader";
 
+// The variety behind each line of LINES below: its id, the code the products
+// screen shows for it and a file's "קוד מוצר" names it by. The same codes
+// fill the code-*.xlsx fixtures.
+const CODE = {
+  L1: "6f1c2b9e-3d4a-4e8b-9a71-0c5d2e8f4b13",
+  L2: "a3e9d0c4-7b21-4f6e-8d35-91b4c7e2a058",
+  L3: "1d8b4f72-e05c-4a93-b6d1-3f27a9c8e604",
+  L4: "c7a05e3b-92d4-41f8-a3e6-58d1b0f9c27a",
+  L5: "4b62e8d1-a37f-4c05-9e18-d2f6c0b7a395",
+} as const;
+// Two of another grower's varieties: in no line of LINES.
+const OTHER_GROWER = {
+  A: "e85f13a7-6c2b-4d90-81fa-7b3e9d4c0216",
+  B: "9c4d27b0-f318-4e6a-a5d2-60e1b8c3f947",
+} as const;
+
 const line = (
   id: string,
   name: string,
@@ -33,7 +54,9 @@ const line = (
   palletsPicked = 0,
   leftoverPallets = 0,
   comment: string | null = null,
-): PickLineForImport => ({ id, name, sizes, palletsPicked, leftoverPallets, comment });
+  // A line of LINES has its code above; any other line a variety of its own.
+  varietyId: string = (CODE as Record<string, string>)[id] ?? `variety-${id}`,
+): PickLineForImport => ({ id, varietyId, name, sizes, palletsPicked, leftoverPallets, comment });
 
 // One grower's pick for the day.
 const LINES = [
@@ -65,6 +88,35 @@ function fileRows(...data: Array<[XlsxCellValue, XlsxCellValue]>): PickFileRow[]
 function plan(...data: Array<[XlsxCellValue, XlsxCellValue]>) {
   return planPickImport(fileRows(...data), LINES, NOTHING_ARRANGED);
 }
+
+// The template's header since the code column: the code first (column A,
+// on the sheet's right), then the name and the quantity.
+const CODE_HEADER: XlsxCellValue[] = ["קוד מוצר", "מוצר", "משטחים שנקטפו"];
+
+// A sheet with that header on row 1: each row a code, a name and a quantity.
+function codeRows(...data: Array<[XlsxCellValue, XlsxCellValue, XlsxCellValue]>): PickFileRow[] {
+  const rows = readPickFileRows(sheetOf(CODE_HEADER, ...data));
+  if (!rows) throw new Error("expected the header to be found");
+  return rows;
+}
+
+function codePlan(...data: Array<[XlsxCellValue, XlsxCellValue, XlsxCellValue]>) {
+  return planPickImport(codeRows(...data), LINES, NOTHING_ARRANGED);
+}
+
+// That header on row 1, then rows as the reader gives them.
+function codeSheetWith(...rows: XlsxRow[]): XlsxSheet {
+  return { name: "ליקוט", rows: [{ rowNumber: 1, cells: CODE_HEADER }, ...rows] };
+}
+
+// A sheet as the reader gives it when the file hides those columns (A = 0).
+function hiding(sheet: XlsxSheet, ...hiddenColumns: number[]): XlsxSheet {
+  return { ...sheet, hiddenColumns };
+}
+
+// What a file whose code column is A, hidden, is refused with (without the isolates).
+const HIDDEN_CODE_COLUMN_A =
+  'העמודה "קוד מוצר" (עמודה A) מוסתרת בקובץ, ואי אפשר לבדוק מה כתוב בה — וכשיש בשורה קוד, הקוד קובע איזה מוצר זה. הציגו את העמודה ב-Excel ונסו שוב.';
 
 // Messages wrap the file's own values in direction isolates (so "-1" is not
 // shown as "1-"); compared here without them.
@@ -106,6 +158,8 @@ async function readFailure(name: string): Promise<XlsxError> {
 }
 
 describe("readPickFileRows", () => {
+  // The two-column template the screen offered before the code column, which
+  // files filled in from it still are (the one offered now: "product codes").
   it("finds the header on the template's first row and leaves the legend beside it alone", async () => {
     const empty = await readXlsxSheet(fixture("template-empty.xlsx"), UPLOAD);
     expect(readPickFileRows(empty)).toEqual([]);
@@ -393,6 +447,7 @@ describe("planPickImport", () => {
     expect(result.unchanged).toBe(0);
   });
 
+  // The two-column template, as it was downloaded before the code column.
   it("plans nothing for the template as downloaded, header and legend only", async () => {
     const sheet = await readXlsxSheet(fixture("template-empty.xlsx"), UPLOAD);
     expect(planPickImport(readPickFileRows(sheet) ?? [], LINES, NOTHING_ARRANGED)).toEqual({
@@ -523,12 +578,13 @@ describe("planChangedSince", () => {
 });
 
 describe("toImportLines", () => {
-  it("takes the pick editor's rows as plain numbers", () => {
+  it("takes the pick editor's rows as plain numbers, each with its variety's id", () => {
     const row: PickProductLineRow = {
       id: "A",
       pallets_picked: 8,
       leftover_pallets: 0.5,
       comment: null,
+      product_variety_id: CODE.L1,
       product_varieties: {
         name: "רד-דיימונד",
         sizes: "גדול",
@@ -537,7 +593,15 @@ describe("toImportLines", () => {
       },
     };
     expect(toImportLines([row])).toEqual([
-      { id: "A", name: "רד-דיימונד", sizes: "גדול", palletsPicked: 8, leftoverPallets: 0.5, comment: null },
+      {
+        id: "A",
+        varietyId: CODE.L1,
+        name: "רד-דיימונד",
+        sizes: "גדול",
+        palletsPicked: 8,
+        leftoverPallets: 0.5,
+        comment: null,
+      },
     ]);
   });
 });
@@ -935,5 +999,763 @@ describe("quantities shown as dates or times", () => {
       [11, 7],
       [12, 8],
     ]);
+  });
+});
+
+// The product code (workbook Task 38, follow-up): a file's "קוד מוצר" names a
+// product by its variety's id, which the products screen shows and copies.
+
+describe("normalizeProductCode", () => {
+  it("reads a code as the products screen copies it", () => {
+    expect(normalizeProductCode(CODE.L1)).toBe(CODE.L1);
+  });
+
+  it("reads it in capitals, in braces, without hyphens, with spaces and invisible marks around or inside it", () => {
+    const written = [
+      CODE.L1.toUpperCase(),
+      `{${CODE.L1}}`,
+      `{${CODE.L1.toUpperCase()}}`,
+      CODE.L1.replaceAll("-", ""),
+      CODE.L1.replaceAll("-", "").toUpperCase(),
+      `  ${CODE.L1}\t`,
+      `\u00A0${CODE.L1}\u00A0\n`,
+      `\u200F${CODE.L1}\u200E`,
+      `\u2068${CODE.L1}\u2069`,
+      `\uFEFF${CODE.L1}`,
+      `${CODE.L1.slice(0, 9)}\u200B${CODE.L1.slice(9)}`,
+      `${CODE.L1.slice(0, 4)}\u00AD${CODE.L1.slice(4)}`,
+      ` \u200F {${CODE.L1.toUpperCase()}} \u200E `,
+    ];
+    for (const text of written) expect([text, normalizeProductCode(text)]).toEqual([text, CODE.L1]);
+  });
+
+  it("is no code for anything else in the cell, a number or TRUE among them", () => {
+    const notCodes: XlsxCellValue[] = [
+      null,
+      "",
+      "   ",
+      "\u200F",
+      // A character short, or one too many.
+      CODE.L1.slice(0, -1),
+      `${CODE.L1}0`,
+      // Not hex.
+      CODE.L1.replace("6f1c", "6g1c"),
+      // Braces only around the hyphenated form; braces and parentheses not closed or not braces.
+      `{${CODE.L1.replaceAll("-", "")}}`,
+      `{${CODE.L1}`,
+      `(${CODE.L1})`,
+      `{ ${CODE.L1} }`,
+      // Spaces inside, dashes for hyphens, hyphens out of place.
+      CODE.L1.replace("-", " - "),
+      CODE.L1.replaceAll("-", "\u2013"),
+      CODE.L1.replaceAll("-", "\u05BE"),
+      "6f1c2b9e3-d4a-4e8b-9a71-0c5d2e8f4b13",
+      `urn:uuid:${CODE.L1}`,
+      `${CODE.L1} ${CODE.L2}`,
+      "רד-דיימונד גדול",
+      // A long text, cut.
+      `${"a".repeat(200)}…`,
+      12345,
+      612_920_000_000_000,
+      true,
+      false,
+    ];
+    for (const cell of notCodes) expect([cell, normalizeProductCode(cell)]).toEqual([cell, null]);
+  });
+});
+
+describe("readPickFileRows — the code column", () => {
+  it("reads the code beside the name and the quantity, as the file holds it, in whatever columns they are", () => {
+    const rows = readPickFileRows(
+      sheetOf(
+        ["ליקוט של יום שלישי"],
+        [null, "משטחים שנקטפו", " קוד  מוצר ", "מוצר"],
+        [null, 4, ` {${CODE.L3.toUpperCase()}} `, "מלפפון"],
+        [null, 7, CODE.L1, null],
+        [null, null, null, "פלפל אדום"],
+      ),
+    );
+    expect(rows).toEqual([
+      // As written — spaces, braces, capitals: what it means is the plan's to say.
+      { rowNumber: 3, product: "מלפפון", quantity: 4, code: ` {${CODE.L3.toUpperCase()}} ` },
+      { rowNumber: 4, product: "", quantity: 7, code: CODE.L1 },
+      // The column is there, its cell empty.
+      { rowNumber: 5, product: "פלפל אדום", quantity: null, code: null },
+    ]);
+  });
+
+  it("keeps a number or TRUE in the code's cell as it is, and cuts a long text there like any other", () => {
+    expect(codeRows([12345, "מלפפון", 1], [true, null, 2], ["א".repeat(100_000), null, 3])).toEqual([
+      { rowNumber: 2, product: "מלפפון", quantity: 1, code: 12345 },
+      { rowNumber: 3, product: "", quantity: 2, code: true },
+      { rowNumber: 4, product: "", quantity: 3, code: `${"א".repeat(200)}…` },
+    ]);
+  });
+
+  it("finds a header with the code and no name, and reads every row's product as empty", () => {
+    expect(readPickFileRows(sheetOf(["קוד מוצר", "משטחים שנקטפו"], [CODE.L3, 11], [null, 3]))).toEqual([
+      { rowNumber: 2, product: "", quantity: 11, code: CODE.L3 },
+      { rowNumber: 3, product: "", quantity: 3, code: null },
+    ]);
+  });
+
+  it("reads a file without the code column exactly as before: no row has a code", () => {
+    const rows = readPickFileRows(sheetOf(["מוצר", "משטחים שנקטפו"], ["מלפפון", 4], [null, 5]));
+    expect(rows).toEqual([
+      { rowNumber: 2, product: "מלפפון", quantity: 4 },
+      { rowNumber: 3, product: "", quantity: 5 },
+    ]);
+    expect(rows?.some((row) => "code" in row)).toBe(false);
+  });
+
+  it("needs the quantity's column, and the code's or the name's beside it", () => {
+    expect(readPickFileRows(sheetOf(["קוד מוצר", "מוצר"], [CODE.L3, "מלפפון"]))).toBeNull();
+    expect(readPickFileRows(sheetOf(["קוד מוצר"], [CODE.L3]))).toBeNull();
+    expect(readPickFileRows(sheetOf(["משטחים שנקטפו"], [4]))).toBeNull();
+    // Near the title is not the title.
+    expect(readPickFileRows(sheetOf(["קוד", "משטחים שנקטפו"], [CODE.L3, 4]))).toBeNull();
+    expect(readPickFileRows(sheetOf(["קוד המוצר", "משטחים שנקטפו"], [CODE.L3, 4]))).toBeNull();
+  });
+
+  it("says which columns it looks for when it finds none", () => {
+    expect(NO_HEADER_MESSAGE).toBe(
+      'לא נמצאו בקובץ העמודות של תבנית הליקוט: עמודה בשם "משטחים שנקטפו", ולצידה עמודה בשם "קוד מוצר" או "מוצר" (או שתיהן). יש להעלות את תבנית הליקוט של אורי ("הורדת תבנית") אחרי שמילאתם אותה. הכותרות נמצאות בשורה הראשונה של הגיליון "ליקוט".',
+    );
+  });
+
+  it("leaves out a row with no code, no name and no quantity, and keeps one with only a code", () => {
+    expect(codeRows([null, null, null], ["  ", " ", "  "], ["\u200F", null, null], [CODE.L1, null, null])).toEqual([
+      { rowNumber: 5, product: "", quantity: null, code: CODE.L1 },
+    ]);
+  });
+
+  it("refuses a header row that gives the code's title to more than one column, naming the columns", () => {
+    expect(
+      headerRefusal(sheetOf(["קוד מוצר", "מוצר", "משטחים שנקטפו", " קוד  מוצר "], [CODE.L1, "מלפפון", 1, CODE.L3])),
+    ).toBe(
+      'בשורת הכותרות יש יותר מעמודה אחת בשם "קוד מוצר" (עמודות A, D), ואי אפשר לדעת מאיזו מהן לקרוא. השאירו עמודה אחת בשם הזה ונסו שוב. אם אחת העמודות מוסתרת, הציגו אותה ב-Excel.',
+    );
+    // In a file without the name's column too.
+    expect(headerRefusal(sheetOf(["קוד מוצר", "משטחים שנקטפו", "קוד מוצר"], [CODE.L1, 1, CODE.L3]))).toContain(
+      'בשם "קוד מוצר" (עמודות A, C)',
+    );
+  });
+
+  // The review that found the codes deciding from a hidden column A: a name
+  // in view retyped, its row saved into the product of the code beside it,
+  // and a name the pick has skipped for a code the screen does not show.
+  it("refuses a code column the file hides once it holds anything, naming the column", () => {
+    // A code beside a name it does not agree with; a cell that is no code.
+    expect(headerRefusal(hiding(sheetOf(CODE_HEADER, [CODE.L5, "פלפל ירוק", 9]), 0))).toBe(HIDDEN_CODE_COLUMN_A);
+    expect(headerRefusal(hiding(sheetOf(CODE_HEADER, ["לא קוד", "מלפפון", 1]), 0))).toBe(HIDDEN_CODE_COLUMN_A);
+    // A code in a hidden row only: never imported, but it still says whose file this is.
+    expect(
+      headerRefusal(hiding(codeSheetWith({ rowNumber: 2, cells: [OTHER_GROWER.A, null, null], hidden: true }), 0)),
+    ).toBe(HIDDEN_CODE_COLUMN_A);
+    // Wherever the column is, by its own letter, and in a file without the name's column.
+    expect(
+      headerRefusal(hiding(sheetOf(["משטחים שנקטפו", "מוצר", "קוד מוצר"], [9, "פלפל ירוק", CODE.L5]), 2)),
+    ).toContain('העמודה "קוד מוצר" (עמודה C) מוסתרת בקובץ');
+    expect(headerRefusal(hiding(sheetOf(["קוד מוצר", "משטחים שנקטפו"], [CODE.L3, 4]), 0))).toBe(HIDDEN_CODE_COLUMN_A);
+  });
+
+  it("reads a hidden code column that holds nothing as if it were in view", () => {
+    // Blank, or nothing but spaces and a direction mark.
+    const sheet = sheetOf(CODE_HEADER, [null, "מלפפון", 4], ["  ‏", "פלפל אדום", 2]);
+    expect(readPickFileRows(hiding(sheet, 0))).toEqual([
+      { rowNumber: 2, product: "מלפפון", quantity: 4, code: null },
+      { rowNumber: 3, product: "פלפל אדום", quantity: 2, code: "  ‏" },
+    ]);
+    expect(readPickFileRows(hiding(sheetOf(CODE_HEADER), 0))).toEqual([]);
+  });
+
+  it("reads past every other hidden column as it always did, the name's and the quantity's among them", () => {
+    // Neither overrules a column in view, as a hidden code would the name.
+    const withCodes = sheetOf(CODE_HEADER, [CODE.L3, "מלפפון", 4], [CODE.L1, "פלפל ירוק", 2]);
+    expect(readPickFileRows(hiding(withCodes, 1, 2, 3, 4, 5))).toEqual(readPickFileRows(withCodes));
+    const twoColumn = sheetOf(["מוצר", "משטחים שנקטפו"], ["מלפפון", 4]);
+    expect(readPickFileRows(hiding(twoColumn, 0, 1))).toEqual(readPickFileRows(twoColumn));
+  });
+
+  it("refuses a code title over two columns, one of them hidden, as a title repeated", () => {
+    const sheet = sheetOf(["קוד מוצר", "מוצר", "משטחים שנקטפו", "קוד מוצר"], [CODE.L1, "מלפפון", 1, CODE.L3]);
+    expect(headerRefusal(hiding(sheet, 0))).toContain('בשם "קוד מוצר" (עמודות A, D)');
+  });
+
+  it("keeps a hidden row that has a code, with or without a name, and drops one with neither", () => {
+    expect(
+      readPickFileRows(
+        codeSheetWith(
+          { rowNumber: 2, cells: [CODE.L3, null, 4], hidden: true },
+          { rowNumber: 3, cells: [OTHER_GROWER.A, null, null], hidden: true },
+          { rowNumber: 4, cells: ["לא קוד", "מלפפון", null], hidden: true },
+          { rowNumber: 5, cells: [null, null, 6], hidden: true },
+          { rowNumber: 6, cells: ["\u200F", "  ", 7], hidden: true },
+        ),
+      ),
+    ).toEqual([
+      { rowNumber: 2, product: "", quantity: 4, code: CODE.L3, hidden: true },
+      { rowNumber: 3, product: "", quantity: null, code: OTHER_GROWER.A, hidden: true },
+      { rowNumber: 4, product: "מלפפון", quantity: null, code: "לא קוד", hidden: true },
+    ]);
+  });
+});
+
+describe("planPickImport — by code", () => {
+  const CONFLICT = (code: string, name: string) =>
+    `הקוד והשם בשורה מתאימים לשני מוצרים שונים בליקוט של המגדל: הקוד הוא של "${code}", והשם של "${name}". תקנו את השורה כך שהקוד והשם יהיו של אותו מוצר, או מחקו אחד מהם.`;
+
+  it("matches a row by its code: alone, beside its own name, or beside a name the pick does not have", () => {
+    const result = codePlan(
+      [CODE.L1, null, 7],
+      [CODE.L2, "עגבניה שרי", 0],
+      // The grower's own name for Cherry L.
+      [CODE.L4, "שרי צהוב", 4],
+    );
+    expect(result).toEqual({
+      rowCount: 3,
+      changes: [
+        // Ori's own label for each line, whatever the file calls it.
+        { rowNumber: 2, lineId: "L1", product: "רד-דיימונד גדול", from: 3, to: 7 },
+        { rowNumber: 3, lineId: "L2", product: "עגבניה שרי", from: 5, to: 0 },
+        { rowNumber: 4, lineId: "L4", product: "Cherry L", from: 0, to: 4 },
+      ],
+      unchanged: 0,
+      notImported: [],
+      errors: [],
+    });
+  });
+
+  it("matches a code however the cell holds it", () => {
+    const result = codePlan(
+      [CODE.L1.toUpperCase(), null, 1],
+      [`{${CODE.L2}}`, null, 2],
+      [CODE.L3.replaceAll("-", ""), null, 3],
+      [`  \u200F${CODE.L4}\u200E\u00A0`, null, 4],
+      [`{${CODE.L5.toUpperCase()}}`, null, 5],
+    );
+    expect(result.changes.map((change) => [change.rowNumber, change.lineId, change.to])).toEqual([
+      [2, "L1", 1],
+      [3, "L2", 2],
+      [4, "L3", 3],
+      [5, "L4", 4],
+      [6, "L5", 5],
+    ]);
+    expect(result.notImported).toEqual([]);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("lets the code decide between two lines that share a name", () => {
+    const plum1 = "11111111-1111-4111-8111-111111111111";
+    const plum2 = "22222222-2222-4222-8222-222222222222";
+    const lines = [line("P1", "שזיף", null, 1, 0, null, plum1), line("P2", "שזיף", null, 2, 0, null, plum2)];
+    const result = planPickImport(codeRows([plum2, "שזיף", 4]), lines, NOTHING_ARRANGED);
+    expect(result.changes).toEqual([{ rowNumber: 2, lineId: "P2", product: "שזיף", from: 2, to: 4 }]);
+    expect(result.errors).toEqual([]);
+    // Without its code, the same row is the shared name it always was.
+    expect(planPickImport(codeRows([null, "שזיף", 4]), lines, NOTHING_ARRANGED).errors[0]?.message).toMatch(
+      /^השם מתאים ליותר ממוצר אחד/,
+    );
+  });
+
+  it("refuses a row whose code and name are two different products of the pick, naming both", () => {
+    const result = codePlan(
+      [CODE.L1, "מלפפון", 5],
+      // However the name is typed.
+      [CODE.L3, "רד־דיימונד  גדול", 6],
+      [CODE.L2, "עגבניה שרי", 6],
+    );
+    expect(result.errors.map((error) => [error.rowNumber, error.product, plain(error.message)])).toEqual([
+      [2, "מלפפון", CONFLICT("רד-דיימונד גדול", "מלפפון")],
+      [3, "רד־דיימונד גדול", CONFLICT("מלפפון", "רד-דיימונד גדול")],
+    ]);
+    // Each label isolated, as an English name keeps its own direction.
+    expect(result.errors[0]?.message).toContain('"\u2068רד-דיימונד גדול\u2069"');
+    // Neither of the two lines is touched by a row that contradicts itself;
+    // and any error stops the whole upload, the good row with it.
+    expect(result.changes.map((change) => change.lineId)).toEqual(["L2"]);
+    expect(result.unchanged).toBe(0);
+  });
+
+  it("skips a code no line of the pick has, even beside a name the pick has", () => {
+    const result = codePlan([OTHER_GROWER.A, "מלפפון", 4], [OTHER_GROWER.B, null, 2], [CODE.L1, null, 7]);
+    expect(result.notImported).toEqual([
+      { rowNumber: 2, product: "מלפפון", quantity: "4", reason: CODE_NOT_IN_PICK, suggestions: [] },
+      // No name: shown by its code.
+      { rowNumber: 3, product: OTHER_GROWER.B, quantity: "2", reason: CODE_NOT_IN_PICK, suggestions: [] },
+    ]);
+    // מלפפון, the name in row 2, is not touched.
+    expect(result.changes).toEqual([{ rowNumber: 4, lineId: "L1", product: "רד-דיימונד גדול", from: 3, to: 7 }]);
+    expect(result.errors).toEqual([]);
+    expect(CODE_NOT_IN_PICK).toBe("קוד המוצר לא נמצא בליקוט של המגדל. כשיש בשורה קוד, הקוד קובע איזה מוצר זה");
+  });
+
+  it("skips a cell that is no code, never reading the row by its name instead", () => {
+    const result = codePlan(
+      [CODE.L3.slice(0, -1), "מלפפון", 9],
+      [12345, null, 6],
+      [true, "עגבניה שרי", 7],
+      // מלפפון by name: no duplicate of row 2, which was never read by its name.
+      [null, "מלפפון", 3],
+    );
+    expect(result.notImported).toEqual([
+      { rowNumber: 2, product: "מלפפון", quantity: "9", reason: INVALID_CODE, suggestions: [] },
+      // No name to read it by: told only to copy the code again (next test).
+      { rowNumber: 3, product: "12345", quantity: "6", reason: INVALID_CODE_WITHOUT_NAME, suggestions: [] },
+      { rowNumber: 4, product: "עגבניה שרי", quantity: "7", reason: INVALID_CODE, suggestions: [] },
+    ]);
+    expect(result.changes).toEqual([{ rowNumber: 5, lineId: "L3", product: "מלפפון", from: 2, to: 3 }]);
+    expect(result.errors).toEqual([]);
+    expect(INVALID_CODE).toBe(
+      'קוד המוצר לא תקין. העתיקו אותו שוב מעמודת "קוד מוצר" במסך המוצרים, או מחקו אותו כדי שהשורה תיקרא לפי שם המוצר',
+    );
+  });
+
+  // Deleting the code, in a row without a name, only leads to the next skip:
+  // "אין בשורה קוד מוצר או שם מוצר".
+  it("tells a row without a name only to copy its code again, never to delete it and be read by a name", () => {
+    const withName = codePlan(["לא קוד", "מלפפון", 1]);
+    const withoutName = codePlan(["לא קוד", null, 1], ["לא קוד", "  ‏ ", 2]);
+    const onlyCodes = planPickImport(
+      readPickFileRows(sheetOf(["קוד מוצר", "משטחים שנקטפו"], ["לא קוד", 3])) ?? [],
+      LINES,
+      NOTHING_ARRANGED,
+    );
+    expect(withName.notImported.map((skip) => skip.reason)).toEqual([INVALID_CODE]);
+    expect(withoutName.notImported.map((skip) => skip.reason)).toEqual([
+      INVALID_CODE_WITHOUT_NAME,
+      INVALID_CODE_WITHOUT_NAME,
+    ]);
+    expect(onlyCodes.notImported.map((skip) => skip.reason)).toEqual([INVALID_CODE_WITHOUT_NAME]);
+    expect(INVALID_CODE_WITHOUT_NAME).toBe('קוד המוצר לא תקין. העתיקו אותו שוב מעמודת "קוד מוצר" במסך המוצרים');
+    // Either way a row that named something, and never a sign of another
+    // grower: beside one row of another grower's, neither tips the warning.
+    expect(mostlyNotInPick(codePlan(["לא קוד", null, 1], [OTHER_GROWER.A, null, 2]))).toBe(false);
+    expect(mostlyNotInPick(codePlan(["לא קוד", null, 1], ["לא קוד", null, 2], [OTHER_GROWER.A, null, 3]))).toBe(false);
+  });
+
+  it("does not check the quantity of a row it skips for its code", () => {
+    const result = codePlan([OTHER_GROWER.A, null, "שבע"], ["לא קוד", null, -1]);
+    expect(result.errors).toEqual([]);
+    expect(result.notImported.map((skip) => [skip.rowNumber, skip.reason, skip.quantity])).toEqual([
+      [2, CODE_NOT_IN_PICK, "שבע"],
+      [3, INVALID_CODE_WITHOUT_NAME, "-1"],
+    ]);
+  });
+
+  it("matches a row without a code by its name, exactly as before", () => {
+    const result = codePlan(
+      [null, "מלפפון", 7],
+      ["   ", "פלפל אדום", 4],
+      ["\u200F", "Cherry L", 6],
+      [null, "לא קיים", 1],
+      [null, "רד-דיימונד", 2],
+    );
+    expect(result.changes.map((change) => [change.rowNumber, change.lineId, change.to])).toEqual([
+      [2, "L3", 7],
+      [3, "L5", 4],
+      [4, "L4", 6],
+    ]);
+    expect(result.notImported).toEqual([
+      { rowNumber: 5, product: "לא קיים", quantity: "1", reason: NOT_IN_PICK, suggestions: [] },
+      { rowNumber: 6, product: "רד-דיימונד", quantity: "2", reason: NOT_IN_PICK, suggestions: ["רד-דיימונד גדול"] },
+    ]);
+  });
+
+  it("says a row with only a quantity has neither a code nor a name, in a file with the code column", () => {
+    expect(codePlan([null, null, 5]).notImported).toEqual([
+      { rowNumber: 2, product: "", quantity: "5", reason: "אין בשורה קוד מוצר או שם מוצר", suggestions: [] },
+    ]);
+    // Without the column, the name is all it lacks — as before.
+    expect(plan([null, 5]).notImported[0]?.reason).toBe("חסר שם מוצר");
+  });
+
+  it("refuses two rows that come to one line, however each of them names it", () => {
+    const duplicate = "המוצר מופיע בקובץ יותר מפעם אחת (גם בשורה 2). השאירו שורה אחת לכל מוצר.";
+    const errors = (result: PickImportPlan) => result.errors.map((error) => [error.rowNumber, error.product, error.message]);
+    // Two codes, written two ways.
+    const byCodes = codePlan([CODE.L1, null, 7], [CODE.L1.toUpperCase(), null, 7]);
+    expect(errors(byCodes)).toEqual([[3, "רד-דיימונד גדול", duplicate]]);
+    expect(byCodes.changes).toEqual([]);
+    expect(byCodes.unchanged).toBe(0);
+    // A code, then a name.
+    expect(errors(codePlan([CODE.L3, null, 1], [null, "מלפפון", 1]))).toEqual([[3, "מלפפון", duplicate]]);
+    // A name, then a code: the repeat, which has no name, called by Ori's label.
+    expect(errors(codePlan([null, "עגבניה שרי", 1], [`{${CODE.L2}}`, null, 2]))).toEqual([[3, "עגבניה שרי", duplicate]]);
+    // A code beside its own name, then the name alone.
+    expect(errors(codePlan([CODE.L5, "פלפל אדום", 1], [null, "פלפל  אדום", 1]))).toEqual([[3, "פלפל אדום", duplicate]]);
+  });
+
+  it("calls a row known only by its code by Ori's label in what it refuses, and by the code where it skips it", () => {
+    // L1: 3 picked + 1 leftover, 5 arranged.
+    const result = planPickImport(
+      codeRows([CODE.L1, null, 2], [CODE.L2, null, 2.5], [OTHER_GROWER.A.toUpperCase(), null, 1]),
+      LINES,
+      new Map([["L1", 5]]),
+    );
+    expect(result.errors.map((error) => [error.rowNumber, error.product])).toEqual([
+      [2, "רד-דיימונד גדול"],
+      [3, "עגבניה שרי"],
+    ]);
+    // As written, capitals and all: what to look for in the file.
+    expect(result.notImported.map((skip) => [skip.rowNumber, skip.product])).toEqual([[4, OTHER_GROWER.A.toUpperCase()]]);
+  });
+
+  it("refuses a code two lines of the pick share, rather than choose one", () => {
+    // One line per variety is the database's rule, so no real pick is like this.
+    const lines = [line("P1", "שזיף", null, 1, 0, null, CODE.L1), line("P2", "שזיף אדום", null, 2, 0, null, CODE.L1)];
+    const result = planPickImport(codeRows([CODE.L1, null, 4]), lines, NOTHING_ARRANGED);
+    expect(result.changes).toEqual([]);
+    expect(result.errors.map((error) => [error.rowNumber, error.product])).toEqual([[2, CODE.L1]]);
+    expect(result.errors[0]?.message).toMatch(/^הקוד מתאים ליותר משורה אחת בליקוט של המגדל/);
+  });
+
+  it("matches a line whose variety id arrives in capitals", () => {
+    // Postgres writes a uuid in lower case; read here in whichever case it comes.
+    const lines = [line("L1", "רד-דיימונד", "גדול", 3, 1, null, CODE.L1.toUpperCase())];
+    expect(planPickImport(codeRows([CODE.L1, null, 7]), lines, NOTHING_ARRANGED).changes).toEqual([
+      { rowNumber: 2, lineId: "L1", product: "רד-דיימונד גדול", from: 3, to: 7 },
+    ]);
+  });
+
+  it("saves a change made by code to its pick line, with the line's own leftover and comment", () => {
+    const result = codePlan([CODE.L1, null, 7]);
+    expect(result.changes[0]?.lineId).toBe("L1");
+    expect(toSavePickLines(result, LINES)).toEqual([
+      { dailyPickProductId: "L1", palletsPicked: 7, leftoverPallets: 1, comment: "בדיקה" },
+    ]);
+  });
+});
+
+describe("hidden rows with a code", () => {
+  it("never imports one, lists it by its code when it has no name, and counts it by its code", () => {
+    const rows = readPickFileRows(
+      codeSheetWith(
+        { rowNumber: 2, cells: [CODE.L3, null, 9] },
+        // The same line as row 2: not a duplicate of it.
+        { rowNumber: 3, cells: [CODE.L3, null, 4], hidden: true },
+        // Another grower's code beside a name of this pick: counted as not in it.
+        { rowNumber: 4, cells: [OTHER_GROWER.A, "מלפפון", null], hidden: true },
+        // No code at all: no sign of whose file, whatever the name.
+        { rowNumber: 5, cells: ["לא קוד", "לא קיים", null], hidden: true },
+        // Its code and name disagree: hidden, it is not refused, and is counted by its code.
+        { rowNumber: 6, cells: [CODE.L1, "מלפפון", 3], hidden: true },
+        // A name and no code, as before.
+        { rowNumber: 7, cells: [null, "גם לא קיים", null], hidden: true },
+      ),
+    );
+    const result = planPickImport(rows ?? [], LINES, NOTHING_ARRANGED);
+    expect(result.changes).toEqual([{ rowNumber: 2, lineId: "L3", product: "מלפפון", from: 2, to: 9 }]);
+    expect(result.errors).toEqual([]);
+    expect(result.notImported).toEqual([
+      { rowNumber: 3, product: CODE.L3, quantity: "4", reason: HIDDEN_ROW, suggestions: [] },
+      { rowNumber: 6, product: "מלפפון", quantity: "3", reason: HIDDEN_ROW, suggestions: [] },
+    ]);
+    expect(result.rowCount).toBe(3);
+    expect(result.hiddenProducts).toEqual({ count: 5, notInPick: 2 });
+  });
+
+  // As with names: hiding a row does not change whose file it is.
+  it("warns exactly as it would if no row were hidden", () => {
+    const visible = (row: XlsxRow): XlsxRow => ({ rowNumber: row.rowNumber, cells: row.cells });
+    const warns = (rows: XlsxRow[]) =>
+      mostlyNotInPick(planPickImport(readPickFileRows(codeSheetWith(...rows)) ?? [], LINES, NOTHING_ARRANGED));
+    const files: XlsxRow[][] = [
+      [
+        { rowNumber: 2, cells: [CODE.L3, null, 11] },
+        { rowNumber: 3, cells: [OTHER_GROWER.A, null, null], hidden: true },
+        { rowNumber: 4, cells: [OTHER_GROWER.B, "מלפפון", null], hidden: true },
+      ],
+      [
+        { rowNumber: 2, cells: [OTHER_GROWER.A, null, 1] },
+        { rowNumber: 3, cells: [CODE.L3, null, null], hidden: true },
+        { rowNumber: 4, cells: ["לא קוד", "לא קיים", 4], hidden: true },
+      ],
+      [
+        { rowNumber: 2, cells: [CODE.L1, "רד-דיימונד גדול", 1] },
+        { rowNumber: 3, cells: [CODE.L1, "מלפפון", 2], hidden: true },
+        { rowNumber: 4, cells: [OTHER_GROWER.A, null, 3], hidden: true },
+      ],
+      [
+        { rowNumber: 2, cells: [OTHER_GROWER.A, null, 1] },
+        { rowNumber: 3, cells: [OTHER_GROWER.B, null, null], hidden: true },
+        { rowNumber: 4, cells: [CODE.L2, null, null], hidden: true },
+      ],
+    ];
+    expect(files.map(warns)).toEqual([true, false, false, true]);
+    expect(files.map(warns)).toEqual(files.map((rows) => warns(rows.map(visible))));
+  });
+});
+
+describe("mostlyNotInPick — codes", () => {
+  it("counts a code no line has like a name no line has, whatever name is beside it", () => {
+    expect(mostlyNotInPick(codePlan([OTHER_GROWER.A, "מלפפון", 1], [OTHER_GROWER.B, null, 2], [CODE.L1, null, 3]))).toBe(
+      true,
+    );
+    // Half is not most.
+    expect(mostlyNotInPick(codePlan([OTHER_GROWER.A, "מלפפון", 1], [CODE.L1, null, 3]))).toBe(false);
+  });
+
+  it("counts a cell that is no code among the rows that name something, never as a sign of another grower", () => {
+    // One code another grower's, one mistyped: half.
+    expect(mostlyNotInPick(codePlan([OTHER_GROWER.A, null, 1], ["לא קוד", null, 2]))).toBe(false);
+    // Mistyped codes beside names the pick lacks are no sign either way.
+    expect(
+      mostlyNotInPick(codePlan(["לא קוד", "לא קיים", 1], ["גם לא", "גם לא קיים", 2], [CODE.L1, null, 3])),
+    ).toBe(false);
+  });
+
+  it("counts a row whose code and name disagree by its code, which is this pick's", () => {
+    expect(mostlyNotInPick(codePlan([CODE.L1, "מלפפון", 1], [OTHER_GROWER.A, null, 2]))).toBe(false);
+  });
+
+  it("does not count a row with neither a code nor a name", () => {
+    expect(mostlyNotInPick(codePlan([OTHER_GROWER.A, null, 1], [null, null, 2]))).toBe(true);
+  });
+});
+
+describe("planChangedSince — codes", () => {
+  const rows = codeRows([CODE.L1, null, 7], [CODE.L3, "מלפפון", 2], [OTHER_GROWER.A, null, 1]);
+  const previewed = planPickImport(rows, LINES, NOTHING_ARRANGED);
+  const replan = (lines: PickLineForImport[]) => planPickImport(rows, lines, NOTHING_ARRANGED);
+
+  it("is false when nothing changed, or only a number the preview was about to set anyway", () => {
+    expect(previewed.changes.map((change) => [change.lineId, change.to])).toEqual([["L1", 7]]);
+    expect(planChangedSince(previewed, replan(LINES))).toBe(false);
+    const alreadySet = LINES.map((pickLine) => (pickLine.id === "L1" ? { ...pickLine, palletsPicked: 7 } : pickLine));
+    expect(planChangedSince(previewed, replan(alreadySet))).toBe(false);
+  });
+
+  it("is true when the line a code found has left the pick", () => {
+    expect(planChangedSince(previewed, replan(LINES.filter((pickLine) => pickLine.id !== "L1")))).toBe(true);
+  });
+
+  it("is true when a code the pick did not have is one of its lines now", () => {
+    const joined = [...LINES, line("L9", "חציל", null, 0, 0, null, OTHER_GROWER.A)];
+    expect(planChangedSince(previewed, replan(joined))).toBe(true);
+  });
+
+  it("is true when a line added meanwhile is the one a row's name says, against its code", () => {
+    // Row 2's name meant nothing in the pick when the preview was made.
+    const named = codeRows([CODE.L1, "חציל", 7]);
+    const before = planPickImport(named, LINES, NOTHING_ARRANGED);
+    expect(before.errors).toEqual([]);
+    const after = planPickImport(named, [...LINES, line("L9", "חציל", null)], NOTHING_ARRANGED);
+    expect(after.errors.map((error) => error.rowNumber)).toEqual([2]);
+    expect(planChangedSince(before, after)).toBe(true);
+  });
+
+  it("compares a change by the pick line it saves to, so the same variety on another line is news", () => {
+    // L1 removed from the pick, and a line for its variety made again under a new id.
+    const remade = LINES.map((pickLine) => (pickLine.id === "L1" ? { ...pickLine, id: "L1-again" } : pickLine));
+    const current = replan(remade);
+    expect(current.changes.map((change) => [change.lineId, change.to])).toEqual([["L1-again", 7]]);
+    expect(planChangedSince(previewed, current)).toBe(true);
+  });
+});
+
+describe("product codes, end to end", () => {
+  const SHIPPED = new URL("../../public/templates/ori-picking-upload-template.xlsx", import.meta.url);
+
+  it("reads the template the screen offers for download: its header found, no rows", async () => {
+    const sheet = await readXlsxSheet(readFileSync(SHIPPED), UPLOAD);
+    expect(sheet.name).toBe("ליקוט");
+    expect(sheet.rows[0]?.cells.slice(0, 3)).toEqual(CODE_HEADER);
+    expect(readPickFileRows(sheet)).toEqual([]);
+    expect(planPickImport(readPickFileRows(sheet) ?? [], LINES, NOTHING_ARRANGED)).toEqual({
+      rowCount: 0,
+      changes: [],
+      unchanged: 0,
+      notImported: [],
+      errors: [],
+    });
+  });
+
+  it("reads the template filled in with codes and names", async () => {
+    const { sheet, plan: result } = await planFile("code-template-filled.xlsx");
+    expect(readPickFileRows(sheet)).toEqual([
+      { rowNumber: 2, product: "רד-דיימונד גדול", quantity: 12, code: CODE.L1 },
+      { rowNumber: 3, product: "", quantity: 0, code: CODE.L2 },
+      { rowNumber: 4, product: "מלפפון", quantity: null, code: CODE.L3 },
+      { rowNumber: 5, product: "פלפל אדום", quantity: "7", code: null },
+      { rowNumber: 6, product: "שרי צהוב", quantity: 4, code: CODE.L4 },
+    ]);
+    expect(result).toEqual({
+      rowCount: 5,
+      changes: [
+        { rowNumber: 2, lineId: "L1", product: "רד-דיימונד גדול", from: 3, to: 12 },
+        { rowNumber: 3, lineId: "L2", product: "עגבניה שרי", from: 5, to: 0 },
+        { rowNumber: 5, lineId: "L5", product: "פלפל אדום", from: 1, to: 7 },
+        { rowNumber: 6, lineId: "L4", product: "Cherry L", from: 0, to: 4 },
+      ],
+      // מלפפון, its quantity left blank.
+      unchanged: 1,
+      notImported: [],
+      errors: [],
+    });
+  });
+
+  it("reads the codes however they were written, and skips the cells that hold none", async () => {
+    const { sheet, plan: result } = await planFile("code-forms.xlsx");
+    // As the file holds them: capitals, braces, marks and all.
+    expect(sheet.rows.slice(1, 9).map((row) => row.cells[0])).toEqual([
+      CODE.L1.toUpperCase(),
+      `{${CODE.L2}}`,
+      CODE.L3.replaceAll("-", ""),
+      `  \uFEFF\u200F${CODE.L4.slice(0, 19)}\u200B${CODE.L4.slice(19)}\u200E\u00A0 `,
+      `{${CODE.L5.toUpperCase()}}`,
+      CODE.L3.slice(0, -1),
+      12345,
+      true,
+    ]);
+    expect(result.changes.map((change) => [change.rowNumber, change.lineId, change.to])).toEqual([
+      [2, "L1", 1],
+      [3, "L2", 2],
+      [4, "L3", 3],
+      [5, "L4", 4],
+      [6, "L5", 5],
+    ]);
+    // Row 7 names מלפפון too, by a code a character short: skipped, not a second מלפפון.
+    expect(result.notImported).toEqual([
+      { rowNumber: 7, product: "מלפפון", quantity: "9", reason: INVALID_CODE, suggestions: [] },
+      { rowNumber: 8, product: "12345", quantity: "6", reason: INVALID_CODE_WITHOUT_NAME, suggestions: [] },
+      { rowNumber: 9, product: "עגבניה שרי", quantity: "7", reason: INVALID_CODE, suggestions: [] },
+    ]);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("refuses a row whose code and name are two products, which stops the whole file", async () => {
+    const { plan: result } = await planFile("code-name-conflict.xlsx");
+    expect(result.errors.map((error) => [error.rowNumber, error.product, plain(error.message)])).toEqual([
+      [
+        2,
+        "מלפפון",
+        'הקוד והשם בשורה מתאימים לשני מוצרים שונים בליקוט של המגדל: הקוד הוא של "רד-דיימונד גדול", והשם של "מלפפון". תקנו את השורה כך שהקוד והשם יהיו של אותו מוצר, או מחקו אחד מהם.',
+      ],
+    ]);
+    // Planned, and not saved while the error stands.
+    expect(result.changes.map((change) => [change.rowNumber, change.lineId, change.to])).toEqual([
+      [3, "L2", 6],
+      [4, "L5", 2],
+    ]);
+  });
+
+  it("skips another grower's codes, even beside a name this pick has, and warns of whose file it is", async () => {
+    const { plan: result } = await planFile("code-other-grower.xlsx");
+    expect(result.notImported).toEqual([
+      { rowNumber: 2, product: "מלפפון", quantity: "4", reason: CODE_NOT_IN_PICK, suggestions: [] },
+      { rowNumber: 3, product: OTHER_GROWER.B, quantity: "2", reason: CODE_NOT_IN_PICK, suggestions: [] },
+    ]);
+    expect(result.changes).toEqual([{ rowNumber: 4, lineId: "L1", product: "רד-דיימונד גדול", from: 3, to: 7 }]);
+    expect(result.errors).toEqual([]);
+    expect(mostlyNotInPick(result)).toBe(true);
+  });
+
+  it("reads a file with the code's column and no name's", async () => {
+    const { sheet, plan: result } = await planFile("code-only.xlsx");
+    expect(sheet.rows[0]?.cells.slice(0, 3)).toEqual(["קוד מוצר", "משטחים שנקטפו", null]);
+    expect(readPickFileRows(sheet)?.map((row) => [row.rowNumber, row.product, row.code, row.quantity])).toEqual([
+      [2, "", CODE.L3, 11],
+      [3, "", CODE.L1, 21],
+      [4, "", OTHER_GROWER.A, 5],
+      [5, "", null, 3],
+      [6, "", "לא קוד", 1],
+    ]);
+    expect(result.changes.map((change) => [change.rowNumber, change.lineId, change.product, change.to])).toEqual([
+      [2, "L3", "מלפפון", 11],
+      [3, "L1", "רד-דיימונד גדול", 21],
+    ]);
+    expect(result.notImported).toEqual([
+      { rowNumber: 4, product: OTHER_GROWER.A, quantity: "5", reason: CODE_NOT_IN_PICK, suggestions: [] },
+      { rowNumber: 5, product: "", quantity: "3", reason: "אין בשורה קוד מוצר או שם מוצר", suggestions: [] },
+      { rowNumber: 6, product: "לא קוד", quantity: "1", reason: INVALID_CODE_WITHOUT_NAME, suggestions: [] },
+    ]);
+    expect(result.errors).toEqual([]);
+    expect(mostlyNotInPick(result)).toBe(false);
+  });
+
+  it("refuses the template with its code column hidden, rather than let codes nobody sees decide", async () => {
+    // openpyxl, column A hidden as Excel's Hide writes it. Read, row 3's code
+    // (פלפל אדום's) would save its 9 into פלפל אדום under the name פלפל ירוק,
+    // and row 4's (another grower's) would skip the מלפפון in view.
+    const sheet = await readXlsxSheet(fixture("code-column-hidden.xlsx"), UPLOAD);
+    expect(sheet.hiddenColumns).toEqual([0]);
+    expect(sheet.rows.slice(1, 4).map((row) => row.cells.slice(0, 3))).toEqual([
+      [CODE.L1, "רד-דיימונד גדול", 5],
+      [CODE.L5, "פלפל ירוק", 9],
+      [OTHER_GROWER.A, "מלפפון", 6],
+    ]);
+    expect(headerRefusal(sheet)).toBe(HIDDEN_CODE_COLUMN_A);
+    // The same rows, column A hidden as LibreOffice writes it ("true"), among
+    // columns hidden and shown every other way.
+    expect(headerRefusal(await readXlsxSheet(fixture("hidden-columns.xlsx"), UPLOAD))).toBe(HIDDEN_CODE_COLUMN_A);
+  });
+
+  it("reads the template with its empty code column hidden by name, as if it were in view", async () => {
+    // Someone who uses no codes, tidying the template.
+    const { sheet, plan: result } = await planFile("code-column-hidden-empty.xlsx");
+    expect(sheet.hiddenColumns).toEqual([0]);
+    expect(result.changes).toEqual([
+      { rowNumber: 2, lineId: "L1", product: "רד-דיימונד גדול", from: 3, to: 5 },
+      { rowNumber: 3, lineId: "L3", product: "מלפפון", from: 2, to: 6 },
+    ]);
+    expect(result.notImported).toEqual([]);
+    expect(result.errors).toEqual([]);
+  });
+
+  // The template states the plan's rules in words (picking-import.ts' header),
+  // and what it says of a name beside a code is a promise: one that said more
+  // than the plan checks had staff trusting the name to catch a wrong code.
+  it("says in its instructions exactly what the plan checks of a row with a code", async () => {
+    const instructions = await readXlsxSheet(readFileSync(SHIPPED), { ignoreSheets: ["ליקוט"] });
+    expect(instructions.name).toBe(PICK_UPLOAD_INSTRUCTIONS_SHEET);
+    const rules = instructions.rows.flatMap((row) => {
+      const [text] = row.cells;
+      return typeof text === "string" && text.startsWith("• ") ? [text] : [];
+    });
+    // The rules that speak of a code, as a word ("קודמים" is not one).
+    expect(rules.filter((rule) => /(?:^|\s)קוד(?:\s|$)/.test(rule))).toEqual([
+      "• כשיש בשורה קוד מוצר, הקוד קובע איזה מוצר זה. ההעלאה נעצרת רק אם השם שלידו הוא בדיוק שם של מוצר אחר בליקוט של המגדל — לכן בדקו בתצוגה המקדימה איזה מוצר ייקלט.",
+      "• קוד לא תקין, או קוד של מוצר שאינו בליקוט של המגדל, יוצג בתצוגה המקדימה ולא ייקלט — גם אם השם שלידו נכון.",
+    ]);
+    // As the plan applies them: the name of another line of the pick stops
+    // its row. Another grower's product, or this one typed another way (a
+    // space for the hyphen), is no line of the pick, and the code decides —
+    // which the preview shows by Ori's own label. A code not in the pick is
+    // skipped beside a name that is.
+    const result = codePlan(
+      [CODE.L1, "מלפפון", 4],
+      [CODE.L2, "חציל בלאדי", 6],
+      [CODE.L5, "רד דיימונד גדול", 3],
+      [OTHER_GROWER.A, "Cherry L", 2],
+    );
+    expect(result.errors.map((error) => error.rowNumber)).toEqual([2]);
+    expect(result.changes.map((change) => [change.rowNumber, change.product, change.to])).toEqual([
+      [3, "עגבניה שרי", 6],
+      [4, "פלפל אדום", 3],
+    ]);
+    expect(result.notImported.map((skip) => [skip.rowNumber, skip.reason])).toEqual([[5, CODE_NOT_IN_PICK]]);
+  });
+
+  it("reads every two-column file exactly as before: no row carries a code", async () => {
+    const twoColumn = [
+      "template-empty.xlsx",
+      "filled.xlsx",
+      "hidden-rows-filter.xlsx",
+      "dates-builtin.xlsx",
+      "tabs-renamed-moved.xlsx",
+    ];
+    for (const name of twoColumn) {
+      const rows = readPickFileRows(await readXlsxSheet(fixture(name), UPLOAD));
+      expect([name, rows !== null, rows?.filter((row) => "code" in row)]).toEqual([name, true, []]);
+    }
+    // And a row without a name lacks only its name, as it did.
+    expect((await planFile("filled.xlsx")).plan.notImported.at(-1)).toEqual({
+      rowNumber: 11,
+      product: "",
+      quantity: "5",
+      reason: "חסר שם מוצר",
+      suggestions: [],
+    });
   });
 });

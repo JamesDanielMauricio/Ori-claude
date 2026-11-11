@@ -13,10 +13,12 @@ import type { ProductFamily, ProductVariety } from "@/lib/queries/reference-data
 import {
   CREATED_AT_FORMAT,
   NAME_GUTTER,
+  NEW_ROW_ID,
   PACK_TYPE_LABEL,
   orDash,
   type FormState,
 } from "./catalog-form";
+import { ProductCodeCell } from "./product-code-cell";
 import type { useVarietyPhoto } from "./use-variety-photo";
 import { VarietyPhotoButton } from "./variety-photo-button";
 
@@ -350,6 +352,18 @@ export function buildVarietyColumns({
       label: "נוצר",
       render: (row) =>
         orDash(row.created_at ? CREATED_AT_FORMAT.format(new Date(row.created_at)) : null),
+    },
+    // קוד מוצר: the variety's id, which is its product code — what a file's
+    // "קוד מוצר" column names a product by in the "בשם מגדל" picking upload
+    // (lib/picking-import.ts). Not a field of its own, by the product owner's
+    // decision: the id is unique already and never changes. Last, as it is
+    // a reference to copy rather than a value to read across the row, and
+    // read-only — no renderEdit, and nothing of it in the form or the save.
+    // A draft not yet saved has no id yet, so it shows nothing.
+    {
+      key: "code",
+      label: "קוד מוצר",
+      render: (row) => (row.id === NEW_ROW_ID ? null : <ProductCodeCell code={row.id} />),
     },
   ];
 }

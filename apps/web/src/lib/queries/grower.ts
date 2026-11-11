@@ -40,6 +40,11 @@ export interface PickProductLineRow {
   pallets_picked: number;
   leftover_pallets: number;
   comment: string | null;
+  // The line's variety (daily_pick_products.product_variety_id): the code
+  // the products screen shows for it, which the "בשם מגדל" picking upload
+  // matches a file's "קוד מוצר" against (lib/picking-import.ts). A pick holds
+  // at most one line per variety (migration 0009's unique constraint).
+  product_variety_id: string;
   product_varieties: {
     name: string;
     sizes: string | null;
@@ -80,6 +85,7 @@ export async function fetchPickLines(dailyPickId: string): Promise<PickProductLi
     pallets_picked: line.pallets_picked,
     leftover_pallets: line.leftover_pallets,
     comment: line.comment,
+    product_variety_id: line.product_variety_id,
     product_varieties: {
       name: line.variety_name,
       sizes: line.variety_sizes,

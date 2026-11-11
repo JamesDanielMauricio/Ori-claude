@@ -3,14 +3,15 @@
 //
 // Hand-written rather than a spreadsheet package, on purpose. The upload
 // needs little from a file: the text and numbers in one sheet's cells, which
-// of its rows are hidden, and which of its numbers are shown as dates. The
-// libraries that do that carry a whole spreadsheet engine (formulas, styles,
-// writing, a dozen file formats) into the bundle, and they are exactly the
-// kind of parser that has shipped prototype-pollution and zip-bomb bugs. What
-// an .xlsx actually is fits in this file: a ZIP archive of XML parts, where
-// xl/workbook.xml names the sheets, its relationships file says which part
-// holds each one, xl/sharedStrings.xml holds the text the sheets point to by
-// number, and xl/styles.xml the number formats their cells point to.
+// of its rows and columns are hidden, and which of its numbers are shown as
+// dates. The libraries that do that carry a whole spreadsheet engine
+// (formulas, styles, writing, a dozen file formats) into the bundle, and
+// they are exactly the kind of parser that has shipped prototype-pollution
+// and zip-bomb bugs. What an .xlsx actually is fits in this file: a ZIP
+// archive of XML parts, where xl/workbook.xml names the sheets, its
+// relationships file says which part holds each one, xl/sharedStrings.xml
+// holds the text the sheets point to by number, and xl/styles.xml the number
+// formats their cells point to.
 //
 // Pure: no DOM. It runs the same in the browser and under vitest's node
 // environment, which has no DOMParser — hence the small XML tokenizer below
@@ -67,6 +68,14 @@ export interface XlsxSheet {
   name: string;
   /** Only the rows with at least one non-empty cell, in the file's order. */
   rows: XlsxRow[];
+  /**
+   * Present when the file hides some of the sheet's columns (`<col
+   * hidden="1">`): hidden by hand, or inside a collapsed group. Then those
+   * columns (A = 0), in order — only the ones cells are read from
+   * (`ReadXlsxOptions.maxColumns`). Their cells are read all the same, as a
+   * hidden row's are; what to do with them is the caller's business.
+   */
+  hiddenColumns?: number[];
 }
 
 export interface ReadXlsxOptions {
@@ -960,8 +969,14 @@ function readSheetRows(
   sharedStrings: readonly string[],
   dateStyles: ReadonlySet<number>,
   limits: Limits,
-): XlsxRow[] {
+): { rows: XlsxRow[]; hiddenColumns: number[] } {
   const rows: XlsxRow[] = [];
+  // The columns the file hides, flagged by column (A = 0) — only those cells
+  // are read from. A <col> names a range of columns (min..max, counted from
+  // 1), and one can name all 16,384 a sheet has, as hiding "the rest" does:
+  // each is flagged only up to the last column read, so no range costs more.
+  const hidden = new Uint8Array(limits.maxColumns);
+  let inCols = false;
   let inSheetData = false;
   let rowNumber = 0;
   let rowCells: Map<number, XlsxCellValue> | null = null;
@@ -984,6 +999,19 @@ function readSheetRows(
     open(name, attributes) {
       if (name === "sheetData") {
         inSheetData = true;
+        return;
+      }
+      if (name === "cols") {
+        inCols = true;
+        return;
+      }
+      if (name === "col" && inCols) {
+        // Hidden "1", or "true" as LibreOffice writes it; a range that is
+        // no range (a bound missing, or max before min) hides nothing.
+        const min = indexValue(attributes.get("min") ?? "");
+        const max = indexValue(attributes.get("max") ?? "");
+        if (!isTrue(attributes.get("hidden")) || min === null || max === null || min < 1) return;
+        for (let column = min - 1; column < Math.min(max, limits.maxColumns); column++) hidden[column] = 1;
         return;
       }
       if (!inSheetData) return;
@@ -1026,6 +1054,8 @@ function readSheetRows(
     close(name) {
       if (name === "sheetData") {
         inSheetData = false;
+      } else if (name === "cols") {
+        inCols = false;
       } else if (name === "v" || name === "t") {
         capture = null;
       } else if (name === "rPh") {
@@ -1063,7 +1093,7 @@ function readSheetRows(
       else if (capture === "inline" && inlineText !== null) inlineText += text;
     },
   });
-  return rows;
+  return { rows, hiddenColumns: [...hidden.keys()].filter((column) => hidden[column] === 1) };
 }
 
 function sameSheetName(a: string, b: string): boolean {
@@ -1179,5 +1209,8 @@ export async function readXlsxSheet(
 
   const sheetXml = await archive.readText(sheet.path);
   if (sheetXml === null) throw corrupt(`the sheet "${sheet.name}" is missing`);
-  return { name: sheet.name, rows: readSheetRows(sheetXml, sharedStrings, dateStyles, limits) };
+  const { rows, hiddenColumns } = readSheetRows(sheetXml, sharedStrings, dateStyles, limits);
+  const read: XlsxSheet = { name: sheet.name, rows };
+  if (hiddenColumns.length > 0) read.hiddenColumns = hiddenColumns;
+  return read;
 }

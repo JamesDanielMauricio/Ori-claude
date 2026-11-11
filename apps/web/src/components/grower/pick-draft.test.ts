@@ -18,6 +18,7 @@ const row = (
   pallets_picked: picked,
   leftover_pallets: leftover,
   comment,
+  product_variety_id: `variety-${id}`,
   product_varieties: {
     name: id,
     sizes: null,
