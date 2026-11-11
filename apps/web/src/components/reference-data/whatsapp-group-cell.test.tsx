@@ -7,10 +7,8 @@ import { CellPopover } from "@/components/reference-data/cell-popover";
 import { whatsAppGroupsQueries, type WhatsAppGroupList } from "@/lib/queries/whatsapp-groups";
 
 import {
-  activeOptionIndex,
   filterWhatsAppGroups,
   groupDisplayNames,
-  stepOptionIndex,
   WHATSAPP_GROUPS_ERROR_TEXT,
   WhatsAppGroupEditCell,
   whatsAppGroupOptions,
@@ -40,7 +38,7 @@ const panel = (value: string, state: WhatsAppGroupPanelState) =>
 function optionsIn(html: string) {
   return [
     ...html.matchAll(
-      /<div id="[^"]*" role="option" aria-selected="(true|false)"[^>]*>(.*?)<\/div>/g,
+      /<button type="button" role="option" aria-selected="(true|false)"[^>]*>(.*?)<\/button>/g,
     ),
   ].map(([, selected, inner]) => ({
     selected: selected === "true",
@@ -94,36 +92,13 @@ describe("the picker's rows", () => {
     }
     expect(whatsAppGroupOptions("", { status: "loading" }, "")).toEqual([{ kind: "none", id: "" }]);
   });
-
-  it("puts Enter on the selected row, on the first match while searching, or on the row pointed at", () => {
-    const all = whatsAppGroupOptions(APPLES.id, ready(), "");
-    expect(activeOptionIndex(all, null, "", APPLES.id)).toBe(2);
-    expect(activeOptionIndex(all, null, "", "")).toBe(0);
-    expect(activeOptionIndex(all, BANANAS.id, "", APPLES.id)).toBe(3);
-    const searched = whatsAppGroupOptions(APPLES.id, ready(), "בננות");
-    expect(activeOptionIndex(searched, null, "בננות", APPLES.id)).toBe(1);
-    // The row pointed at was searched away: back to the first match.
-    expect(activeOptionIndex(searched, AVOCADO.id, "בננות", APPLES.id)).toBe(1);
-    expect(activeOptionIndex(whatsAppGroupOptions("", ready(), "zzz"), null, "zzz", "")).toBe(-1);
-  });
-
-  it("moves round the list with the arrow keys", () => {
-    expect(stepOptionIndex(-1, 1, 4)).toBe(0);
-    expect(stepOptionIndex(-1, -1, 4)).toBe(3);
-    expect(stepOptionIndex(1, 1, 4)).toBe(2);
-    expect(stepOptionIndex(3, 1, 4)).toBe(0);
-    expect(stepOptionIndex(0, -1, 4)).toBe(3);
-    expect(stepOptionIndex(-1, 1, 0)).toBe(-1);
-  });
 });
 
 describe("the open picker", () => {
   it("lists the groups as one single-choice list behind a search box: the name, and the id small and left-to-right", () => {
     const html = panel(AVOCADO.id, ready());
-    expect(html).toMatch(
-      /<input type="search" role="combobox" aria-expanded="true" aria-controls="([^"]+)" aria-autocomplete="list" aria-activedescendant="\1-1" aria-label="חיפוש קבוצת WhatsApp" placeholder="חיפוש קבוצה"/,
-    );
-    expect(html).toMatch(/<div id="[^"]+" role="listbox" aria-label="קבוצות WhatsApp"/);
+    expect(html).toMatch(/<input type="search" aria-label="חיפוש קבוצת WhatsApp" placeholder="חיפוש קבוצה"/);
+    expect(html).toMatch(/<div role="listbox" aria-label="קבוצות WhatsApp"/);
     expect(optionsIn(html)).toEqual([
       { selected: false, text: "ללא קבוצה" },
       { selected: true, text: `${AVOCADO.name} ${AVOCADO.id}` },
@@ -230,7 +205,7 @@ describe("the closed cell", () => {
     expect(
       withList(undefined, <WhatsAppGroupEditCell value={APPLES.id} onChange={() => undefined} />),
     ).toContain(`<span class="truncate"><bdi dir="ltr">${APPLES.id}</bdi></span>`);
-    expect(markup(whatsAppGroupSummary("120363999999999999", LIVE))).toBe(
+    expect(markup(whatsAppGroupSummary("120363999999999999", NAMES))).toBe(
       '<bdi dir="ltr">120363999999999999</bdi>',
     );
   });
@@ -282,8 +257,15 @@ describe("two groups with one name", () => {
     expect(names.get(AVOCADO.id)).toBe(AVOCADO.name);
     expect(groupDisplayNames(LIVE.groups)).toEqual(NAMES);
 
-    expect(markup(whatsAppGroupSummary(APPLES.id, SHARED))).toContain(APPLES.id);
-    expect(markup(whatsAppGroupSummary(AVOCADO.id, SHARED))).toBe(AVOCADO.name);
+    expect(markup(whatsAppGroupSummary(APPLES.id, names))).toContain(APPLES.id);
+    expect(markup(whatsAppGroupSummary(AVOCADO.id, names))).toBe(AVOCADO.name);
     expect(markup(<WhatsAppGroupSummary id={LOOK_ALIKE.id} names={names} />)).toContain(LOOK_ALIKE.id);
+  });
+
+  it("see through invisible characters and repeated spaces", () => {
+    const hidden = { id: "120363000000000010", name: "Apples\u200B —  Orders" };
+    const names = groupDisplayNames([APPLES, hidden]);
+    expect(names.get(APPLES.id)).toContain(APPLES.id);
+    expect(names.get(hidden.id)).toContain(hidden.id);
   });
 });

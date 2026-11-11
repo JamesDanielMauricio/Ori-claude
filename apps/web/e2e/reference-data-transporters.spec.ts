@@ -94,17 +94,11 @@ test.describe("Backoffice — Transporters", () => {
     const picker = page.getByRole("dialog", { name: "קבוצת WhatsApp" });
     const groupOption = picker.getByRole("option", { name: new RegExp(group.name) });
 
-    // The keyboard: the search box has the focus once the picker opens; an
-    // arrow key moves the highlight, not the choice; Escape closes the picker
-    // and leaves the row's edit alone.
+    // The keyboard: the search box has the focus once the picker opens;
+    // Escape closes the picker and leaves the row's edit alone.
     await groupCell.click();
-    await expect(picker.getByRole("combobox")).toBeFocused();
-    await page.keyboard.press("ArrowDown");
-    await expect(picker.getByRole("combobox")).toHaveAttribute(
-      "aria-activedescendant",
-      (await groupOption.getAttribute("id")) ?? "",
-    );
-    await expect(picker.getByRole("option", { selected: true })).toHaveText("ללא קבוצה");
+    await expect(picker.getByRole("searchbox", { name: "חיפוש קבוצת WhatsApp" })).toBeFocused();
+    await expect(picker.getByRole("option", { selected: true })).toContainText("ללא קבוצה");
     await page.keyboard.press("Escape");
     await expect(picker).toHaveCount(0);
     await expect(groupCell).toHaveText("ללא קבוצה");

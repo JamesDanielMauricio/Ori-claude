@@ -1,13 +1,5 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import {
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { CellPopover } from "@/components/reference-data/cell-popover";
 import { inputClassName } from "@/components/reference-data/form-field";
@@ -47,10 +39,13 @@ export const WHATSAPP_GROUPS_ERROR_TEXT: Record<WhatsAppGroupsErrorKind, string>
 // same name, the name with its id. Two groups can share a name, and anyone
 // can add the office's number to a group named like a company's own; shown
 // by name alone, a company set to the wrong one would look exactly like one
-// set to the right one, on every screen, from then on. The id is isolated
-// left to right, as everywhere else it is shown.
+// set to the right one, on every screen, from then on. Names are compared
+// without invisible characters (\p{Cf}: direction marks, zero-width spaces)
+// and with spaces collapsed, which is how they would look alike. The id is
+// isolated left to right, as everywhere else it is shown.
 export function groupDisplayNames(groups: readonly WhatsAppGroup[]): Map<string, string> {
-  const key = (name: string) => name.trim().toLocaleLowerCase("he");
+  const key = (name: string) =>
+    name.replace(/\p{Cf}/gu, "").replace(/\s+/g, " ").trim().toLocaleLowerCase("he");
   const holders = new Map<string, number>();
   for (const group of groups) holders.set(key(group.name), (holders.get(key(group.name)) ?? 0) + 1);
   return new Map(
@@ -168,43 +163,14 @@ export function whatsAppGroupOptions(
   return options;
 }
 
-// The row Enter would pick (-1 = none): the one the arrow keys or the pointer
-// are on, while it is still listed; else the first match while searching;
-// else the selected row.
-export function activeOptionIndex(
-  options: readonly WhatsAppGroupOption[],
-  pointedId: string | null,
-  search: string,
-  value: string,
-): number {
-  const pointed = options.findIndex((option) => option.id === pointedId);
-  if (pointed !== -1) return pointed;
-  if (search.trim()) return options.findIndex((option) => option.kind === "group");
-  return options.findIndex((option) => option.id === value);
-}
-
-// Where an arrow key goes from `from` (-1 = no row yet): round the list, as
-// ui/select.tsx's arrows do.
-export function stepOptionIndex(from: number, step: 1 | -1, length: number): number {
-  if (length === 0) return -1;
-  if (from === -1) return step > 0 ? 0 : length - 1;
-  return (from + step + length) % length;
-}
-
 function OptionRow({
   option,
-  domId,
   selected,
-  active,
   onPick,
-  onHover,
 }: {
   option: WhatsAppGroupOption;
-  domId: string;
   selected: boolean;
-  active: boolean;
   onPick: () => void;
-  onHover: () => void;
 }) {
   const title =
     option.kind === "none"
@@ -215,20 +181,15 @@ function OptionRow({
           ? "הקבוצה הנוכחית לא נמצאה ברשימה"
           : "הקבוצה הנוכחית";
   return (
-    // An option of the listbox, not a button: the search box above keeps the
-    // focus, and the arrow keys move `active` (aria-activedescendant) — the
-    // same model as ui/select.tsx. A click or tap picks it.
-    <div
-      id={domId}
+    // A radio-style row, as the contact person picker's (contact-person-cell.tsx).
+    <button
+      type="button"
       role="option"
       aria-selected={selected}
       onClick={onPick}
-      onMouseEnter={onHover}
-      // `active` is the row the arrow keys are on: a ring, so it reads on a
-      // selected (tinted) row as well as on a plain one.
-      className={`flex w-full cursor-pointer items-start gap-2.5 rounded-md px-2.5 py-2 text-start text-sm transition-colors ${
+      className={`flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-start text-sm transition-colors ${
         selected ? "bg-accent-soft font-medium text-accent" : "text-ink hover:bg-surface"
-      }${active ? " ring-1 ring-inset ring-accent/40" : ""}`}
+      }`}
     >
       <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full ring-1 ring-inset ring-border">
         {selected && <Icon name="check" className="h-3 w-3" />}
@@ -243,7 +204,7 @@ function OptionRow({
           </span>
         )}
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -251,10 +212,10 @@ function OptionRow({
 // number's, and the groups as one single-choice list. Exported on its own so
 // each of its states can be drawn without opening a popover.
 //
-// Keyboard: the search box takes the focus when the panel opens, the arrow
-// keys move through the list, Enter picks; Escape closes without picking
-// (CellPopover). A screen reader hears the search box as a combobox and the
-// highlighted row as its active option.
+// The search box takes the focus when the panel opens: the panel is portaled
+// to the end of <body>, out of the keyboard's reach until something moves the
+// focus into it. Tab then goes through the rows; Escape closes without
+// picking (CellPopover).
 export function WhatsAppGroupPanel({
   value,
   state,
@@ -265,48 +226,14 @@ export function WhatsAppGroupPanel({
   onPick: (id: string) => void;
 }) {
   const [search, setSearch] = useState("");
-  // Which row the arrow keys or the pointer are on, by id; null = the default
-  // below.
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const listId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
   const options = whatsAppGroupOptions(value, state, search);
-  const activeIndex = activeOptionIndex(options, activeId, search, value);
-  const domId = (index: number) => `${listId}-${index}`;
 
   // After CellPopover has placed the panel (a layout effect), and without
-  // scrolling the page: the panel is portaled to the end of <body>, out of
-  // the keyboard's reach until something moves the focus into it.
+  // scrolling the page.
   useEffect(() => {
     inputRef.current?.focus({ preventScroll: true });
   }, []);
-
-  // Keeps the active row in view as the arrow keys pass the list's edge.
-  // Scrolls the list only, as ui/select.tsx does: scrollIntoView() would also
-  // move the page and the panel around it.
-  useEffect(() => {
-    const box = scrollRef.current;
-    const row = activeIndex === -1 ? null : document.getElementById(`${listId}-${activeIndex}`);
-    if (!box || !row) return;
-    if (row.offsetTop < box.scrollTop) box.scrollTop = row.offsetTop;
-    else if (row.offsetTop + row.offsetHeight > box.scrollTop + box.clientHeight) {
-      box.scrollTop = row.offsetTop + row.offsetHeight - box.clientHeight;
-    }
-  }, [activeIndex, listId]);
-
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const next = stepOptionIndex(activeIndex, event.key === "ArrowDown" ? 1 : -1, options.length);
-      setActiveId(options[next]?.id ?? null);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      const option = options[activeIndex];
-      if (option) onPick(option.id);
-    }
-  }
 
   let message: ReactNode = null;
   if (state.status === "loading") {
@@ -326,19 +253,10 @@ export function WhatsAppGroupPanel({
       <input
         ref={inputRef}
         type="search"
-        role="combobox"
-        aria-expanded="true"
-        aria-controls={listId}
-        aria-autocomplete="list"
-        aria-activedescendant={activeIndex === -1 ? undefined : domId(activeIndex)}
         aria-label="חיפוש קבוצת WhatsApp"
         placeholder="חיפוש קבוצה"
         value={search}
-        onChange={(event) => {
-          setSearch(event.target.value);
-          setActiveId(null);
-        }}
-        onKeyDown={handleKeyDown}
+        onChange={(event) => setSearch(event.target.value)}
         className={`${inputClassName} mb-2 w-full`}
       />
       {state.status === "ready" && state.list.env === "dev" && (
@@ -364,25 +282,14 @@ export function WhatsAppGroupPanel({
           </Button>
         </div>
       )}
-      <div
-        ref={scrollRef}
-        className="relative flex max-h-64 flex-col gap-0.5 overflow-y-auto rounded-lg bg-surface-muted/60 p-2 ring-1 ring-inset ring-border"
-      >
-        <div
-          id={listId}
-          role="listbox"
-          aria-label="קבוצות WhatsApp"
-          className="flex flex-col gap-0.5"
-        >
-          {options.map((option, index) => (
+      <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto rounded-lg bg-surface-muted/60 p-2 ring-1 ring-inset ring-border">
+        <div role="listbox" aria-label="קבוצות WhatsApp" className="flex flex-col gap-0.5">
+          {options.map((option) => (
             <OptionRow
               key={`${option.kind}:${option.id}`}
               option={option}
-              domId={domId(index)}
               selected={option.id === value}
-              active={index === activeIndex}
               onPick={() => onPick(option.id)}
-              onHover={() => setActiveId(option.id)}
             />
           ))}
         </div>
@@ -395,12 +302,9 @@ export function WhatsAppGroupPanel({
 // What the closed cell shows: the chosen group's name (with its id when
 // another group shares the name — groupDisplayNames), its id while the name
 // is not known, or "ללא קבוצה".
-export function whatsAppGroupSummary(
-  value: string,
-  list: WhatsAppGroupList | undefined,
-): ReactNode {
+export function whatsAppGroupSummary(value: string, names: ReadonlyMap<string, string>): ReactNode {
   if (!value) return NO_GROUP;
-  return (list ? groupDisplayNames(list.groups).get(value) : undefined) ?? <bdi dir="ltr">{value}</bdi>;
+  return names.get(value) ?? <bdi dir="ltr">{value}</bdi>;
 }
 
 // The editable cell. Picking a row sets the form's id and closes the panel.
@@ -412,10 +316,11 @@ export function WhatsAppGroupEditCell({
   onChange: (id: string) => void;
 }) {
   const query = useQuery(whatsAppGroupsQueries.list());
+  const names = useWhatsAppGroupNames();
   return (
     <CellPopover
       label="קבוצת WhatsApp"
-      summary={whatsAppGroupSummary(value, query.data)}
+      summary={whatsAppGroupSummary(value, names)}
       panelClassName="w-80"
     >
       {(close) => (
