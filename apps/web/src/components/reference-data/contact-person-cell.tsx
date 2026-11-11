@@ -41,8 +41,9 @@ export function ContactPersonSummary({ option }: { option: ContactPersonOption |
 }
 
 // One selectable row in the picker panel — a radio-style option (only one
-// contact person per company), not a checkbox: CheckboxList's multi-select
-// look would wrongly suggest more than one could be picked.
+// contact person per company), not a checkbox: the product picker's
+// multi-select look (ProductFamilyPicker) would wrongly suggest more than one
+// could be picked.
 function ContactPersonOptionRow({
   option,
   selected,

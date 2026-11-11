@@ -63,8 +63,8 @@ export function PreferredGrowerDialog({
             fieldset is laid out differently from browser to browser. */}
         <fieldset>
           <legend className="mb-2 text-sm font-medium text-ink">{varietyName}</legend>
-          {/* Rows, tinted when chosen, as CheckboxList's: in a list of
-              similar names a 16px dot at the start of the line is easy to
+          {/* Rows, tinted when chosen, as ProductFamilyPicker's: in a list
+              of similar names a 16px dot at the start of the line is easy to
               lose. Each row is the whole label, so the tap target is the
               row and not the dot. */}
           <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto rounded-lg bg-surface-muted/60 p-2 ring-1 ring-inset ring-border">

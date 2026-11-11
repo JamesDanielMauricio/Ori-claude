@@ -146,7 +146,7 @@ export default function GrowersPage() {
   // the Users screen reads (useCatalogOptions).
   const {
     catalogQuery,
-    options: catalogOptions,
+    families: catalogFamilies,
     labelById: varietyLabelById,
   } = useCatalogOptions();
 
@@ -479,7 +479,7 @@ export default function GrowersPage() {
       renderEdit: () => (
         <ProductMultiSelectCell
           label="מוצרים בעונה"
-          options={catalogOptions}
+          families={catalogFamilies}
           selectedIds={form.productVarietyIds}
           onToggle={toggleProduct}
         />

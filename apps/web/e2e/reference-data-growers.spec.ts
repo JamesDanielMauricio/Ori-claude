@@ -101,7 +101,12 @@ test.describe("Backoffice — Growers", () => {
     await editingRow(page).getByRole("button", { name: "מוצרים בעונה" }).click();
     const picker = page.getByRole("dialog", { name: "מוצרים בעונה" });
     await picker.getByLabel("סינון מוצרים בעונה").fill(product.name);
-    await picker.getByText(`${family.name} — ${product.name}`).click();
+    // The picker lists varieties under their family's header, by their own
+    // name alone, and a search opens every family it finds a match in.
+    await picker
+      .getByRole("group", { name: family.name })
+      .getByRole("checkbox", { name: product.name })
+      .check();
     // Escape closes the picker only — the row stays in edit mode with the
     // rest of its unsaved changes intact (cell-popover.tsx stops the key
     // from reaching the table's own cancel-the-row handler). If that ever

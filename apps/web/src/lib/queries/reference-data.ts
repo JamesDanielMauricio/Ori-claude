@@ -20,9 +20,11 @@ import { createClient } from "@/lib/supabase/client";
 
 // The whole catalog as a pick-list (name + family) for chips and pickers —
 // shared by the Growers, Users and "בשם מגדל" screens (useCatalogOptions),
-// which is why it has one key.
+// which is why it has one key. `family_id` is what the pickers group by
+// (lib/catalog-families.ts): by id, so two families sharing a name stay two.
 export interface CatalogVariety {
   id: string;
+  family_id: string;
   name: string;
   sizes: string | null;
   product_families: { name: string } | null;
@@ -146,7 +148,7 @@ export const referenceDataQueries = {
         return fetchAllRows<CatalogVariety>((from, to) =>
           createClient()
             .from("product_varieties")
-            .select("id, name, sizes, product_families(name)")
+            .select("id, family_id, name, sizes, product_families(name)")
             .order("name")
             .order("id")
             .range(from, to),

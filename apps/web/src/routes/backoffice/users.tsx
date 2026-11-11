@@ -110,7 +110,7 @@ export default function UsersPage() {
   // entry the Growers screen reads (useCatalogOptions).
   const {
     catalogQuery,
-    options: catalogOptions,
+    families: catalogFamilies,
     labelById: varietyLabelById,
   } = useCatalogOptions();
 
@@ -392,7 +392,7 @@ export default function UsersPage() {
         return (
           <ProductMultiSelectCell
             label="מוצרים חסומים"
-            options={catalogOptions}
+            families={catalogFamilies}
             selectedIds={form.blockedProductVarietyIds}
             onToggle={toggleBlocked}
           />

@@ -6,12 +6,12 @@ import { useEffect, useMemo, useState } from "react";
 import { formatPickupTime } from "@/components/arrangement/board-data";
 import { GrowerPickDialog } from "@/components/arrangement/grower-pick-dialog";
 import { PickUploadDialog, type PickUploadTarget } from "@/components/arrangement/pick-upload-dialog";
-import { CheckboxList } from "@/components/reference-data/checkbox-list";
 import { ExpandableEntityRow } from "@/components/reference-data/expandable-entity-row";
 import {
   FamilyGroupedLines,
   type FamilyGroupedRow,
 } from "@/components/reference-data/family-grouped-lines";
+import { ProductFamilyPicker } from "@/components/reference-data/product-family-picker";
 import { TwoColumnRowList } from "@/components/reference-data/two-column-row-list";
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/card";
@@ -123,8 +123,9 @@ export default function DistributorAsGrowerPage() {
   }, [picksForDayQuery.data]);
 
   // The whole catalog for the products dialog — the Growers screen's own
-  // entry, so a variety just added on Products shows in both.
-  const { options: catalogOptions } = useCatalogOptions();
+  // entry, so a variety just added on Products shows in both, grouped by
+  // family the same way (ProductFamilyPicker).
+  const { families: catalogFamilies } = useCatalogOptions();
 
   // Which growers have an in-season list at all — separate from
   // `pickByGrowerId` because "no pick yet today" is ambiguous on its own: it
@@ -518,10 +519,19 @@ export default function DistributorAsGrowerPage() {
               retrying={growerProductsQuery.isFetching}
             />
           ) : productDraftReady ? (
-            <CheckboxList
-              options={catalogOptions}
+            <ProductFamilyPicker
+              label="מוצרים בעונה"
+              families={catalogFamilies}
               selectedIds={productDraft}
               onToggle={toggleProduct}
+              // The dialog's body is what scrolls, so the list is capped to
+              // the room the body has left: 85dvh, less the dialog's own
+              // chrome (its title bar, the body's padding) and this body's
+              // search box, gap and buttons, ~13.2rem in all. Capped, the
+              // list is the one thing that scrolls, and "שמור" stays in view
+              // below it however many families are open. The 10rem floor is
+              // for a phone held sideways, where the body scrolls as well.
+              listClassName="max-h-[max(10rem,calc(85dvh-14rem))]"
             />
           ) : (
             <p className="text-sm text-ink-muted">טוען…</p>
