@@ -32,6 +32,27 @@ test.describe("Backoffice — Transporters", () => {
   });
 
   test("creates a transporter, then edits its name and WhatsApp group", async ({ page }) => {
+    // The group is picked from the connected number's WhatsApp groups, which
+    // the whatsapp-groups Edge Function reads from Green API. Answered here by
+    // the test instead — nothing leaves this machine, and the list is known.
+    // A fresh group id each run: a company's group may not be another's (0082).
+    const group = { id: `120363${Date.now()}`, name: `קבוצת E2E ${randomUUID().slice(0, 8)}` };
+    await page.route("**/functions/v1/whatsapp-groups", (route) =>
+      route.request().method() === "OPTIONS"
+        ? route.fulfill({
+            status: 200,
+            headers: {
+              "access-control-allow-origin": "*",
+              "access-control-allow-headers": "authorization, x-client-info, apikey, content-type",
+              "access-control-allow-methods": "POST, OPTIONS",
+            },
+          })
+        : route.fulfill({
+            headers: { "access-control-allow-origin": "*" },
+            json: { env: "dev", groups: [group] },
+          }),
+    );
+
     const company = await createTestCompany();
     cleanupFns.push(() => deleteTestCompany(company.id));
     const admin = await createTestProfile({ companyId: company.id, role: "backoffice" });
@@ -69,11 +90,38 @@ test.describe("Backoffice — Transporters", () => {
     // since only one row can be mid-edit at a time.
     await transporterRow.getByRole("button", { name: "ערוך" }).click();
     await editingRow(page).getByLabel("שם").fill(`${transporterName} (edited)`);
-    await editingRow(page).getByLabel("קבוצת WhatsApp").fill("120363000000000000");
+    const groupCell = editingRow(page).getByRole("button", { name: "קבוצת WhatsApp" });
+    const picker = page.getByRole("dialog", { name: "קבוצת WhatsApp" });
+    const groupOption = picker.getByRole("option", { name: new RegExp(group.name) });
+
+    // The keyboard: the search box has the focus once the picker opens; an
+    // arrow key moves the highlight, not the choice; Escape closes the picker
+    // and leaves the row's edit alone.
+    await groupCell.click();
+    await expect(picker.getByRole("combobox")).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(picker.getByRole("combobox")).toHaveAttribute(
+      "aria-activedescendant",
+      (await groupOption.getAttribute("id")) ?? "",
+    );
+    await expect(picker.getByRole("option", { selected: true })).toHaveText("ללא קבוצה");
+    await page.keyboard.press("Escape");
+    await expect(picker).toHaveCount(0);
+    await expect(groupCell).toHaveText("ללא קבוצה");
+    await expect(groupCell).toBeFocused();
+
+    // Picking a group closes the picker, hands the focus back to the cell and
+    // shows the group's name in it.
+    await groupCell.click();
+    await groupOption.click();
+    await expect(picker).toHaveCount(0);
+    await expect(groupCell).toBeFocused();
+    await expect(groupCell).toHaveText(group.name);
     await editingRow(page).getByRole("button", { name: "שמור" }).click();
 
-    await expect(
-      page.locator("tr").filter({ hasText: `${transporterName} (edited)` }),
-    ).toBeVisible();
+    // Saved, and shown by its name rather than its id.
+    const editedRow = page.locator("tr").filter({ hasText: `${transporterName} (edited)` });
+    await expect(editedRow).toBeVisible();
+    await expect(editedRow).toContainText(group.name);
   });
 });

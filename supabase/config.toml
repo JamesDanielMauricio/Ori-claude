@@ -411,6 +411,16 @@ deno_version = 2
 [functions.whatsapp-dispatch]
 verify_jwt = true
 
+# SECURITY: the same gateway check for whatsapp-groups, the list behind the
+# company screens' WhatsApp group picker. It ALLOWS a signed-in backoffice
+# user's browser through, and PROTECTS AGAINST anyone on the internet with no
+# key at all reaching the function — and through it Green API, on the very
+# number the office's messages go out from. The function's caller check
+# (authorizeCaller, shared with whatsapp-dispatch) trusts a token's `role`
+# claim because of this setting, so it must stay true.
+[functions.whatsapp-groups]
+verify_jwt = true
+
 [analytics]
 enabled = true
 port = 54327

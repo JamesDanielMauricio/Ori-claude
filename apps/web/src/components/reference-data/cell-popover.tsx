@@ -37,7 +37,10 @@ export function CellPopover({
   // What the closed trigger shows — a count, usually. Not drawn when the
   // caller brings a `trigger` of its own.
   summary?: ReactNode;
-  children: ReactNode;
+  // The panel's content. As a function it is handed `close`, for a panel
+  // whose job ends with one pick (a single choice, like a WhatsApp group):
+  // it closes the panel and puts the focus back on the trigger, as Escape does.
+  children: ReactNode | ((close: () => void) => ReactNode);
   panelClassName?: string;
   // A trigger of the caller's own, for where the field-like one does not fit
   // — an icon inside a grid cell. `content` is drawn in the button in place
@@ -87,6 +90,11 @@ export function CellPopover({
       });
     }
     setOpen(true);
+  }
+
+  function closeFromPanel() {
+    setOpen(false);
+    triggerRef.current?.focus();
   }
 
   // Below the trigger, or above it when it doesn't fit below (see
@@ -203,7 +211,7 @@ export function CellPopover({
                 <Icon name="close" className="h-3.5 w-3.5" />
               </button>
             </div>
-            {children}
+            {typeof children === "function" ? children(closeFromPanel) : children}
           </div>,
           document.body,
         )}

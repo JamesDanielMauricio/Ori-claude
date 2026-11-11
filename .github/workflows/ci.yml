@@ -80,6 +80,9 @@ jobs:
       # so it never overlaps the domain suite's use of the shared settings row.
       # DENO_NO_PACKAGE_JSON keeps Deno from treating the pnpm workspace's
       # package.json as its own configuration.
+      # Then the WhatsApp group list's own (whatsapp-groups): fakes only, run
+      # with no permissions at all, so none of them can reach the network or
+      # read a secret.
       - name: Edge function tests
         env:
           DENO_NO_PACKAGE_JSON: "1"
@@ -87,6 +90,8 @@ jobs:
         run: |
           deno check supabase/functions/whatsapp-dispatch/index.ts
           deno test --allow-env --allow-read --allow-net supabase/functions/whatsapp-dispatch/
+          deno check supabase/functions/whatsapp-groups/index.ts
+          deno test supabase/functions/whatsapp-groups/
 
       - name: Build
         run: pnpm build

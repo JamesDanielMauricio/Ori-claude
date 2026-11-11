@@ -712,6 +712,38 @@ row → `resolve_outbox_dispatch` → real Green API send → record outcome) ve
 just unit-tested against the Postgres functions in isolation. `WHATSAPP_LIVE_*` remain deliberately
 unset.
 
+**The WhatsApp group picker (`whatsapp-groups`, 2026-11-12).** On the Growers, Customers and
+Transporters screens a company's WhatsApp group is picked from the connected number's own groups
+instead of typed, as the old Bubble app's popup did; the read views show the group's name. A second
+Edge Function, `supabase/functions/whatsapp-groups`, lists them: Green API `getContacts`, groups
+only, with bare ids (the form `whatsapp_group_id` stores, so what is picked is what the dispatcher
+sends to). It uses the dispatcher's own `WHATSAPP_ENV` and credentials, so it always lists the
+groups of the number that actually sends, and the dispatcher's own caller check — imported from
+`whatsapp-dispatch`, which is unchanged — and it refuses the service-role key as well: only a
+signed-in backoffice user may call it. The token never reaches the browser. Saving is unchanged
+(the same bare id goes through the same `save_*` functions, `0082`'s one-company-per-group refusal
+included), and nothing in the database changes.
+
+- **Before deploying** to a project whose `WHATSAPP_ENV` is not `live`, make sure the test
+  credentials (`WHATSAPP_DEV_*`) belong to a WhatsApp account kept for testing, not someone's own
+  phone: every backoffice user who opens these screens is shown the names of all of its groups.
+- **Deploy**, by hand, per project: `npx supabase functions deploy whatsapp-groups --project-ref
+  <ref> --use-api`. No new secrets — it reads the dispatcher's. The deploy bundles its own copy of
+  the `whatsapp-dispatch` files it imports (`handler.ts`, `provider.ts`, `db.ts`), so after a change
+  to any of those, deploy both functions.
+- **Until it is deployed**, the picker says the list is not available (and still lets the group be
+  kept or cleared), and the read views show the stored ids as before; nothing else waits for it.
+- **To check it** after deploying: מגדלים → ערוך on any row → קבוצת WhatsApp. The number's groups
+  should be listed; with `WHATSAPP_ENV` other than `live`, the picker says they are the test
+  number's. Mind that while it does: a group picked from that list is a test-number group, and
+  saving it replaces the company's real one (the saved real ids show as "not on the list" then,
+  and are kept unless changed).
+- **Tests**: in Deno with a fake Green API (`whatsapp-groups/index.test.ts`, run by CI with no
+  permissions, so no test can reach the network); in CI's real Edge runtime for who may call it
+  (`packages/domain/src/notifications/groups-edge.test.ts`); the web side's reading of the answer,
+  its errors, how often it asks, and the picker's states in `apps/web` (vitest); and the picker end
+  to end, with the function's answer supplied by the test (`e2e/reference-data-transporters.spec.ts`).
+
 ## Pre-cutover verification (Prompt 10)
 
 Four things, none of which changed a single business rule already implemented — this pass verified

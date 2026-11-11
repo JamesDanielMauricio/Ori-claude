@@ -19,6 +19,12 @@ import { formatCustomerScore } from "@/components/reference-data/customer-score"
 import { CustomerScoreCell } from "@/components/reference-data/customer-score-cell";
 import { checkboxClassName, inputClassName } from "@/components/reference-data/form-field";
 import { RecordTable, type RecordTableColumn } from "@/components/reference-data/record-table";
+import {
+  useWhatsAppGroupNames,
+  WhatsAppGroupEditCell,
+  WhatsAppGroupSummary,
+  whatsAppGroupSearchText,
+} from "@/components/reference-data/whatsapp-group-cell";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -134,6 +140,11 @@ export default function CustomersPage() {
   const customersQuery = useQuery(referenceDataQueries.customers());
 
   const contactDirectory = useContactPersonDirectory();
+
+  // Names for the WhatsApp column's read view and for the search. Never waited
+  // for, and never an error on this screen: without the list, the column shows
+  // the stored ids as it always did (see useWhatsAppGroupNames).
+  const whatsAppGroupNames = useWhatsAppGroupNames();
 
   // The ranking scores, read apart from the customers themselves because
   // they live apart: customer_scores is a backoffice-only table precisely so
@@ -452,15 +463,11 @@ export default function CustomersPage() {
     {
       key: "whatsapp",
       label: "קבוצת WhatsApp",
-      render: (row) => row.whatsapp_group_id || "—",
+      render: (row) => <WhatsAppGroupSummary id={row.whatsapp_group_id} names={whatsAppGroupNames} />,
       renderEdit: () => (
-        <input
-          aria-label="קבוצת WhatsApp"
-          className={`${inputClassName} w-full min-w-[10rem]`}
+        <WhatsAppGroupEditCell
           value={form.whatsappGroupId}
-          onChange={(event) =>
-            setForm((current) => ({ ...current, whatsappGroupId: event.target.value }))
-          }
+          onChange={(id) => setForm((current) => ({ ...current, whatsappGroupId: id }))}
         />
       ),
     },
@@ -523,7 +530,7 @@ export default function CustomersPage() {
         columns={columns}
         rows={rows}
         getRowId={(row) => row.id}
-        searchText={(row) => `${row.name} ${row.whatsapp_group_id ?? ""}`}
+        searchText={(row) => `${row.name} ${whatsAppGroupSearchText(row.whatsapp_group_id, whatsAppGroupNames)}`}
         editingId={editingId}
         savingEdit={saving}
         dirtyEdit={dirty}
