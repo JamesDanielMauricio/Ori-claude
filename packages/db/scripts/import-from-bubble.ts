@@ -38,9 +38,12 @@
 //   - public.bubble_import_lock (migration 0084): a database with a row there is
 //     the live system; the importer refuses to run against it at all.
 //
-// A repeat import keeps each company's id (read from the previous import's
+// A repeat import keeps the id of each company, product family and product
+// variety it imported before (read from the previous import's
 // _bubble_migration_id_map) and the customer scores entered in this app
-// (customer_scores), which Bubble does not have (workbook Task 20).
+// (customer_scores), which Bubble does not have (workbook Task 20). A
+// variety's id is its product code, which staff copy from the products screen
+// into picking upload files, so a code stays valid through the final import.
 //
 // Each rule for turning Bubble records into rows is explained where it is
 // applied; docs/DATA_MIGRATION_PLAN.md records the decisions behind them.
@@ -51,7 +54,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { normalizePhoneNumber } from "@ori/shared/phone";
 import { createClient } from "@supabase/supabase-js";
@@ -67,6 +70,7 @@ import {
   supabasePictureStore,
   varietyPictureFromBubble,
 } from "./lib/bubble-extras";
+import { keepEarlierIds } from "./lib/kept-ids";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -75,11 +79,18 @@ import {
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptsDir, "../../..");
 
-try {
-  // Node's own .env parser. Variables already set in the shell win.
-  process.loadEnvFile(path.join(repoRoot, ".env"));
-} catch {
-  // No root .env — rely on whatever the shell exported.
+// Run as a script (pnpm import:from-bubble), not imported by its planning
+// tests (import-from-bubble.test.ts): only then does it read the root .env,
+// need a database and run main() — the same check as fill-from-bubble.ts.
+const RUN_AS_SCRIPT = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (RUN_AS_SCRIPT) {
+  try {
+    // Node's own .env parser. Variables already set in the shell win.
+    process.loadEnvFile(path.join(repoRoot, ".env"));
+  } catch {
+    // No root .env — rely on whatever the shell exported.
+  }
 }
 
 const args = process.argv.slice(2);
@@ -96,7 +107,7 @@ const BACKUP_DIR = path.resolve(scriptsDir, "..", ".bubble-export", "backups");
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-if (!DATABASE_URL) throw new Error("DATABASE_URL is not set — add it to the root .env.");
+if (RUN_AS_SCRIPT && !DATABASE_URL) throw new Error("DATABASE_URL is not set — add it to the root .env.");
 if (COMMIT && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)) {
   throw new Error("A --commit run creates logins through the Supabase Admin API: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
 }
@@ -144,7 +155,7 @@ const BATCH_SIZE = 1000;
 type BubbleRecord = { _id: string } & Record<string, unknown>;
 type Row = Record<string, unknown>;
 
-const DATA_TYPES = [
+export const DATA_TYPES = [
   "company",
   "user",
   "customer",
@@ -166,7 +177,7 @@ const DATA_TYPES = [
   "dailycheckingofemptyorders",
 ] as const;
 type DataType = (typeof DATA_TYPES)[number];
-type ExportData = Record<DataType, BubbleRecord[]>;
+export type ExportData = Record<DataType, BubbleRecord[]>;
 
 // A non-empty string, trimmed — Bubble returns "" and missing keys for the
 // same "not set" state.
@@ -311,7 +322,7 @@ interface Issue {
   message: string;
 }
 
-class Report {
+export class Report {
   readonly issues: Issue[] = [];
   // Conditions that make the import unsafe to run at all. Checked before the
   // database is touched.
@@ -416,7 +427,7 @@ async function loadExport(): Promise<{ data: ExportData; exportedAt: string }> {
 
 // ---------------------------------------------------------------------------
 // Plan, part 1: companies, logins, product catalog. Built once; row ids are
-// generated here and reused by part 2.
+// chosen here (kept from the previous import, or new) and reused by part 2.
 // ---------------------------------------------------------------------------
 
 // Bubble's "Product Categories" option set, by the words it shows — פרי, ירק,
@@ -472,7 +483,14 @@ interface ReferencePlan {
 
 const UNNAMED_COMPANY = "(ללא שם)";
 
-function planReference(data: ExportData, report: Report, previousCompanyIds: Map<string, string> = new Map()): ReferencePlan {
+// The previous import's id of each Bubble record, by Bubble id, for the
+// entity types a repeat import keeps (Task 20; main() reads them from
+// _bubble_migration_id_map before anything is deleted).
+export type PreviousIds = Record<"company" | "productfamily" | "productvarieties", ReadonlyMap<string, string>>;
+
+const NO_PREVIOUS_IDS: PreviousIds = { company: new Map(), productfamily: new Map(), productvarieties: new Map() };
+
+export function planReference(data: ExportData, report: Report, previousIds: PreviousIds = NO_PREVIOUS_IDS): ReferencePlan {
   const idMap: Row[] = [];
   const appSettings = data.appsettings[0];
   if (!appSettings) throw new Error("The export has no appsettings record — it cannot identify the distributor.");
@@ -547,7 +565,7 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
     const pickupTime = text(company, "Default Pickup Time");
     // A company imported before keeps its id, so what this app adds to it
     // (customer_scores) survives a repeat import (Task 20).
-    const id = previousCompanyIds.get(company._id) ?? randomUUID();
+    const id = previousIds.company.get(company._id) ?? randomUUID();
     companies.push({
       id,
       name,
@@ -598,6 +616,14 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
   );
 
   // ---- product catalog
+  // A family or variety imported before keeps its id, as a company does
+  // (Task 20). A variety's id is also its product code, which staff copy into
+  // picking upload files: kept, a code copied before this import still names
+  // the same product after it. One chooser for both tables, so a family and a
+  // variety never share an id either; a Bubble id is never in both maps, as
+  // it is the id record's key. The rule, and when an earlier id is not kept,
+  // is in lib/kept-ids.ts.
+  const catalogIdFor = keepEarlierIds(new Map([...previousIds.productfamily, ...previousIds.productvarieties]));
   const productFamilies: Row[] = [];
   const familyIdByBubbleId = new Map<string, string>();
   for (const family of data.productfamily) {
@@ -615,7 +641,8 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
       report.note("warning", "productfamily", family._id, "family.unknown_category", `"${name}" has a category this app does not know (${categoryLabels.join(", ")}) — imported without one.`);
     }
     const image = text(family, "image");
-    const id = randomUUID();
+    const { id, notKept } = catalogIdFor(family._id);
+    if (notKept) report.note("warning", "productfamily", family._id, "family.id_not_kept", `"${name}": ${notKept} — given a new id.`);
     productFamilies.push({
       id,
       name,
@@ -668,7 +695,10 @@ function planReference(data: ExportData, report: Report, previousCompanyIds: Map
       cap = null;
     }
 
-    const id = randomUUID();
+    const { id, notKept } = catalogIdFor(variety._id);
+    if (notKept) {
+      report.note("warning", "productvarieties", variety._id, "variety.id_not_kept", `"${name}": ${notKept} — given a new id, so a product code copied before this import no longer finds it.`);
+    }
     productVarieties.push({
       id,
       family_id: familyId,
@@ -907,7 +937,7 @@ function parsePrice(value: string | null): number | null | "invalid" {
   return /^-?\d+(\.\d+)?$/.test(value) ? Number(value) : "invalid";
 }
 
-function planTrading(data: ExportData, reference: ReferencePlan, loginIds: Map<string, string>, report: Report): TradingPlan {
+export function planTrading(data: ExportData, reference: ReferencePlan, loginIds: Map<string, string>, report: Report): TradingPlan {
   const rows = Object.fromEntries(TABLE_ORDER.map((table) => [table, [] as Row[]])) as Record<TableName, Row[]>;
   const idMap: Row[] = [];
   const loginFor = (bubbleUserId: string | null) => (bubbleUserId ? (loginIds.get(bubbleUserId) ?? null) : null);
@@ -1881,16 +1911,19 @@ async function main() {
     }
   }
 
-  // The previous import's company ids (Task 20), by Bubble id.
-  const previousCompanyIds = new Map(
-    (await sql<{ bubble_id: string; new_id: string }[]>`select bubble_id, new_id::text as new_id from _bubble_migration_id_map where entity_type = 'company'`)
-      .map((row) => [row.bubble_id, row.new_id] as const),
-  );
+  // The previous import's ids (Task 20), by Bubble id: companies, and the
+  // product families and varieties — a variety's id is its product code.
+  const previousIds = { company: new Map<string, string>(), productfamily: new Map<string, string>(), productvarieties: new Map<string, string>() };
+  const previousRows = await sql<{ entity_type: keyof PreviousIds; bubble_id: string; new_id: string }[]>`
+    select entity_type, bubble_id, new_id::text as new_id from _bubble_migration_id_map
+    where entity_type in ('company', 'productfamily', 'productvarieties')
+  `;
+  for (const row of previousRows) previousIds[row.entity_type].set(row.bubble_id, row.new_id);
 
   // Plan once with stand-in login ids: every check runs before anything is
   // written anywhere, including before any login is created.
   const referenceReport = new Report();
-  const reference = planReference(data, referenceReport, previousCompanyIds);
+  const reference = planReference(data, referenceReport, previousIds);
   const standInIds = new Map(reference.users.map((user) => [user.bubbleId, randomUUID()]));
   const firstPassReport = new Report();
   planTrading(data, reference, standInIds, firstPassReport);
@@ -1913,8 +1946,16 @@ async function main() {
     await sql.end();
     throw new Error(`Import stopped before touching anything:\n  - ${blockers.join("\n  - ")}`);
   }
-  const keptIds = new Set(previousCompanyIds.values());
-  console.log(`Company ids kept from the previous import: ${reference.companies.filter((company) => keptIds.has(String(company.id))).length} of ${reference.companies.length}\n`);
+  // For varieties, also how many product codes copied before this import
+  // still name their product after it.
+  const kept = (rows: Row[], earlier: ReadonlyMap<string, string>) => {
+    const keptIds = new Set(earlier.values());
+    return `${rows.filter((row) => keptIds.has(String(row.id))).length} of ${rows.length}`;
+  };
+  console.log(
+    `Ids kept from the previous import: companies ${kept(reference.companies, previousIds.company)}, ` +
+      `product families ${kept(reference.productFamilies, previousIds.productfamily)}, product varieties ${kept(reference.productVarieties, previousIds.productvarieties)}\n`,
+  );
   const createdLoginIds: string[] = [];
   // Pictures a --commit run copied into Ori's storage, removed again if it fails.
   const uploadedPicturePaths: string[] = [];
@@ -2180,7 +2221,10 @@ async function main() {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
-  process.exitCode = 1;
-});
+// Only when run as a script — importing the planning (the tests do) runs nothing.
+if (RUN_AS_SCRIPT) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+    process.exitCode = 1;
+  });
+}

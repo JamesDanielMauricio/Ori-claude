@@ -191,7 +191,9 @@ completing a grower sends its messages at once (Task 25); price ranges show as r
 - **`0084` — the importer lock (Task 28).** `bubble_import_lock`: a row there and the importer refuses
   to run against that database. Created empty; to be locked after the cutover. The importer also
   needs `IMPORT_STAFF_EMAILS` (the reviewed staff list) for a `--commit` run, and a repeat import
-  keeps company ids and the customer scores (Task 20). Public sign-up is off in
+  keeps company ids and the customer scores (Task 20) — and, since 2026-11-12, product family and
+  variety ids too, so a product code (a variety's id, copied from the products screen into picking
+  upload files) stays valid through the final import. Public sign-up is off in
   `supabase/config.toml`; the hosted project has its own switch.
 
 **Not built, and why.** Task 23 and the Bubble parts of 31 are Bubble changes (James: none). Task 35

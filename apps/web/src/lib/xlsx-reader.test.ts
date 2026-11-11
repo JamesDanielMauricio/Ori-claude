@@ -7,6 +7,7 @@ import {
   isDateNumberFormat,
   readXlsxSheet,
   XlsxError,
+  type ReadXlsxOptions,
   type XlsxErrorCode,
   type XlsxSheet,
 } from "./xlsx-reader";
@@ -356,6 +357,27 @@ describe("readXlsxSheet — hidden columns", () => {
     expect(narrow.hiddenColumns).toEqual([0, 3]);
   });
 
+  // The final review: a code column narrowed to nothing, with no hidden
+  // flag, read as in view while Excel draws it hidden.
+  it("names a column narrowed to a width of zero as hidden, flag or not, and only one that is zero", async () => {
+    // openpyxl's file, its code column (A) then written as a script can:
+    // <col width="0" customWidth="1">, and no hidden attribute.
+    const sheet = await readXlsxSheet(fixture("code-column-zero-width.xlsx"), TEMPLATE);
+    expect(sheet.hiddenColumns).toEqual([0]);
+    expect(sheet.rows[1]).toEqual({
+      rowNumber: 2,
+      cells: ["6f1c2b9e-3d4a-4e8b-9a71-0c5d2e8f4b13", "רד-דיימונד גדול", 5, null, CODE_LEGEND[1]],
+    });
+    // Zero: A's "0" with no customWidth, C's " 0.00 ", D:E's as one range,
+    // G's beside hidden="0", and J's to the sheet's last column. In view: B's
+    // 32, F's 0.5, H's width written as nothing, and I with no width at all.
+    const widths = await readXlsxSheet(fixture("zero-width-columns.xlsx"), TEMPLATE);
+    expect(widths.hiddenColumns).toEqual([0, 2, 3, 4, 6, ...Array.from({ length: 91 }, (_, index) => index + 9)]);
+    expect(widths.rows[0]?.cells.slice(0, 3)).toEqual(["קוד מוצר", "מוצר", "משטחים שנקטפו"]);
+    const narrow = await readXlsxSheet(fixture("zero-width-columns.xlsx"), { ...TEMPLATE, maxColumns: 4 });
+    expect(narrow.hiddenColumns).toEqual([0, 2, 3]);
+  });
+
   it("says nothing of columns in a sheet that hides none", async () => {
     const shipped = readFileSync(new URL("../../public/templates/ori-picking-upload-template.xlsx", import.meta.url));
     const sheets = [
@@ -664,15 +686,45 @@ describe("readXlsxSheet — files it refuses", () => {
   });
 });
 
+// The final review: the hidden columns' flags were sized by the cap, so an
+// odd one threw a plain RangeError (Infinity, -1) or ran the tab out of
+// memory (2^32), and every <col> cost as many steps as the cap.
+describe("readXlsxSheet — the column cap", () => {
+  // hidden-columns.xlsx hides A, D:E, and G to the sheet's last column (XFD).
+  const read = (maxColumns: number) => readXlsxSheet(fixture("hidden-columns.xlsx"), { ...TEMPLATE, maxColumns });
+
+  it("reads no further than the 16,384 columns a sheet has, however many are asked for", async () => {
+    const everyHidden = [0, 3, 4, ...Array.from({ length: 16_378 }, (_, index) => index + 6)];
+    const whole = await read(16_384);
+    expect(whole.hiddenColumns).toEqual(everyHidden);
+    expect(whole.rows[1]?.cells).toEqual(["6f1c2b9e-3d4a-4e8b-9a71-0c5d2e8f4b13", "רד-דיימונד גדול", 5, null, CODE_LEGEND[1]]);
+    for (const maxColumns of [16_385, 1e9, 2 ** 32, Number.MAX_VALUE, Infinity]) {
+      expect([maxColumns, await read(maxColumns)]).toEqual([maxColumns, whole]);
+    }
+  });
+
+  it("counts a part of a column as the whole column", async () => {
+    expect(await read(3.5)).toEqual(await read(4));
+    expect((await read(3.5)).hiddenColumns).toEqual([0, 3]);
+    expect(await read(0.5)).toEqual(await read(1));
+  });
+
+  it("reads no column for a cap of zero or below, or one that is no number, without refusing the file", async () => {
+    for (const maxColumns of [0, -1, -16_384, -Infinity, Number.NaN]) {
+      expect([maxColumns, await read(maxColumns)]).toEqual([maxColumns, { name: "ליקוט", rows: [] }]);
+    }
+  });
+});
+
 // Files of a few kilobytes, well inside every cap, built so that a lookup
 // which runs on to the end of the text — once for every one of 400,000
 // repeats — turns them into many seconds of a frozen tab (6.7 s and 10.7 s,
 // before the tokenizer bounded its lookups; tens of milliseconds after). The
 // time limit is far from both.
 describe("readXlsxSheet — files built to be slow", () => {
-  async function timed(name: string) {
+  async function timed(name: string, options: ReadXlsxOptions = {}) {
     const started = performance.now();
-    const sheet = await readXlsxSheet(fixture(name));
+    const sheet = await readXlsxSheet(fixture(name), options);
     return { sheet, milliseconds: performance.now() - started };
   }
 
@@ -713,5 +765,20 @@ describe("readXlsxSheet — files built to be slow", () => {
       [5, []],
       [6, [1]],
     ]);
+  });
+
+  it("marks 520,000 hidden ranges over a sheet's every column in one pass, reading all 16,384", async () => {
+    // 19 MB of <col min="1" max="16384" hidden="1"/> in a 57 KB file: column
+    // by column, 8.5 * 10^9 marks (8 seconds, before each range was marked
+    // by its two ends; a quarter of a second after).
+    const { sheet, milliseconds } = await timed("columns-slow.xlsx", { maxColumns: 16_384 });
+    expect(milliseconds).toBeLessThan(2000);
+    expect(sheet.hiddenColumns).toEqual(Array.from({ length: 16_384 }, (_, index) => index));
+    expect(sheet.rows).toEqual([
+      { rowNumber: 1, cells: ["קוד מוצר", "מוצר", "משטחים שנקטפו"] },
+      { rowNumber: 2, cells: ["1d8b4f72-e05c-4a93-b6d1-3f27a9c8e604", "מלפפון", 4] },
+    ]);
+    // At the upload's own cap, as far as it reads.
+    expect((await timed("columns-slow.xlsx")).sheet.hiddenColumns).toEqual(Array.from({ length: 100 }, (_, index) => index));
   });
 });

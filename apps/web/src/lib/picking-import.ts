@@ -18,9 +18,10 @@ import { XlsxError, type XlsxCellValue, type XlsxSheet } from "@/lib/xlsx-reader
 //     (product_varieties.id), which the products screen shows in its "קוד
 //     מוצר" column, with a button that copies it. The id is the code, rather
 //     than a new field, by the product owner's decision: it is unique already,
-//     never changes, and every pick line carries it. The column is optional —
-//     a file without it (the template before it, and every file filled in
-//     from that one) reads exactly as it did — and so is each of its cells.
+//     the Bubble importer keeps it across its re-imports, and every pick line
+//     carries it. The column is optional — a file without it (the template
+//     before it, and every file filled in from that one) reads exactly as it
+//     did — and so is each of its cells.
 //   - When a row has a code, the code decides which product it is. A name can
 //     be typed in many ways, be the grower's own name for a product, or be
 //     shared by two of the pick's lines; a code is one product. The name is
@@ -58,14 +59,17 @@ import { XlsxError, type XlsxCellValue, type XlsxSheet } from "@/lib/xlsx-reader
 //     is listed as skipped. Listed or not, the product it names — by its code
 //     when it has one — still counts toward the warning that the file may be
 //     another grower's.
-//   - A "קוד מוצר" column hidden in the file is refused, naming it, when it
-//     holds anything. The code decides over the name beside it, so a hidden
-//     one would save a row into a product nobody looking at the sheet saw
-//     named — and 36-character codes are just what someone tidying the
-//     sheet hides. Reading past it instead would drop the codes the person
-//     filled in, without a word. A hidden column that holds nothing hides
-//     nothing. A hidden "מוצר" or "משטחים שנקטפו" column is still read, as
-//     it was before there were codes: neither overrules a column in view.
+//   - A "קוד מוצר" column hidden in the file is refused, naming it, when a
+//     row in view holds anything in it. The code decides over the name
+//     beside it, so a hidden one would save a row into a product nobody
+//     looking at the sheet saw named — and 36-character codes are just what
+//     someone tidying the sheet hides. Reading past it instead would drop
+//     the codes the person filled in, without a word. A hidden column that
+//     holds nothing in the rows in view hides nothing: it is read as if it
+//     were in view, so a code in a hidden row still counts toward the
+//     warning, as it would. A hidden "מוצר" or "משטחים שנקטפו" column is
+//     still read, as it was before there were codes: neither overrules a
+//     column in view.
 //   - A quantity the file shows as a date or a time is refused: what is
 //     stored is the date's day count (46054), not pallets.
 
@@ -250,11 +254,11 @@ function hiddenCodeColumnMessage(column: number): string {
 // says which product: "מוצר", "קוד מוצר", or both — looked for in hidden
 // rows too, as before. Null when none does. A header row that gives any of
 // the three titles to more than one column throws a PickFileError naming
-// the columns, and so does a code column the file hides, once it is known
-// to hold anything. Rows with no product, no code and no quantity are left
-// out, and so are hidden rows with neither a product nor a code: never
-// imported, a hidden row is kept only for the product it names, which still
-// says whose file this is.
+// the columns, and so does a code column the file hides, once a row in view
+// is known to hold anything in it. Rows with no product, no code and no
+// quantity are left out, and so are hidden rows with neither a product nor
+// a code: never imported, a hidden row is kept only for the product it
+// names, which still says whose file this is.
 export function readPickFileRows(sheet: XlsxSheet): PickFileRow[] | null {
   const codeHeader = normalizeLabel(PICK_UPLOAD_HEADERS.code);
   const productHeader = normalizeLabel(PICK_UPLOAD_HEADERS.product);
@@ -306,10 +310,13 @@ export function readPickFileRows(sheet: XlsxSheet): PickFileRow[] | null {
     // name in view says another, or skipped for a code the screen does not
     // show. Refused, not read past: its codes are how the person named the
     // products, and reading the rows by name instead would drop them
-    // unsaid. Only once it holds anything — a hidden row's code included,
-    // as that still says whose file this is. An empty one, hidden as clutter
-    // by someone who uses no codes, decides nothing.
-    if (codeColumn !== -1 && sheet.hiddenColumns?.includes(codeColumn) && rows.some((row) => !isBlank(row.code ?? null))) {
+    // unsaid. Only once a row in view holds anything in it. An empty one,
+    // hidden as clutter by someone who uses no codes, decides nothing — and
+    // nor do codes in rows the file hides as well, which are never imported:
+    // the person shown the column would find no code in view to explain the
+    // refusal. Read as if in view, those codes still say whose file this is
+    // (mostlyNotInPick), as a hidden row's code always does.
+    if (codeColumn !== -1 && sheet.hiddenColumns?.includes(codeColumn) && rows.some((row) => !row.hidden && !isBlank(row.code ?? null))) {
       throw new PickFileError(hiddenCodeColumnMessage(codeColumn));
     }
     return rows;
@@ -393,6 +400,8 @@ export interface PickLineForImport {
   varietyId: string;
   name: string;
   sizes: string | null;
+  /** Its variety's family's name (product_families.name); null when the line came without its family. */
+  familyName: string | null;
   palletsPicked: number;
   leftoverPallets: number;
   comment: string | null;
@@ -408,6 +417,7 @@ export function toImportLines(rows: readonly PickProductLineRow[]): PickLineForI
             varietyId: row.product_variety_id,
             name: row.product_varieties.name,
             sizes: row.product_varieties.sizes,
+            familyName: row.product_varieties.product_families?.name ?? null,
             palletsPicked: Number(row.pallets_picked) || 0,
             leftoverPallets: Number(row.leftover_pallets) || 0,
             comment: row.comment,
@@ -420,7 +430,7 @@ export function toImportLines(rows: readonly PickProductLineRow[]): PickLineForI
 export interface PickImportChange {
   rowNumber: number;
   lineId: string;
-  /** Ori's own label for the line. */
+  /** Ori's own label for the line — with what tells it apart, when another line of the pick has the same label (changeLabel). */
   product: string;
   from: number;
   to: number;
@@ -485,6 +495,15 @@ export const INVALID_CODE =
 // The same for a row without a name, where deleting the code would leave
 // nothing to read the row by: only copying it again is any help.
 export const INVALID_CODE_WITHOUT_NAME = 'קוד המוצר לא תקין. העתיקו אותו שוב מעמודת "קוד מוצר" במסך המוצרים';
+// A name of one of the pick's lines where the code belongs. The template
+// before the code column began with "מוצר", so hands used to it type the
+// name into the first column, or paste the old file's rows there — and to
+// be told to copy the code again sends them looking for a code they never
+// meant to give. Still not read by that name: a row shifted a column over
+// has its other cells shifted too (the old file's quantity under "מוצר"),
+// and which cell means what is the person's to say, not the upload's to
+// guess.
+export const NAME_IN_CODE_COLUMN = `בעמודה "${PICK_UPLOAD_HEADERS.code}" כתוב שם של מוצר ולא קוד. העבירו אותו לעמודה "${PICK_UPLOAD_HEADERS.product}", או העתיקו את הקוד ממסך המוצרים`;
 const NO_PRODUCT = "חסר שם מוצר";
 // The same, in a file with the code column: either one would name it.
 const NO_PRODUCT_OR_CODE = "אין בשורה קוד מוצר או שם מוצר";
@@ -499,6 +518,38 @@ const AMBIGUOUS_CODE =
 /** Ori's own label for a pick line, as the pick editor shows it. */
 function labelOf(line: PickLineForImport): string {
   return formatVarietyName(line.name, line.sizes);
+}
+
+// A code's last group, the part of it that differs most at a glance.
+function codeEnding(varietyId: string): string {
+  const code = varietyId.toLowerCase();
+  return code.slice(code.lastIndexOf("-") + 1);
+}
+
+// What the preview shows a change as: Ori's label for its line — and when
+// other lines of the pick share that label (`sameLabel`, the line among
+// them), what tells this one apart. Nothing makes a variety's name and size
+// unique: its family and its pack type tell varieties apart too. A row's
+// code chooses between such lines with nothing from the name to check it,
+// so the label alone would show a row with the neighbouring variety's code
+// exactly as it shows the right one. The family, as the pick editor groups
+// its lines by family; where that is shared too, the end of the code,
+// which the products screen shows in full — or the whole code, should even
+// that be shared. The code is set left to right in its own isolate, so the
+// ellipsis stays on the left of it, where its cut-off start is.
+function changeLabel(line: PickLineForImport, sameLabel: readonly PickLineForImport[]): string {
+  const label = labelOf(line);
+  const others = sameLabel.filter((other) => other !== line);
+  if (others.length === 0) return label;
+  const family = normalizeLabel(line.familyName ?? "");
+  if (family !== "" && others.every((other) => normalizeLabel(other.familyName ?? "") !== family)) {
+    return `${line.familyName} — ${label}`;
+  }
+  const ending = codeEnding(line.varietyId);
+  const code = others.some((other) => codeEnding(other.varietyId) === ending)
+    ? line.varietyId.toLowerCase()
+    : `…${ending}`;
+  return `${label} (קוד \u2066${code}\u2069)`;
 }
 
 // The row's code and its name say two different lines of the pick. One of
@@ -612,7 +663,10 @@ export function planPickImport(
     plan.rowCount++;
     let line: PickLineForImport;
     if (code.kind === "invalid") {
-      skip(row, row.product === "" ? INVALID_CODE_WITHOUT_NAME : INVALID_CODE);
+      // Its text compared as a name would be: a label of the pick is a
+      // name typed where the code belongs (NAME_IN_CODE_COLUMN).
+      const nameInCode = linesByLabel.has(normalizeLabel(writtenAs(row.code ?? null)));
+      skip(row, nameInCode ? NAME_IN_CODE_COLUMN : row.product === "" ? INVALID_CODE_WITHOUT_NAME : INVALID_CODE);
       continue;
     }
     if (code.kind === "code") {
@@ -693,7 +747,7 @@ export function planPickImport(
     plan.changes.push({
       rowNumber: first.rowNumber,
       lineId: line.id,
-      product: labelOf(line),
+      product: changeLabel(line, linesByLabel.get(normalizeLabel(labelOf(line))) ?? []),
       from: line.palletsPicked,
       to: quantity.value,
     });
@@ -719,7 +773,9 @@ export function planPickImport(
 // all the codes of the other grower's own products. A cell that is no code
 // at all was mistyped, which says nothing of whose file this is, so it is
 // no evidence; but the row did name something, so it is counted among the
-// rows that do, as a row with a name in the pick is.
+// rows that do, as a row with a name in the pick is. A name of the pick's
+// typed where the code belongs (NAME_IN_CODE_COLUMN) is no code either, and
+// counts exactly as a mistyped one.
 export function mostlyNotInPick(plan: PickImportPlan): boolean {
   const listed = (...reasons: string[]) => plan.notImported.filter((skip) => reasons.includes(skip.reason)).length;
   const hidden = plan.hiddenProducts ?? { count: 0, notInPick: 0 };

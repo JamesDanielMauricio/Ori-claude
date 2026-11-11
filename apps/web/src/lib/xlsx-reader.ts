@@ -69,11 +69,15 @@ export interface XlsxSheet {
   /** Only the rows with at least one non-empty cell, in the file's order. */
   rows: XlsxRow[];
   /**
-   * Present when the file hides some of the sheet's columns (`<col
-   * hidden="1">`): hidden by hand, or inside a collapsed group. Then those
-   * columns (A = 0), in order — only the ones cells are read from
-   * (`ReadXlsxOptions.maxColumns`). Their cells are read all the same, as a
-   * hidden row's are; what to do with them is the caller's business.
+   * Present when the file hides some of the sheet's columns: hidden by hand
+   * or inside a collapsed group (`<col hidden="1">`), or narrowed to a width
+   * of zero (`<col width="0">`), which Excel draws as hidden all the same,
+   * flag or not. Then those columns (A = 0), in order — only the ones cells
+   * are read from (`ReadXlsxOptions.maxColumns`). Their cells are read all
+   * the same, as a hidden row's are; what to do with them is the caller's
+   * business. Only a column's own width is looked at: a sheet whose default
+   * width is zero (`<sheetFormatPr defaultColWidth="0">`), which hides
+   * every column without a `<col>` of its own, is read as hiding none.
    */
   hiddenColumns?: number[];
 }
@@ -91,7 +95,12 @@ export interface ReadXlsxOptions {
   maxEntries?: number;
   /** Non-empty rows the sheet may hold. */
   maxRows?: number;
-  /** Columns read per row (A..); cells further right are ignored. */
+  /**
+   * Columns read per row (A..); cells further right are ignored. Never more
+   * than the 16,384 a sheet has (A..XFD), however many are asked for, and
+   * a part of a column counts as the column; at zero or below, or not a
+   * number at all, none are read.
+   */
   maxColumns?: number;
 }
 
@@ -144,6 +153,19 @@ const DEFAULT_LIMITS = {
 } as const;
 
 type Limits = { -readonly [Key in keyof typeof DEFAULT_LIMITS]: number };
+
+// The columns a sheet has, A to XFD: no cell lies further right.
+const SHEET_COLUMNS = 16_384;
+
+// The columns a read takes in, from the cap a caller asks for: a count of
+// whole columns, and never past the sheet's last one. What is sized by it
+// (the hidden columns' marks, the width of a row) stays within a sheet
+// however large a cap is passed, and a cap that is no count of columns at
+// all — zero or below, or NaN — reads none, as comparing a column against
+// it always did.
+function columnsRead(maxColumns: number): number {
+  return maxColumns > 0 ? Math.min(Math.ceil(maxColumns), SHEET_COLUMNS) : 0;
+}
 
 const corrupt = (detail: string) => new XlsxError("corrupt", `The file is damaged: ${detail}.`);
 const tooLarge = (detail: string) => new XlsxError("too_large", `The file is too large: ${detail}.`);
@@ -964,6 +986,15 @@ function isTrue(flag: string | undefined): boolean {
   return written === "1" || written === "true";
 }
 
+// A column's width as the sheet writes it ("0", "0.0"), when it is zero:
+// Excel draws a column that narrow as hidden, whatever its hidden flag
+// says. A width left out, or written as nothing, is no width at all — not
+// the zero Number() would make of "".
+function isZeroWidth(width: string | undefined): boolean {
+  const written = width?.trim();
+  return written !== undefined && written !== "" && Number(written) === 0;
+}
+
 function readSheetRows(
   xml: string,
   sharedStrings: readonly string[],
@@ -971,11 +1002,16 @@ function readSheetRows(
   limits: Limits,
 ): { rows: XlsxRow[]; hiddenColumns: number[] } {
   const rows: XlsxRow[] = [];
-  // The columns the file hides, flagged by column (A = 0) — only those cells
-  // are read from. A <col> names a range of columns (min..max, counted from
-  // 1), and one can name all 16,384 a sheet has, as hiding "the rest" does:
-  // each is flagged only up to the last column read, so no range costs more.
-  const hidden = new Uint8Array(limits.maxColumns);
+  // The columns the file hides (A = 0) — only those cells are read from. A
+  // <col> names a range of columns (min..max, counted from 1), and one can
+  // name all 16,384 a sheet has, as hiding "the rest" does — and a sheet
+  // can hold hundreds of thousands of them. So a range is marked by its two
+  // ends alone: +1 at the column it starts at, -1 just past the last one it
+  // hides that is read. Added up once, left to right, after the scan, a
+  // column is hidden wherever more ranges have started than ended. Each
+  // <col> costs the same however wide it is, and however many columns the
+  // caller reads.
+  const hiddenEnds = new Int32Array(limits.maxColumns + 1);
   let inCols = false;
   let inSheetData = false;
   let rowNumber = 0;
@@ -1006,12 +1042,16 @@ function readSheetRows(
         return;
       }
       if (name === "col" && inCols) {
-        // Hidden "1", or "true" as LibreOffice writes it; a range that is
-        // no range (a bound missing, or max before min) hides nothing.
+        // Hidden "1", or "true" as LibreOffice writes it, or a width of
+        // zero; a range that is no range (a bound missing, or max before
+        // min) hides nothing, and nor does one that starts past the last
+        // column read.
         const min = indexValue(attributes.get("min") ?? "");
         const max = indexValue(attributes.get("max") ?? "");
-        if (!isTrue(attributes.get("hidden")) || min === null || max === null || min < 1) return;
-        for (let column = min - 1; column < Math.min(max, limits.maxColumns); column++) hidden[column] = 1;
+        const hides = isTrue(attributes.get("hidden")) || isZeroWidth(attributes.get("width"));
+        if (!hides || min === null || max === null || min < 1 || max < min || min > limits.maxColumns) return;
+        hiddenEnds[min - 1]! += 1;
+        hiddenEnds[Math.min(max, limits.maxColumns)]! -= 1;
         return;
       }
       if (!inSheetData) return;
@@ -1093,7 +1133,12 @@ function readSheetRows(
       else if (capture === "inline" && inlineText !== null) inlineText += text;
     },
   });
-  return { rows, hiddenColumns: [...hidden.keys()].filter((column) => hidden[column] === 1) };
+  const hiddenColumns: number[] = [];
+  for (let column = 0, open = 0; column < limits.maxColumns; column++) {
+    open += hiddenEnds[column]!;
+    if (open > 0) hiddenColumns.push(column);
+  }
+  return { rows, hiddenColumns };
 }
 
 function sameSheetName(a: string, b: string): boolean {
@@ -1174,7 +1219,7 @@ export async function readXlsxSheet(
     maxUncompressedBytes: options.maxUncompressedBytes ?? DEFAULT_LIMITS.maxUncompressedBytes,
     maxEntries: options.maxEntries ?? DEFAULT_LIMITS.maxEntries,
     maxRows: options.maxRows ?? DEFAULT_LIMITS.maxRows,
-    maxColumns: options.maxColumns ?? DEFAULT_LIMITS.maxColumns,
+    maxColumns: columnsRead(options.maxColumns ?? DEFAULT_LIMITS.maxColumns),
   };
   const archive = openArchive(data instanceof Uint8Array ? data : new Uint8Array(data), limits);
 

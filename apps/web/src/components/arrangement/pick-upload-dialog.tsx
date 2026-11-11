@@ -67,7 +67,9 @@ export interface PickUploadTarget {
 // not checked against the code, which is why the preview always shows Ori's
 // own label for a line it changes: a row known only by its code still reads
 // as a product, and a row whose name is mistyped shows the product its code
-// will save into. A skipped row without a name shows its code.
+// will save into. When two of the pick's lines share that label, it shows
+// what tells this one apart as well: its family, or else the end of its
+// code. A skipped row without a name shows its code.
 //
 // Confirming saves the way the pencil's "שמור" does on this screen: one
 // save_pick_lines call, then the pick is SENT if it is still a draft. The

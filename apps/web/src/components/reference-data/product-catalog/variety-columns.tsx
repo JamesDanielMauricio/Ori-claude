@@ -356,9 +356,10 @@ export function buildVarietyColumns({
     // קוד מוצר: the variety's id, which is its product code — what a file's
     // "קוד מוצר" column names a product by in the "בשם מגדל" picking upload
     // (lib/picking-import.ts). Not a field of its own, by the product owner's
-    // decision: the id is unique already and never changes. Last, as it is
-    // a reference to copy rather than a value to read across the row, and
-    // read-only — no renderEdit, and nothing of it in the form or the save.
+    // decision: the id is unique already, and the Bubble importer keeps it
+    // across its re-imports. Last, as it is a reference to copy rather than
+    // a value to read across the row, and read-only — no renderEdit, and
+    // nothing of it in the form or the save.
     // A draft not yet saved has no id yet, so it shows nothing.
     {
       key: "code",

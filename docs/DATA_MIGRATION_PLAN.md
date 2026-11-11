@@ -56,7 +56,13 @@ Environment: `BUBBLE_API_TOKEN` (Bubble editor → Settings → API → API Toke
   `insert into public.bubble_import_lock (locked_by) values ('<name>, after the cutover');` on that
   database. The importer then refuses to run there at all, dry run included.
 - A repeat import keeps each company's id (from the previous import's `_bubble_migration_id_map`)
-  and puts back the customer scores entered in this app (`customer_scores`).
+  and puts back the customer scores entered in this app (`customer_scores`). Since 2026-11-12 it
+  keeps each product family's and product variety's id the same way. A variety's id is its product
+  code (the products screen's "קוד מוצר", which staff copy into picking upload files), so a code
+  copied before the final import still names the same product after it. Two cases get a new id
+  instead, each a warning in the import report (`family.id_not_kept`, `variety.id_not_kept`): an
+  earlier id that is not a uuid, and one that another record shares. A product added in Ori itself
+  is not in Bubble, so an import removes it, and its code with it.
 - Public sign-up must be off on the hosted project (Supabase dashboard → Authentication → Sign In /
   Providers → "Allow new users to sign up"), so nobody can register a user's email before the import
   reuses that login. `supabase/config.toml` has it off for the local and CI stack.
