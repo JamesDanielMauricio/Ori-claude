@@ -35,34 +35,22 @@ import {
 // catalog has arrived, and the families its grower picked must still open
 // when the catalog does.
 //
-// While the search box has text, every family it found is shown open, so a
-// match is never hidden behind a closed header. A family closed during a
-// search goes in `folded` instead, which the next change to the search
-// empties. `chosen` is left alone, so clearing the search brings back the
-// layout from before it.
+// While the search box has text, every family it found is open and the
+// headers don't toggle, so a match is never hidden behind a closed header.
+// Clearing the search brings back the user's own layout.
 export interface FamilyPickerState {
   query: string;
   chosen: ReadonlyMap<string, boolean>;
-  folded: ReadonlySet<string>;
 }
 
-export const INITIAL_FAMILY_PICKER_STATE: FamilyPickerState = {
-  query: "",
-  chosen: new Map(),
-  folded: new Set(),
-};
-
-export function pickerWithQuery(state: FamilyPickerState, query: string): FamilyPickerState {
-  if (catalogSearchNeedle(query) === catalogSearchNeedle(state.query)) return { ...state, query };
-  return { ...state, query, folded: new Set() };
-}
+export const INITIAL_FAMILY_PICKER_STATE: FamilyPickerState = { query: "", chosen: new Map() };
 
 export function isFamilyOpen(
   state: FamilyPickerState,
   key: string,
   startsOpen: ReadonlySet<string>,
 ): boolean {
-  if (catalogSearchNeedle(state.query) !== "") return !state.folded.has(key);
+  if (catalogSearchNeedle(state.query) !== "") return true;
   return state.chosen.get(key) ?? startsOpen.has(key);
 }
 
@@ -71,15 +59,9 @@ export function toggleFamilyOpen(
   key: string,
   startsOpen: ReadonlySet<string>,
 ): FamilyPickerState {
-  const open = isFamilyOpen(state, key, startsOpen);
-  if (catalogSearchNeedle(state.query) !== "") {
-    const folded = new Set(state.folded);
-    if (open) folded.add(key);
-    else folded.delete(key);
-    return { ...state, folded };
-  }
+  if (catalogSearchNeedle(state.query) !== "") return state;
   const chosen = new Map(state.chosen);
-  chosen.set(key, !open);
+  chosen.set(key, !isFamilyOpen(state, key, startsOpen));
   return { ...state, chosen };
 }
 
@@ -128,7 +110,7 @@ export function ProductFamilyPicker({
         value={state.query}
         onChange={(event) => {
           const query = event.target.value;
-          setState((current) => pickerWithQuery(current, query));
+          setState((current) => ({ ...current, query }));
         }}
         placeholder="סינון"
         aria-label={`סינון ${label}`}
@@ -205,6 +187,7 @@ export function ProductFamilyList({
             key={family.key}
             family={family}
             open={isFamilyOpen(state, family.key, startsOpen)}
+            searching={needle !== ""}
             selectedCount={count.selected}
             totalCount={count.total}
             selectedIds={selectedIds}
@@ -222,6 +205,7 @@ export function ProductFamilyList({
 function FamilySection({
   family,
   open,
+  searching,
   selectedCount,
   totalCount,
   selectedIds,
@@ -233,6 +217,8 @@ function FamilySection({
   // Mid-search, only the varieties the search left standing.
   family: CatalogFamilyGroup;
   open: boolean;
+  // Mid-search every family shown is open, and its header doesn't toggle.
+  searching: boolean;
   // Over the whole family, whatever the search left (familySelectionCounts).
   selectedCount: number;
   totalCount: number;
@@ -253,6 +239,7 @@ function FamilySection({
       <button
         type="button"
         onClick={() => onToggleFamily(family.key)}
+        disabled={searching}
         aria-expanded={open}
         aria-controls={panelId}
         aria-label={`${open ? "כווץ" : "הרחב"} ${family.name}`}

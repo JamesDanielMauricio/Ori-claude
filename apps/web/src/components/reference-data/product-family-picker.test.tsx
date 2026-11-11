@@ -14,7 +14,6 @@ import {
   ProductFamilyList,
   ProductFamilyPicker,
   isFamilyOpen,
-  pickerWithQuery,
   selectedCountLabel,
   toggleFamilyOpen,
   type FamilyPickerState,
@@ -173,41 +172,22 @@ describe("which families are open", () => {
 
   it("opens every family while the search box has text, whatever the user chose", () => {
     const chosen = toggleFamilyOpen(INITIAL_FAMILY_PICKER_STATE, "a", startsOpen);
-    const searching = pickerWithQuery(chosen, "ג");
+    const searching = { ...chosen, query: "ג" };
     expect(isFamilyOpen(searching, "a", startsOpen)).toBe(true);
     expect(isFamilyOpen(searching, "b", startsOpen)).toBe(true);
     // Blank is no search.
-    expect(isFamilyOpen(pickerWithQuery(chosen, "   "), "a", startsOpen)).toBe(false);
+    expect(isFamilyOpen({ ...chosen, query: "   " }, "a", startsOpen)).toBe(false);
   });
 
-  it("brings the user's own choices back when the search is cleared", () => {
+  it("ignores a toggle during a search, and brings the user's own choices back after it", () => {
     let state = toggleFamilyOpen(INITIAL_FAMILY_PICKER_STATE, "a", startsOpen); // a closed
     state = toggleFamilyOpen(state, "b", startsOpen); // b opened
-    state = pickerWithQuery(state, "ג");
-    // Folding both away mid-search is not a choice about the unsearched list.
-    state = toggleFamilyOpen(state, "a", startsOpen);
-    state = toggleFamilyOpen(state, "b", startsOpen);
-    expect(isFamilyOpen(state, "a", startsOpen)).toBe(false);
-    expect(isFamilyOpen(state, "b", startsOpen)).toBe(false);
-    state = pickerWithQuery(state, "");
+    const searching = { ...state, query: "ג" };
+    expect(toggleFamilyOpen(searching, "a", startsOpen)).toBe(searching);
+    state = { ...searching, query: "" };
     expect(isFamilyOpen(state, "a", startsOpen)).toBe(false);
     expect(isFamilyOpen(state, "b", startsOpen)).toBe(true);
     expect(isFamilyOpen(state, "c", startsOpen)).toBe(false);
-  });
-
-  it("keeps a family folded mid-search only until the search changes", () => {
-    const folded = toggleFamilyOpen(
-      pickerWithQuery(INITIAL_FAMILY_PICKER_STATE, "גר"),
-      "a",
-      startsOpen,
-    );
-    expect(isFamilyOpen(folded, "a", startsOpen)).toBe(false);
-    // The same search, spaced or cased differently, is not a change.
-    expect(isFamilyOpen(pickerWithQuery(folded, " גר "), "a", startsOpen)).toBe(false);
-    expect(isFamilyOpen(pickerWithQuery(folded, "גרנ"), "a", startsOpen)).toBe(true);
-    // Nor does typing the same search again later bring the fold back.
-    const retyped = pickerWithQuery(pickerWithQuery(folded, ""), "גר");
-    expect(isFamilyOpen(retyped, "a", startsOpen)).toBe(true);
   });
 });
 
@@ -340,7 +320,7 @@ describe("ProductFamilyList's markup mid-search", () => {
   );
 
   it("shows every family with a match, open, and only what matched", () => {
-    const html = renderList(pickerWithQuery(closedApple, " ג "));
+    const html = renderList({ ...closedApple, query: " ג " });
     expect(headers(html).map((attrs) => attrs["aria-label"])).toEqual(["כווץ אגס", "כווץ תפוח"]);
     // אגס matched by its own name, so it keeps all of its varieties.
     expect(rowLabels(group(html, "אגס").inner)).toEqual(["ספדונה", "קושיה"]);
@@ -348,35 +328,34 @@ describe("ProductFamilyList's markup mid-search", () => {
   });
 
   it("counts the whole family, not what the search left", () => {
-    const html = renderList(pickerWithQuery(closedApple, "ג"));
+    const html = renderList({ ...closedApple, query: "ג" });
     // Pink Lady is ticked but hidden by the search; the header still counts it.
     expect(describedBy(html, "תפוח")).toBe("2 נבחרו 3 זנים");
   });
 
-  it("closes a family folded during the search", () => {
-    const searching = pickerWithQuery(closedApple, "ג");
-    const html = renderList(toggleFamilyOpen(searching, PEAR.id, new Set()));
-    expect(header(html, "אגס")["aria-expanded"]).toBe("false");
-    expect(group(html, "אגס").inner).toBe("");
-    expect(header(html, "תפוח")["aria-expanded"]).toBe("true");
+  it("doesn't let a header toggle during the search, and does again after it", () => {
+    const searching = renderList({ ...closedApple, query: "ג" });
+    for (const attrs of headers(searching)) expect(attrs.disabled).toBe("");
+    const cleared = renderList(closedApple);
+    for (const attrs of headers(cleared)) expect(attrs.disabled).toBeUndefined();
   });
 
   it("is back to the user's own layout once the search is cleared", () => {
-    const html = renderList(pickerWithQuery(pickerWithQuery(closedApple, "ג"), ""));
+    const html = renderList({ ...closedApple, query: "" });
     expect(header(html, "תפוח")["aria-expanded"]).toBe("false");
     expect(header(html, "ענב")["aria-expanded"]).toBe("true");
     expect(header(html, "ללא משפחה")["aria-expanded"]).toBe("false");
   });
 
   it("finds a variety with no family under ללא משפחה", () => {
-    const html = renderList(pickerWithQuery(INITIAL_FAMILY_PICKER_STATE, "שרי"));
+    const html = renderList({ ...INITIAL_FAMILY_PICKER_STATE, query: "שרי" });
     expect(headers(html).map((attrs) => attrs["aria-label"])).toEqual(["כווץ ללא משפחה"]);
     expect(rowLabels(group(html, "ללא משפחה").inner)).toEqual(["שרי"]);
     expect(FAMILIES.at(-1)!.key).toBe(NO_FAMILY_KEY);
   });
 
   it("says nothing matched, quoting the trimmed search", () => {
-    const html = renderList(pickerWithQuery(INITIAL_FAMILY_PICKER_STATE, "  אבוקדו "));
+    const html = renderList({ ...INITIAL_FAMILY_PICKER_STATE, query: "  אבוקדו " });
     expect(textOf(html)).toBe('אין תוצאות עבור "אבוקדו"');
     expect(checkboxes(html)).toHaveLength(0);
   });
@@ -385,7 +364,7 @@ describe("ProductFamilyList's markup mid-search", () => {
     const html = renderToStaticMarkup(
       <ProductFamilyList
         families={[] as CatalogFamilyGroup[]}
-        state={pickerWithQuery(INITIAL_FAMILY_PICKER_STATE, "ג")}
+        state={{ ...INITIAL_FAMILY_PICKER_STATE, query: "ג" }}
         startsOpen={new Set()}
         selectedIds={new Set()}
         onToggle={noop}
