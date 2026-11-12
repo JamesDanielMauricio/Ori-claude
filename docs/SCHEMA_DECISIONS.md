@@ -5,7 +5,29 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-11 (latest) — A customer may name a preferred grower, as words in the line's comment (`0095`)
+## 2026-11-12 (latest) — Crash Trail: a temporary record of each screen crash (`0096`)
+
+A debugging aid, not part of the business, to be removed when it has done its job ("remove Crash
+Trail"). A blank screen was reported that could not be reproduced. Nothing in the app reports
+browser errors to a server, so no log held it.
+
+- **`crash_trail`**, one row per screen crash and nothing else: the web app's screen safety net
+  (`ScreenErrorBoundary`) writes it when it catches a crash. Moving around the app writes
+  nothing; the last 20 steps (screens opened, controls clicked by their labels, never what was
+  typed) are kept in the browser's memory until a crash saves them with the row.
+- **Fields:** the user (`user_id`, plus their name and role at the time), the screen, the error and
+  where in the code it was thrown, `breadcrumbs`, the browser, and the deployment
+  (`app_version`).
+- **Who:** anyone may add a row, signed in or not, but `user_id` is empty or the caller's own. Only
+  backoffice reads; nobody changes or deletes a row through the API, or sets its id or time.
+  Fields have length limits and `breadcrumbs` at most 20 entries.
+- **Rollout.** The web app can go first: until `0096` runs, a crash's save fails silently and only
+  the record is lost. James applies `0096` on production. Safe to run again. To remove: a migration
+  that drops `public.crash_trail`, and the web app's `lib/crash-trail.tsx` with its few callers.
+
+---
+
+## 2026-11-11 — A customer may name a preferred grower, as words in the line's comment (`0095`)
 
 Release workbook Task 36. The client: "When more than one grower has the selected variety in stock
 for the business day, show a small button allowing the customer to choose a preferred grower. Add

@@ -299,6 +299,49 @@ export type Database = {
           },
         ];
       };
+      // CRASH TRAIL (temporary, migration 0096) — remove with it.
+      crash_trail: {
+        Row: {
+          id: string;
+          created_at: string;
+          user_id: string | null;
+          user_name: string | null;
+          role: string | null;
+          screen: string | null;
+          error: string | null;
+          stack: string | null;
+          breadcrumbs: Json;
+          browser: string | null;
+          app_version: string | null;
+        };
+        Insert: {
+          id?: string;
+          created_at?: string;
+          user_id?: string | null;
+          user_name?: string | null;
+          role?: string | null;
+          screen?: string | null;
+          error?: string | null;
+          stack?: string | null;
+          breadcrumbs?: Json;
+          browser?: string | null;
+          app_version?: string | null;
+        };
+        Update: {
+          id?: string;
+          created_at?: string;
+          user_id?: string | null;
+          user_name?: string | null;
+          role?: string | null;
+          screen?: string | null;
+          error?: string | null;
+          stack?: string | null;
+          breadcrumbs?: Json;
+          browser?: string | null;
+          app_version?: string | null;
+        };
+        Relationships: [];
+      };
       profile_blocked_products: {
         Row: {
           created_at: string;

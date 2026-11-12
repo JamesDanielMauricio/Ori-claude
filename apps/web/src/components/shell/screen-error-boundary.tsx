@@ -1,6 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+// CRASH TRAIL (temporary): see lib/crash-trail.tsx.
+import { crashSteps, saveCrash, type CrashStep } from "@/lib/crash-trail";
 
 // A safety net under every screen. When nothing catches an error thrown while
 // a screen draws, React unmounts the whole app and leaves a blank page. With
@@ -9,22 +11,27 @@ import { Button } from "@/components/ui/button";
 // asked to fix it. The console gets the full details. PageTransition holds
 // one inside its path-keyed wrapper, so moving to another screen starts a
 // fresh one, and the sidebar around it stays usable.
-export class ScreenErrorBoundary extends Component<{ children: ReactNode }, { error: unknown }> {
-  override state: { error: unknown } = { error: null };
+export class ScreenErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: unknown; steps: CrashStep[] }
+> {
+  override state: { error: unknown; steps: CrashStep[] } = { error: null, steps: [] };
 
   // `throw null` is possible too: kept as an error, or the boundary would
   // render the same children again.
-  static getDerivedStateFromError(error: unknown): { error: unknown } {
-    return { error: error ?? new Error("unknown error") };
+  static getDerivedStateFromError(error: unknown): { error: unknown; steps: CrashStep[] } {
+    return { error: error ?? new Error("unknown error"), steps: crashSteps() };
   }
 
   override componentDidCatch(error: unknown, info: ErrorInfo) {
     console.error("[screen crashed]", error, info.componentStack);
+    // CRASH TRAIL (temporary): one crash_trail row per crash.
+    void saveCrash(error ?? new Error("unknown error"), info.componentStack);
   }
 
   override render() {
     if (this.state.error === null) return this.props.children;
-    return <ScreenCrashed error={this.state.error} />;
+    return <ScreenCrashed error={this.state.error} steps={this.state.steps} />;
   }
 }
 
@@ -33,7 +40,7 @@ export function screenErrorText(error: unknown): string {
   return String(error);
 }
 
-export function ScreenCrashed({ error }: { error: unknown }) {
+export function ScreenCrashed({ error, steps = [] }: { error: unknown; steps?: CrashStep[] }) {
   return (
     <div
       role="alert"
@@ -49,6 +56,19 @@ export function ScreenCrashed({ error }: { error: unknown }) {
       <p className="text-xs text-ink-subtle">
         פרטים לתמיכה: <bdi dir="ltr" className="break-all font-mono">{screenErrorText(error)}</bdi>
       </p>
+      {/* CRASH TRAIL (temporary): the steps that led here, for a screenshot. */}
+      {steps.length > 0 && (
+        <details className="w-full text-xs text-ink-subtle">
+          <summary className="cursor-pointer">הצעדים האחרונים לפני התקלה</summary>
+          <ol className="mt-2 flex flex-col gap-0.5 break-all font-mono">
+            {steps.map((step, index) => (
+              <li key={index}>
+                <bdi dir="ltr">{step.at.slice(11, 19)}</bdi> {step.what}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
     </div>
   );
 }

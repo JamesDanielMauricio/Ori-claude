@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import { AppRoutes } from "./app-routes";
 import { ScreenErrorBoundary } from "./components/shell/screen-error-boundary";
 import { AuthProvider } from "./lib/auth-context";
+import { CrashTrail } from "./lib/crash-trail";
 import { LiveUpdates } from "./lib/live-updates";
 import { Providers } from "./lib/providers";
 import { RefreshOnReturn } from "./lib/refresh-on-return";
@@ -56,6 +57,8 @@ createRoot(container).render(
               is signed in (and only while the app is on screen). */}
           <LiveUpdates />
           <RefreshOnReturn />
+          {/* CRASH TRAIL (temporary): the last steps, for a crash's record. */}
+          <CrashTrail />
           {/* The last resort, for a crash in a layout itself. Each screen
               has its own, inside the layout (PageTransition). */}
           <ScreenErrorBoundary>
