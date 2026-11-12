@@ -1269,6 +1269,14 @@ export type Database = {
         };
         Returns: void;
       };
+      // Deletes a customer that never ordered, with its never-placed orders and
+      // the messages addressed to it (0098).
+      delete_customer: {
+        Args: {
+          p_customer_company_id: string;
+        };
+        Returns: void;
+      };
       save_transporter: {
         Args: {
           p_id: string | null;

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { db } from "@ori/db";
-import { productVarieties } from "@ori/db/schema";
+import { companies, dailyOrderProducts, dailyOrders, notificationOutbox, productVarieties } from "@ori/db/schema";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -10,6 +10,7 @@ import { toBootstrapGrowerPickRpcArgs, toSavePickLinesRpcArgs } from "../grower/
 import { addGrowerProduct, deleteTestProductVariety as deleteTestGrowerVariety } from "../grower/test-helpers";
 import {
   createTestGrowerWithProduct,
+  createTestOrderProductLine,
   createTestTradingDay,
   deleteTestGrowerWithProduct,
   deleteTestTradingDay,
@@ -62,6 +63,15 @@ describe("reference-data save functions", () => {
     const admin = await createTestProfile({ companyId: company.id, role: "backoffice" });
     cleanupFns.push(() => deleteTestUser(admin.userId));
     return signInTestUser(admin.email, admin.password);
+  }
+
+  // The same, with the admin's user id, for fixtures that record who made them.
+  async function signedInBackofficeWithId() {
+    const company = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(company.id));
+    const admin = await createTestProfile({ companyId: company.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    return { client: await signInTestUser(admin.email, admin.password), userId: admin.userId };
   }
 
   it("save_product: a concurrent writer with a stale version is rejected, not silently merged", async () => {
@@ -547,7 +557,7 @@ describe("reference-data save functions", () => {
     );
     expect(set.error).toBeNull();
 
-    // The way the customers screen deletes one: a plain delete under RLS.
+    // A plain delete under RLS.
     const removal = await client.from("companies").delete().eq("id", customer.id);
     expect(removal.error).toBeNull();
     deleted = true;
@@ -557,6 +567,103 @@ describe("reference-data save functions", () => {
       .select("customer_company_id")
       .eq("customer_company_id", customer.id);
     expect(left.data).toEqual([]);
+  });
+
+  // delete_customer (migration 0098). A customer added while the shop is open
+  // gets an empty order header and a shop_open message (save_customer, 0080);
+  // with nothing else, it can be deleted, and both go with it. A customer
+  // that ordered stays, and nothing of it is deleted.
+  it("delete_customer: a customer with only a never-placed order and a queued message is deleted with both", async () => {
+    const { client, userId } = await signedInBackofficeWithId();
+    const customer = await createTestCustomerCompany();
+    let deleted = false;
+    cleanupFns.push(async () => {
+      if (!deleted) await deleteTestCompanyById(customer.id);
+    });
+    const day = await createTestTradingDay({ initiatedByUserId: userId, phase: "closed" });
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+    const [order] = await db
+      .insert(dailyOrders)
+      .values({ tradingDayId: day.id, customerCompanyId: customer.id })
+      .returning();
+    await db.insert(notificationOutbox).values({
+      tradingDayId: day.id,
+      recipientType: "customer",
+      recipientCompanyId: customer.id,
+      templateKey: "shop_open",
+      payload: {},
+    });
+
+    const removal = await client.rpc("delete_customer", { p_customer_company_id: customer.id });
+    expect(removal.error).toBeNull();
+    deleted = true;
+
+    expect(await db.select({ id: companies.id }).from(companies).where(eq(companies.id, customer.id))).toEqual([]);
+    expect(await db.select({ id: dailyOrders.id }).from(dailyOrders).where(eq(dailyOrders.id, order!.id))).toEqual([]);
+    expect(
+      await db
+        .select({ id: notificationOutbox.id })
+        .from(notificationOutbox)
+        .where(eq(notificationOutbox.recipientCompanyId, customer.id)),
+    ).toEqual([]);
+  });
+
+  it("delete_customer: a customer that ordered is refused as in use, and nothing of it is deleted", async () => {
+    const { client, userId } = await signedInBackofficeWithId();
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const customer = await createTestCustomerCompany();
+    cleanupFns.push(() => deleteTestCompanyById(customer.id));
+    // Pushed last, so it runs first: the day's orders and messages go before
+    // the customer and the grower's variety they point at.
+    const day = await createTestTradingDay({ initiatedByUserId: userId, phase: "closed" });
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+    const line = await createTestOrderProductLine(day.id, customer.id, grower.varietyId, 2);
+    await db.insert(notificationOutbox).values({
+      tradingDayId: day.id,
+      recipientType: "customer",
+      recipientCompanyId: customer.id,
+      templateKey: "shop_open",
+      payload: {},
+    });
+
+    const removal = await client.rpc("delete_customer", { p_customer_company_id: customer.id });
+    // Postgres's foreign-key refusal, which the screen shows as "in use".
+    expect(removal.error?.code).toBe("23503");
+    expect(removal.error?.message).toMatch(/^update or delete on table/);
+
+    // The whole call rolled back: the company, its order line and its message are all still there.
+    expect(await db.select({ id: companies.id }).from(companies).where(eq(companies.id, customer.id))).toHaveLength(1);
+    expect(
+      await db.select({ id: dailyOrderProducts.id }).from(dailyOrderProducts).where(eq(dailyOrderProducts.id, line.id)),
+    ).toHaveLength(1);
+    expect(
+      await db
+        .select({ id: notificationOutbox.id })
+        .from(notificationOutbox)
+        .where(eq(notificationOutbox.recipientCompanyId, customer.id)),
+    ).toHaveLength(1);
+  });
+
+  it("delete_customer: refuses a non-backoffice caller and a company that is not a customer", async () => {
+    const client = await signedInBackofficeClient();
+    const grower = await createTestGrowerCompany();
+    cleanupFns.push(() => deleteTestCompanyById(grower.id));
+    const notCustomer = await client.rpc("delete_customer", { p_customer_company_id: grower.id });
+    expect(notCustomer.error?.code).toBe("P0002");
+
+    const ownCompany = await createTestCustomerCompany();
+    cleanupFns.push(() => deleteTestCompanyById(ownCompany.id));
+    const customerUser = await createTestProfile({ companyId: ownCompany.id, role: "customer" });
+    cleanupFns.push(() => deleteTestUser(customerUser.userId));
+    const customerClient = await signInTestUser(customerUser.email, customerUser.password);
+    const other = await createTestCustomerCompany();
+    cleanupFns.push(() => deleteTestCompanyById(other.id));
+
+    const refused = await customerClient.rpc("delete_customer", { p_customer_company_id: other.id });
+    expect(refused.error?.code).toBe("42501");
+    expect(await db.select({ id: companies.id }).from(companies).where(eq(companies.id, other.id))).toHaveLength(1);
+    expect(await db.select({ id: companies.id }).from(companies).where(eq(companies.id, grower.id))).toHaveLength(1);
   });
 
   it("save_customer/save_grower (migration 0082): a WhatsApp group id another company already has is refused, naming that company", async () => {

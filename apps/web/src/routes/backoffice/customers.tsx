@@ -305,7 +305,11 @@ export default function CustomersPage() {
   const deleteMutation = useMutation({
     mutationFn: async () => {
       if (!deleteTargetId) return;
-      const { error } = await supabase.from("companies").delete().eq("id", deleteTargetId);
+      // delete_customer (0098): the customer's never-placed orders (the empty
+      // header a customer added while the shop is open gets) and its queued
+      // messages go with it. A customer that really ordered is refused as
+      // before: "in use, make it inactive instead".
+      const { error } = await supabase.rpc("delete_customer", { p_customer_company_id: deleteTargetId });
       if (error) throw error;
     },
     onMutate: deleteOptimistic.onMutate,

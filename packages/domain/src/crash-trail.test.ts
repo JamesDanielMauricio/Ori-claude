@@ -2,6 +2,8 @@
 // who may read a crash record, against the real database (CI's local stack).
 // It skips itself once the table is gone, so dropping public.crash_trail
 // before this file is deleted cannot fail CI.
+import { randomUUID } from "node:crypto";
+
 import { db } from "@ori/db";
 import {
   createAnonClient,
@@ -12,7 +14,6 @@ import {
   runCleanup,
   signInTestUser,
 } from "@ori/domain/auth/testing";
-import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 

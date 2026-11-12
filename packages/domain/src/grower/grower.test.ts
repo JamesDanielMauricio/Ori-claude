@@ -9,6 +9,7 @@ import {
   notificationOutbox,
   productFamilies,
   productVarieties,
+  tradingDays,
 } from "@ori/db/schema";
 import {
   createTestCompany,
@@ -417,6 +418,60 @@ describe("grower picking module", () => {
       palletsPicked: "0.00",
       leftoverPallets: "5.00",
     });
+  }, 30000);
+
+  // Migration 0097: a new line carries in from the day CREATED most recently
+  // before its own, not from the latest trade date. Days are opened and
+  // closed one at a time, so creation order is the order they happened in —
+  // but the calendar can give a day a later date than one opened after it.
+  it("bootstrap_grower_pick carries in from the day created most recently before it, even when an earlier-created day has a later trade date (migration 0097)", async () => {
+    const { client: backoffice, userId: adminId } = await signedInBackoffice();
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const growerClient = await signedInGrowerFor(grower.companyId);
+
+    // A closed day, created at `createdAt`, with this grower's pick on it.
+    async function dayCreatedAt(tradeDate: string, createdAt: string) {
+      const day = await createTestTradingDay({ initiatedByUserId: adminId, tradeDate, phase: "closed" });
+      cleanupFns.push(() => deleteTestTradingDay(day.id));
+      await db.update(tradingDays).set({ createdAt: new Date(createdAt) }).where(eq(tradingDays.id, day.id));
+      const bootstrap = await backoffice.rpc(
+        "bootstrap_grower_pick",
+        toBootstrapGrowerPickRpcArgs({ tradingDayId: day.id, growerCompanyId: grower.companyId }),
+      );
+      expect(bootstrap.error).toBeNull();
+      const line = await getPickProductLine(bootstrap.data!.id, grower.varietyId);
+      return { day, line: line! };
+    }
+    // Picks `pallets` on the day's line and closes the day out. Nothing is
+    // arranged, so all of it, and whatever was carried in, is left.
+    async function pickAndClose(day: { id: string }, lineId: string, pallets: number) {
+      await growerClient.rpc(
+        "update_pick_product_pallets",
+        toUpdatePickProductPalletsRpcArgs({ dailyPickProductId: lineId, palletsPicked: pallets }),
+      );
+      const closeOut = await backoffice.rpc(
+        "close_out_pick_leftovers",
+        toCloseOutPickLeftoversRpcArgs({ tradingDayId: day.id }),
+      );
+      expect(closeOut.error).toBeNull();
+    }
+
+    // Opened first, though dated last: 7 picked, 7 left.
+    const first = await dayCreatedAt("2020-03-20", "2020-04-01T08:00:00Z");
+    await pickAndClose(first.day, first.line.id, 7);
+
+    // Opened next, dated earlier: carries in the 7 left on the day opened
+    // before it, picks 3, and leaves 10.
+    const second = await dayCreatedAt("2020-03-10", "2020-04-02T08:00:00Z");
+    expect(second.line).toMatchObject({ leftoverPallets: "7.00" });
+    await pickAndClose(second.day, second.line.id, 3);
+
+    // Opened last: carries in the 10 left on the day opened just before it.
+    // By trade date alone it would have taken the first day's 7 — 20 March
+    // is the latest date of the three.
+    const third = await dayCreatedAt("2020-03-11", "2020-04-03T08:00:00Z");
+    expect(third.line).toMatchObject({ palletsPicked: "0.00", leftoverPallets: "10.00" });
   }, 30000);
 
   it("update_pick_product_details lets the owning grower (or backoffice) set the comment, rejects other growers, and rejects edits once the pick is closed", async () => {

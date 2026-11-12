@@ -5,7 +5,43 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-12 (latest) — Crash Trail: a temporary record of each screen crash (`0096`)
+## 2026-11-12 (latest) — A customer that never ordered can be deleted, even while a shop is open (`0098`)
+
+James's rule, 2026-11-12. A customer added while a day's shop is open still gets that day's order
+header straight away (`save_customer`, `0080`), and with no order lines: that stays. But the
+header, and the shop-open message `0080` queues for the customer, both name the company with
+foreign keys that don't cascade, so the Customers screen refused to delete a customer that had
+never ordered ("הרשומה כבר בשימוש"). Every customer active when a shop opens gets the same empty
+header (`open_shop`), so a long-standing customer that never ordered was stuck the same way.
+
+- **`delete_customer(company)`**, security invoker, backoffice only, now behind the screen's delete
+  button. It deletes the customer's orders that were never placed (no order line, no
+  `order_submission_logs` row), the messages addressed to it, then the company.
+- **Real history still blocks it.** An order with a line, an arrangement or a user makes the final
+  delete fail with `23503`, the whole call rolls back, and the screen says what it always said: in
+  use, make it inactive instead.
+
+---
+
+## 2026-11-12 — A new day's carried-in leftover comes from the day opened before it (`0097`)
+
+Found on the live app on 2026-11-12: `bootstrap_grower_pick` and `sync_grower_picks` seeded a new
+line's carry-in from the grower's latest line by `trade_date`, including a day dated after the one
+being filled. The calendar can open a day for any date from today on, so closed test days dated
+13.11 and 14.11 (opened on 9 and 10 November) made the 12.11 day carry in 14.11's leftovers instead
+of what was left when 11.11 closed.
+
+- **James's rule:** by when the trading day was created. Only one day can be open at a time, so
+  days are opened and closed one after another, and creation order is the order they happened in,
+  whatever date each was given.
+- **Only days created before the one being filled count**, newest first. `trade_date`, then the
+  pick's own creation time, break ties. Imported days keep Bubble's creation time, so their order
+  holds too.
+- Lines that already exist keep their carry-in. James applies `0097` and `0098` on production.
+
+---
+
+## 2026-11-12 — Crash Trail: a temporary record of each screen crash (`0096`)
 
 A debugging aid, not part of the business, to be removed when it has done its job ("remove Crash
 Trail"). A blank screen was reported that could not be reproduced. Nothing in the app reports

@@ -680,6 +680,20 @@
       "when": 1792443600000,
       "tag": "0096_crash-trail",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1792530000000,
+      "tag": "0097_carry-in-follows-day-creation",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1792616400000,
+      "tag": "0098_delete-customer",
+      "breakpoints": true
     }
   ]
 }
