@@ -1,4 +1,4 @@
-// CRASH TRAIL (temporary) — remove with lib/crash-trail.tsx.
+// CRASH TRAIL (temporary) — removed with this folder (README.md).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const inserted: unknown[] = [];
@@ -17,6 +17,7 @@ vi.mock("@/lib/supabase/client", () => ({
 
 import {
   CRASH_TRAIL_STEPS,
+  crashLines,
   crashRow,
   crashSteps,
   describeClick,
@@ -75,6 +76,12 @@ describe("the trail", () => {
     describeClick(element({ tagName: "BUTTON", attrs: { "aria-label": "שמור" } }));
     crashSteps();
     expect(inserted).toEqual([]);
+  });
+
+  it("is listed on the crash screen by time and step", () => {
+    expect(crashLines([{ at: "2026-11-12T10:00:05.000Z", what: 'clicked button "שמור"' }])).toEqual([
+      '10:00:05 clicked button "שמור"',
+    ]);
   });
 
   it("hands out a copy, so a later step does not change a crash already caught", () => {

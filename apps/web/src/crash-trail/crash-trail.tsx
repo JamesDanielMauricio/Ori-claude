@@ -1,15 +1,15 @@
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 
+import { onScreenCrash } from "@/components/shell/screen-error-boundary";
 import { useAuth } from "@/lib/auth-context";
 import { createClient } from "@/lib/supabase/client";
 
-// CRASH TRAIL — a temporary debugging aid (2026-11-12). To remove it, ask for
-// "remove Crash Trail": this file, <CrashTrail /> in main.tsx, the two
-// CRASH TRAIL lines in components/shell/screen-error-boundary.tsx, the
-// crash_trail entry in packages/db/src/supabase-types.ts, VITE_APP_VERSION in
-// scripts/build-vercel.mjs, and a migration that drops public.crash_trail
-// (0096 created it).
+// CRASH TRAIL — a temporary debugging aid (2026-11-12). Everything it adds to
+// the web app is in this folder; README.md here says how to remove it. Nothing
+// outside the folder imports it except the one <CrashTrail /> line in
+// main.tsx, and it reaches the screen safety net only through that net's
+// general crash hook (onScreenCrash), so removing it changes nothing else.
 //
 // It keeps the last 20 things the person did — the screens they opened and
 // the controls they clicked — and when a screen crashes, saves them with the
@@ -123,10 +123,26 @@ export async function saveCrash(error: unknown, componentStack?: string | null):
   }
 }
 
-// Listens for the whole app: mounted once, in main.tsx.
+// The trail as the crash screen lists it, under its details.
+export function crashLines(trail: CrashStep[]): string[] {
+  return trail.map((step) => `${step.at.slice(11, 19)} ${step.what}`);
+}
+
+// Listens for the whole app: mounted once, in main.tsx. While it is mounted,
+// a screen crash saves one crash_trail row and the crash screen lists the
+// steps; nothing else ever writes the table.
 export function CrashTrail() {
   const { pathname, search } = useLocation();
   const { user, profile } = useAuth();
+
+  useEffect(
+    () =>
+      onScreenCrash((error, componentStack) => {
+        void saveCrash(error, componentStack);
+        return crashLines(crashSteps());
+      }),
+    [],
+  );
 
   useEffect(() => {
     recordStep(`opened ${pathname}${search}`);

@@ -1,8 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
-// CRASH TRAIL (temporary): see lib/crash-trail.tsx.
-import { crashSteps, saveCrash, type CrashStep } from "@/lib/crash-trail";
 
 // A safety net under every screen. When nothing catches an error thrown while
 // a screen draws, React unmounts the whole app and leaves a blank page. With
@@ -11,27 +9,61 @@ import { crashSteps, saveCrash, type CrashStep } from "@/lib/crash-trail";
 // asked to fix it. The console gets the full details. PageTransition holds
 // one inside its path-keyed wrapper, so moving to another screen starts a
 // fresh one, and the sidebar around it stays usable.
+
+// Anything that wants to know when a screen crashes — a crash reporter, say.
+// It is told the error, and may hand back lines to show under the crash
+// screen's details. Nothing here knows who listens: with no listener at all,
+// the crash screen is the same.
+export type ScreenCrashListener = (
+  error: unknown,
+  componentStack: string | null | undefined,
+) => string[] | void;
+
+const screenCrashListeners = new Set<ScreenCrashListener>();
+
+// Returns the function that stops listening.
+export function onScreenCrash(listener: ScreenCrashListener): () => void {
+  screenCrashListeners.add(listener);
+  return () => {
+    screenCrashListeners.delete(listener);
+  };
+}
+
+// Tells every listener, and collects what they want shown. A listener that
+// throws is skipped: reporting a crash must never break the crash screen.
+export function notifyScreenCrash(error: unknown, componentStack: string | null | undefined): string[] {
+  const lines: string[] = [];
+  for (const listener of screenCrashListeners) {
+    try {
+      lines.push(...(listener(error, componentStack) ?? []));
+    } catch {
+      // See above.
+    }
+  }
+  return lines;
+}
+
 export class ScreenErrorBoundary extends Component<
   { children: ReactNode },
-  { error: unknown; steps: CrashStep[] }
+  { error: unknown; lines: string[] }
 > {
-  override state: { error: unknown; steps: CrashStep[] } = { error: null, steps: [] };
+  override state: { error: unknown; lines: string[] } = { error: null, lines: [] };
 
   // `throw null` is possible too: kept as an error, or the boundary would
   // render the same children again.
-  static getDerivedStateFromError(error: unknown): { error: unknown; steps: CrashStep[] } {
-    return { error: error ?? new Error("unknown error"), steps: crashSteps() };
+  static getDerivedStateFromError(error: unknown): { error: unknown } {
+    return { error: error ?? new Error("unknown error") };
   }
 
   override componentDidCatch(error: unknown, info: ErrorInfo) {
     console.error("[screen crashed]", error, info.componentStack);
-    // CRASH TRAIL (temporary): one crash_trail row per crash.
-    void saveCrash(error ?? new Error("unknown error"), info.componentStack);
+    const lines = notifyScreenCrash(error ?? new Error("unknown error"), info.componentStack);
+    if (lines.length > 0) this.setState({ lines });
   }
 
   override render() {
     if (this.state.error === null) return this.props.children;
-    return <ScreenCrashed error={this.state.error} steps={this.state.steps} />;
+    return <ScreenCrashed error={this.state.error} lines={this.state.lines} />;
   }
 }
 
@@ -40,7 +72,7 @@ export function screenErrorText(error: unknown): string {
   return String(error);
 }
 
-export function ScreenCrashed({ error, steps = [] }: { error: unknown; steps?: CrashStep[] }) {
+export function ScreenCrashed({ error, lines = [] }: { error: unknown; lines?: string[] }) {
   return (
     <div
       role="alert"
@@ -56,15 +88,12 @@ export function ScreenCrashed({ error, steps = [] }: { error: unknown; steps?: C
       <p className="text-xs text-ink-subtle">
         פרטים לתמיכה: <bdi dir="ltr" className="break-all font-mono">{screenErrorText(error)}</bdi>
       </p>
-      {/* CRASH TRAIL (temporary): the steps that led here, for a screenshot. */}
-      {steps.length > 0 && (
+      {lines.length > 0 && (
         <details className="w-full text-xs text-ink-subtle">
-          <summary className="cursor-pointer">הצעדים האחרונים לפני התקלה</summary>
+          <summary className="cursor-pointer">פרטים נוספים</summary>
           <ol className="mt-2 flex flex-col gap-0.5 break-all font-mono">
-            {steps.map((step, index) => (
-              <li key={index}>
-                <bdi dir="ltr">{step.at.slice(11, 19)}</bdi> {step.what}
-              </li>
+            {lines.map((line, index) => (
+              <li key={index}>{line}</li>
             ))}
           </ol>
         </details>

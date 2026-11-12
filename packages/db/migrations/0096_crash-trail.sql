@@ -8,8 +8,9 @@
 --
 -- To remove it, ask for "remove Crash Trail". A later migration then runs
 --   drop table if exists public.crash_trail;
--- and the web app's crash-trail code (apps/web/src/lib/crash-trail.tsx) goes
--- with it.
+-- and the web app's crash-trail code goes with it: see
+-- apps/web/src/crash-trail/README.md for every piece. They can go in any
+-- order; nothing else depends on this table.
 --
 -- SECURITY: ALLOWS anyone who can reach the API — signed in or not, any role
 -- — to ADD a crash record, as asked: a crash on the sign-in screen must be

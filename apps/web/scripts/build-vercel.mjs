@@ -19,7 +19,8 @@ await rm(outputDir, { recursive: true, force: true });
 // "/trpc". It must be an empty string rather than unset: public-env.ts only
 // falls back to localhost for a missing value (`??`).
 process.env.VITE_API_URL = "";
-// CRASH TRAIL (temporary): which deployment a crash happened on.
+// The deployment's commit, for anything that reports which code was running
+// (a crash record, say). Empty outside Vercel.
 process.env.VITE_APP_VERSION = (process.env.VERCEL_GIT_COMMIT_SHA ?? "").slice(0, 7);
 await build({ root: webDir });
 await cp(join(webDir, "dist"), join(outputDir, "static"), { recursive: true });

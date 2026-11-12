@@ -1,5 +1,7 @@
 // CRASH TRAIL (temporary, migration 0096) — remove with it. Who may add and
 // who may read a crash record, against the real database (CI's local stack).
+// It skips itself once the table is gone, so dropping public.crash_trail
+// before this file is deleted cannot fail CI.
 import { db } from "@ori/db";
 import {
   createAnonClient,
@@ -14,7 +16,11 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
-describe("crash_trail (Crash Trail)", () => {
+const [table] = (await db.execute(
+  sql`select to_regclass('public.crash_trail')::text as name`,
+)) as unknown as Array<{ name: string | null }>;
+
+describe.skipIf(!table?.name)("crash_trail (Crash Trail)", () => {
   const cleanupFns: Array<() => Promise<void>> = [];
   afterEach(async () => {
     await runCleanup(cleanupFns);

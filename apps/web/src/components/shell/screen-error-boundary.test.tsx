@@ -1,7 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ScreenCrashed, ScreenErrorBoundary, screenErrorText } from "./screen-error-boundary";
+import {
+  notifyScreenCrash,
+  onScreenCrash,
+  ScreenCrashed,
+  ScreenErrorBoundary,
+  screenErrorText,
+} from "./screen-error-boundary";
 
 describe("ScreenErrorBoundary", () => {
   it("keeps what was thrown, and turns a thrown null into an error, so it never draws the screen again", () => {
@@ -16,6 +22,35 @@ describe("ScreenErrorBoundary", () => {
   });
 });
 
+describe("the crash hook", () => {
+  it("with no listener, a crash is reported to nobody and adds nothing", () => {
+    expect(notifyScreenCrash(new Error("boom"), null)).toEqual([]);
+  });
+
+  it("tells each listener the error, collects the lines they hand back, and stops when asked", () => {
+    const heard: unknown[] = [];
+    const stop = onScreenCrash((error, componentStack) => {
+      heard.push([error, componentStack]);
+      return ["a line"];
+    });
+    const error = new Error("boom");
+    expect(notifyScreenCrash(error, "\n at Screen")).toEqual(["a line"]);
+    expect(heard).toEqual([[error, "\n at Screen"]]);
+    stop();
+    expect(notifyScreenCrash(error, null)).toEqual([]);
+  });
+
+  it("skips a listener that throws, so reporting a crash never breaks the crash screen", () => {
+    const stopBroken = onScreenCrash(() => {
+      throw new Error("reporter broke");
+    });
+    const stopFine = onScreenCrash(() => ["still here"]);
+    expect(notifyScreenCrash(new Error("boom"), null)).toEqual(["still here"]);
+    stopBroken();
+    stopFine();
+  });
+});
+
 describe("the crash screen", () => {
   it("says what happened, offers a reload, and shows the error's own message left to right", () => {
     const html = renderToStaticMarkup(<ScreenCrashed error={new TypeError("x is not a function")} />);
@@ -23,17 +58,13 @@ describe("the crash screen", () => {
     expect(html).toContain("משהו השתבש במסך הזה");
     expect(html).toMatch(/<button[^>]*type="button"[^>]*>טעינה מחדש<\/button>/);
     expect(html).toContain('<bdi dir="ltr" class="break-all font-mono">x is not a function</bdi>');
+    expect(html).not.toContain("<details");
   });
 
-  it("lists the steps that led to the crash, when there are any (Crash Trail)", () => {
-    const steps = [
-      { at: "2026-11-12T10:00:01.000Z", what: "opened /backoffice/distributor-grower" },
-      { at: "2026-11-12T10:00:05.000Z", what: 'clicked button "ערוך את מלאי מגדל"' },
-    ];
-    const html = renderToStaticMarkup(<ScreenCrashed error={new Error("boom")} steps={steps} />);
-    expect(html).toContain("הצעדים האחרונים לפני התקלה");
-    expect(html).toContain('<li><bdi dir="ltr">10:00:05</bdi> clicked button &quot;ערוך את מלאי מגדל&quot;</li>');
-    expect(renderToStaticMarkup(<ScreenCrashed error={new Error("boom")} />)).not.toContain("<details");
+  it("lists a listener's lines under its details", () => {
+    const html = renderToStaticMarkup(<ScreenCrashed error={new Error("boom")} lines={["10:00:05 clicked button", "10:00:06 opened /x"]} />);
+    expect(html).toContain("פרטים נוספים");
+    expect(html).toContain("<li>10:00:05 clicked button</li><li>10:00:06 opened /x</li>");
   });
 
   it("names any thrown value", () => {

@@ -22,8 +22,10 @@ browser errors to a server, so no log held it.
   backoffice reads; nobody changes or deletes a row through the API, or sets its id or time.
   Fields have length limits and `breadcrumbs` at most 20 entries.
 - **Rollout.** The web app can go first: until `0096` runs, a crash's save fails silently and only
-  the record is lost. James applies `0096` on production. Safe to run again. To remove: a migration
-  that drops `public.crash_trail`, and the web app's `lib/crash-trail.tsx` with its few callers.
+  the record is lost. James applies `0096` on production. Safe to run again.
+- **Removal** (`apps/web/src/crash-trail/README.md`): the web app's `src/crash-trail/` folder, its
+  one line in `main.tsx`, the `crash_trail` types entry, its CI test, and a migration that drops
+  the table. These can go in any order; nothing else depends on them.
 
 ---
 
