@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 
+import { ScreenErrorBoundary } from "./screen-error-boundary";
+
 // The route-change entrance, mounted by each role layout *around its
 // <Outlet />* — never around the whole app. Wrapping the router itself would
 // remount the sidebar on every navigation, which is precisely the cost R8
@@ -13,12 +15,15 @@ import { useLocation } from "react-router-dom";
 // remount. Leaving `search` out of the key is deliberate — the customer order
 // screen swaps content via `?orderId=`, and re-running the entrance on every
 // such change would flash the page while the user is still reading it.
+//
+// The screen's safety net sits inside the keyed wrapper too, so a screen
+// that crashed is replaced by a fresh one as soon as another is opened.
 export function PageTransition({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
 
   return (
     <div key={pathname} className="animate-page-in">
-      {children}
+      <ScreenErrorBoundary>{children}</ScreenErrorBoundary>
     </div>
   );
 }

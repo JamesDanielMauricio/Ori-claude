@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import { AppRoutes } from "./app-routes";
+import { ScreenErrorBoundary } from "./components/shell/screen-error-boundary";
 import { AuthProvider } from "./lib/auth-context";
 import { LiveUpdates } from "./lib/live-updates";
 import { Providers } from "./lib/providers";
@@ -55,7 +56,11 @@ createRoot(container).render(
               is signed in (and only while the app is on screen). */}
           <LiveUpdates />
           <RefreshOnReturn />
-          <AppRoutes />
+          {/* The last resort, for a crash in a layout itself. Each screen
+              has its own, inside the layout (PageTransition). */}
+          <ScreenErrorBoundary>
+            <AppRoutes />
+          </ScreenErrorBoundary>
         </Providers>
       </AuthProvider>
     </BrowserRouter>

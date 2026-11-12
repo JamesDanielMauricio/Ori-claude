@@ -2,6 +2,7 @@ import { resolveHomeRoute } from "@ori/shared/roles";
 import { Suspense } from "react";
 import { Link, Outlet } from "react-router-dom";
 
+import { ScreenErrorBoundary } from "@/components/shell/screen-error-boundary";
 import { Icon } from "@/components/ui/icon";
 import { useAuth } from "@/lib/auth-context";
 
@@ -35,7 +36,9 @@ export default function ProfileLayout() {
         חזרה
       </Link>
       <Suspense fallback={null}>
-        <Outlet />
+        <ScreenErrorBoundary>
+          <Outlet />
+        </ScreenErrorBoundary>
       </Suspense>
     </main>
   );
