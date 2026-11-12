@@ -1,11 +1,11 @@
 // The reads the arrangement engine needs beyond the day on screen: the last
-// HISTORY_DAYS trading days, the owner's scores and when each customer
-// started. Straight from the tables under the user's own session — a
-// backoffice login reads all of them (see packages/domain's arrangement
-// module header) — and only when "הצע סידור" is pressed: kept out of React
-// Query on purpose, because lib/live-updates.ts re-reads every mounted query
-// on any write anywhere, and two months of history has no business being
-// fetched again each time a cell is typed.
+// HISTORY_DAYS trading days and when each customer started. Straight from
+// the tables under the user's own session — a backoffice login reads all of
+// them (see packages/domain's arrangement module header) — and only when
+// "הצע סידור" is pressed: kept out of React Query on purpose, because
+// lib/live-updates.ts re-reads every mounted query on any write anywhere,
+// and two months of history has no business being fetched again each time
+// a cell is typed.
 import type { PostgrestError } from "@supabase/supabase-js";
 
 import type { createClient } from "@/lib/supabase/client";
@@ -59,7 +59,7 @@ export async function readEngineHistory(
   const days: HistoryRows["days"] = daysRead.data ?? [];
   const dayIds = days.map((day) => day.id);
 
-  const [pickLines, orderLines, records, scores, customers] = await Promise.all([
+  const [pickLines, orderLines, records, customers] = await Promise.all([
     dayIds.length === 0
       ? []
       : allRows<HistoryRows["pickLines"][number]>((start, end) =>
@@ -99,13 +99,6 @@ export async function readEngineHistory(
             .order("id")
             .range(start, end),
         ),
-    allRows<{ customer_company_id: string; general_score: string | number }>((start, end) =>
-      supabase
-        .from("customer_scores")
-        .select("customer_company_id, general_score")
-        .order("customer_company_id")
-        .range(start, end),
-    ),
     allRows<{ id: string; created_at: string }>((start, end) =>
       supabase
         .from("companies")
@@ -117,5 +110,5 @@ export async function readEngineHistory(
   ]);
 
   const { history, familyOf } = historyFromRows({ days, pickLines, orderLines, records });
-  return { history, familyOf, customers: customerFactsFrom({ customers, scores }) };
+  return { history, familyOf, customers: customerFactsFrom({ customers }) };
 }

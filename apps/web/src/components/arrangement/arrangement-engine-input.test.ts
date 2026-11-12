@@ -736,28 +736,18 @@ describe("dayToPropose", () => {
 });
 
 describe("customerFactsFrom", () => {
-  it("gives every customer their score, when they have one, and the day they were created", () => {
+  it("gives every customer the day they were created", () => {
     const facts = customerFactsFrom({
       customers: [
         { id: "gabbai", created_at: "2025-03-01T10:00:00+00:00" },
         { id: "atara", created_at: "2026-10-01T23:30:00+00:00" },
       ],
-      scores: [{ customer_company_id: "gabbai", general_score: "4.35" }],
     });
 
     expect(facts).toEqual({
-      gabbai: { generalScore: 4.35, since: "2025-03-01" },
-      atara: { generalScore: null, since: "2026-10-01" },
+      gabbai: { since: "2025-03-01" },
+      atara: { since: "2026-10-01" },
     });
-  });
-
-  it("takes a score that cannot be read for no score at all, not for a zero", () => {
-    const facts = customerFactsFrom({
-      customers: [{ id: "gabbai", created_at: "2025-03-01T10:00:00+00:00" }],
-      scores: [{ customer_company_id: "gabbai", general_score: "n/a" }],
-    });
-
-    expect(facts.gabbai?.generalScore).toBeNull();
   });
 });
 
@@ -818,8 +808,8 @@ describe("proposeForDay", () => {
     ],
     familyOf: { [LEMON]: CITRUS },
     customers: {
-      atara: { generalScore: null, since: null },
-      gabbai: { generalScore: null, since: null },
+      atara: { since: null },
+      gabbai: { since: null },
     },
   };
 
@@ -913,30 +903,22 @@ describe("proposeForDay", () => {
     expect(lines.reduce((sum, line) => sum + line.quantity, 0)).toBe(2.5);
   });
 
-  it("ranks customers by the owner's scores when a product is short", () => {
-    const scored = {
-      history: [],
-      familyOf: {},
-      customers: {
-        atara: { generalScore: null, since: null },
-        gabbai: { generalScore: 5, since: null },
-      },
-    };
-
-    // Atara ordered first, but Gabbai is the one the owner scored.
-    expect(
-      proposeForDay({ tradeDate, picks, orders, records: [], learnedFrom: scored }).map(
-        (line) => line.customerId,
-      ),
-    ).toEqual(["gabbai"]);
-  });
-
   it("judges who is a newcomer as of the day's trade date", () => {
     const customers = {
-      gabbai: { generalScore: 4, since: "2025-01-01" },
-      // Created 11 days before the day: no habits yet, so ranked on the score alone.
-      atara: { generalScore: 4, since: "2026-10-01" },
+      gabbai: { since: "2025-01-01" },
+      // Created 11 days before the day: no habits yet, so the lowest product
+      // score — level with Gabbai, who has none — and not the 5 that ordering
+      // citrus on its one day below would give.
+      atara: { since: "2026-10-01" },
     };
+    const history = [
+      {
+        date: "2026-10-02",
+        supply: { [LEMON]: 1 },
+        orders: { [LEMON]: { atara: 1 } },
+        recorded: {},
+      },
+    ];
     const gabbaiFirst = [
       orderFor("gabbai", "2026-10-12T06:00:00+00:00"),
       orderFor("atara", "2026-10-12T09:00:00+00:00"),
@@ -948,9 +930,9 @@ describe("proposeForDay", () => {
         picks,
         orders: gabbaiFirst,
         records: [],
-        learnedFrom: { history: [], familyOf: {}, customers },
+        learnedFrom: { history, familyOf: { [LEMON]: CITRUS }, customers },
       }).map((line) => line.customerId),
-    ).toEqual(["atara"]);
+    ).toEqual(["gabbai"]);
   });
 
   it("serves an order with no time at all after an equal one that has a time", () => {
@@ -1041,7 +1023,7 @@ describe("a preferred grower in an order line's comment (workbook Task 36)", () 
   const learnedFrom = {
     history: [],
     familyOf: {},
-    customers: { gabbai: { generalScore: null, since: null } },
+    customers: { gabbai: { since: null } },
   };
 
   it("carries the preference in the line's comment, as the order screen writes it", () => {

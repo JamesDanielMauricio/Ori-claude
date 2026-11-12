@@ -226,13 +226,6 @@ const world: Record<string, TableSpec> = {
       },
     ],
   },
-  customer_scores: {
-    rows: [
-      { customer_company_id: "atara", general_score: "3.00" },
-      { customer_company_id: "dana", general_score: "2.25" },
-      { customer_company_id: "gabbai", general_score: "4.50" },
-    ],
-  },
   companies: {
     rows: [
       { id: "atara", created_at: "2026-10-01T23:30:00+00:00" },
@@ -262,9 +255,9 @@ const learned = {
   ],
   familyOf: { [LEMON]: CITRUS, [FIG]: FRUIT, [PLUM]: STONE, [MELON]: GOURD },
   customers: {
-    atara: { generalScore: 3, since: "2026-10-01" },
-    dana: { generalScore: 2.25, since: "2024-01-15" },
-    gabbai: { generalScore: 4.5, since: "2025-03-01" },
+    atara: { since: "2026-10-01" },
+    dana: { since: "2024-01-15" },
+    gabbai: { since: "2025-03-01" },
   },
 };
 const tradeDate = "2026-10-12";
@@ -348,7 +341,6 @@ describe("readEngineHistory", () => {
 
     expect([...new Set(queries.map((query) => query.table))].sort()).toEqual([
       "companies",
-      "customer_scores",
       "trading_days",
     ]);
     expect(read.history).toEqual([]);
@@ -377,7 +369,6 @@ describe("readEngineHistory", () => {
         "daily_pick_products",
         "daily_order_products",
         "arrangement_records",
-        "customer_scores",
         "companies",
       ])("of %s", async (table) => {
         const { client } = fakeSupabase(

@@ -5,7 +5,27 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-12 (latest) — A customer that never ordered can be deleted, even while a shop is open (`0098`)
+## 2026-11-12 (latest) — The customer rating is removed (`0099`)
+
+James's call, 2026-11-12: Bubble never had a customer rating, so Ori does not either. `0099` drops
+`customer_scores` and `set_customer_score` (0074), and every rating entered with them. The
+customers screen loses its "דירוג" column, and a repeat import has no ratings to keep.
+
+- **"הצע סידור" without it.** The third step of a customer's rank was the owner's priority: half
+  the rating, half the family habit. It is now the family habit alone (the owner's 1–5 product
+  score), and a customer of under 30 days, who has no habits yet, is given the lowest, 1. That is
+  the ranking every customer without a rating already had (no rating counted as 1), so suggestions
+  change only where a rating had been entered. Checked against the old engine on 6,000 random days
+  with nobody rated: the same proposal every time.
+- **Rollout.** The web app first, then `0099`. A build from before it still reads the table: its
+  customers screen would say the ratings failed to load, and its "הצע סידור" would fail. James
+  applies `0099` on production. Safe to run again.
+- Supersedes the 2026-10-12 entry, and the `customer_scores` notes in the 2026-10-15 entry and
+  under `0084`.
+
+---
+
+## 2026-11-12 — A customer that never ordered can be deleted, even while a shop is open (`0098`)
 
 James's rule, 2026-11-12. A customer added while a day's shop is open still gets that day's order
 header straight away (`save_customer`, `0080`), and with no order lines: that stays. But the

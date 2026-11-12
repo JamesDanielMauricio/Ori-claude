@@ -300,25 +300,13 @@ function firstSubmission(order: BoardOrder<BoardSubmissionTime>): string | undef
   return first?.text;
 }
 
-/** Each customer's score and the day they were created, for the engine's ranking. */
+/** The day each customer was created, for the engine's ranking. */
 export function customerFactsFrom({
   customers,
-  scores,
 }: {
   customers: ReadonlyArray<{ id: string; created_at: string }>;
-  scores: ReadonlyArray<{ customer_company_id: string; general_score: string | number }>;
 }): Record<string, CustomerFacts> {
-  // numeric(3,2) arrives as text. Anything unreadable is no score at all
-  // rather than a zero, which would rank the customer below "not scored".
-  const scoreOf = new Map<string, number>();
-  for (const row of scores) {
-    const score = Number(row.general_score);
-    if (Number.isFinite(score)) scoreOf.set(row.customer_company_id, score);
-  }
   return Object.fromEntries(
-    customers.map((customer) => [
-      customer.id,
-      { generalScore: scoreOf.get(customer.id) ?? null, since: customer.created_at.slice(0, 10) },
-    ]),
+    customers.map((customer) => [customer.id, { since: customer.created_at.slice(0, 10) }]),
   );
 }

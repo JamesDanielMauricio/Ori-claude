@@ -30,8 +30,9 @@
 //      corrections — he gives it to someone else twice, and the third
 //      proposal follows him.
 //   2. on how many days of the history they were given this exact product.
-//   3. the owner's own priority: half his general score for the customer
-//      (customer_scores), half how habitually they buy the product's family.
+//   3. how habitually they buy the product's family: the owner's 1–5 product
+//      score. A customer of under NEWCOMER_DAYS has no habits to judge yet and
+//      is given the lowest, 1.
 //   4. whoever ordered first.
 //
 // Then the pallets dealt to each customer are put on a grower's lot — the lot
@@ -51,10 +52,8 @@ import type { ProposalLine } from "./arrangement-proposal";
 
 /** How many of a product's past shortages a customer is judged on. */
 export const SHORTAGE_MEMORY = 3;
-/** A customer this new is ranked on their general score alone: they have no habits yet. */
+/** A customer this new has no habits to judge yet: they are given the lowest product score. */
 export const NEWCOMER_DAYS = 30;
-/** The general score of a customer the owner has not scored — "nothing known", not "bad". */
-export const UNRANKED_SCORE = 1;
 /** A pallet, in the tenths proposeArrangement counts in. */
 const PALLET_IN_TENTHS = 10;
 
@@ -114,8 +113,6 @@ export interface DayToPropose {
 
 /** What the engine knows about a customer apart from their history. */
 export interface CustomerFacts {
-  /** The owner's 1–5 score, or null when he has not given one. */
-  generalScore: number | null;
   /** YYYY-MM-DD the customer was created, or null when not known. */
   since: string | null;
 }
@@ -143,11 +140,6 @@ export function productScore(share: number): number {
     if (share >= floor) return score;
   }
   return 1;
-}
-
-/** The owner's priority: half his general score, half the product score. */
-export function ownerPriority(general: number, product: number): number {
-  return 0.5 * general + 0.5 * product;
 }
 
 /**
@@ -582,13 +574,11 @@ export function proposeArrangement({
     const outcomes = learned.shortages[customerId]?.[varietyId] ?? [];
     const points = outcomes.slice(-SHORTAGE_MEMORY).reduce((sum, outcome) => sum + outcome, 0);
     const received = learned.received[customerId]?.[varietyId] ?? 0;
-    const facts = customers[customerId];
-    const general = facts?.generalScore ?? UNRANKED_SCORE;
-    // A newcomer has no habits to judge, so the general score stands in for them.
-    const product = isNewcomer(facts?.since ?? null, day.date)
-      ? general
+    // A newcomer has no habits to judge yet: the lowest product score.
+    const habit = isNewcomer(customers[customerId]?.since ?? null, day.date)
+      ? 1
       : productScore(learned.shares[customerId]?.[family] ?? 0);
-    return [points, received, ownerPriority(general, product)];
+    return [points, received, habit];
   }
 }
 

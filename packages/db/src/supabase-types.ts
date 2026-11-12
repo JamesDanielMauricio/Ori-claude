@@ -266,39 +266,6 @@ export type Database = {
           },
         ];
       };
-      // The distributor's ranking score per customer (migration 0067).
-      // Backoffice-only: it has no "select own" policy, so a customer's own
-      // session reads no rows from it. Hand-added alongside that migration —
-      // see this file's header note on regenerating.
-      customer_scores: {
-        Row: {
-          customer_company_id: string;
-          general_score: string;
-          created_at: string;
-          updated_at: string;
-        };
-        Insert: {
-          customer_company_id: string;
-          general_score: string;
-          created_at?: string;
-          updated_at?: string;
-        };
-        Update: {
-          customer_company_id?: string;
-          general_score?: string;
-          created_at?: string;
-          updated_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "customer_scores_customer_company_id_fkey";
-            columns: ["customer_company_id"];
-            isOneToOne: true;
-            referencedRelation: "companies";
-            referencedColumns: ["id"];
-          },
-        ];
-      };
       // CRASH TRAIL (temporary, migration 0096) — remove with it.
       crash_trail: {
         Row: {
@@ -1260,14 +1227,6 @@ export type Database = {
           p_accounting_id?: string | null;
         };
         Returns: Database["public"]["Tables"]["companies"]["Row"];
-      };
-      // Sets a customer's ranking score, or clears it when null (0067).
-      set_customer_score: {
-        Args: {
-          p_customer_company_id: string;
-          p_general_score: number | null;
-        };
-        Returns: void;
       };
       // Deletes a customer that never ordered, with its never-placed orders and
       // the messages addressed to it (0098).

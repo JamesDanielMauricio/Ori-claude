@@ -694,6 +694,13 @@
       "when": 1792616400000,
       "tag": "0098_delete-customer",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1792702800000,
+      "tag": "0099_drop-customer-rating",
+      "breakpoints": true
     }
   ]
 }

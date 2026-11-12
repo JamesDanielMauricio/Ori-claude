@@ -55,9 +55,8 @@ Environment: `BUBBLE_API_TOKEN` (Bubble editor → Settings → API → API Toke
 - The lock — `public.bubble_import_lock` (migration 0084). Once Ori is the live system, run
   `insert into public.bubble_import_lock (locked_by) values ('<name>, after the cutover');` on that
   database. The importer then refuses to run there at all, dry run included.
-- A repeat import keeps each company's id (from the previous import's `_bubble_migration_id_map`)
-  and puts back the customer scores entered in this app (`customer_scores`). Since 2026-11-12 it
-  keeps each product family's and product variety's id the same way. A variety's id is its product
+- A repeat import keeps each company's id (from the previous import's `_bubble_migration_id_map`).
+  Since 2026-11-12 it keeps each product family's and product variety's id the same way. A variety's id is its product
   code (the products screen's "קוד מוצר", which staff copy into picking upload files), so a code
   copied before the final import still names the same product after it. A product added in Ori
   itself is not in Bubble, so an import removes it, and its code with it.

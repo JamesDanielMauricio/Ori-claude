@@ -40,10 +40,9 @@
 //
 // A repeat import keeps the id of each company, product family and product
 // variety it imported before (read from the previous import's
-// _bubble_migration_id_map) and the customer scores entered in this app
-// (customer_scores), which Bubble does not have (workbook Task 20). A
-// variety's id is its product code, which staff copy from the products screen
-// into picking upload files, so a code stays valid through the final import.
+// _bubble_migration_id_map; workbook Task 20). A variety's id is its product
+// code, which staff copy from the products screen into picking upload files,
+// so a code stays valid through the final import.
 //
 // Each rule for turning Bubble records into rows is explained where it is
 // applied; docs/DATA_MIGRATION_PLAN.md records the decisions behind them.
@@ -562,8 +561,7 @@ export function planReference(data: ExportData, report: Report, previousIds: Pre
     }
 
     const pickupTime = text(company, "Default Pickup Time");
-    // A company imported before keeps its id, so what this app adds to it
-    // (customer_scores) survives a repeat import (Task 20).
+    // A company imported before keeps its id (Task 20).
     const id = previousIds.company.get(company._id) ?? randomUUID();
     companies.push({
       id,
@@ -1682,12 +1680,6 @@ const WIPED_TABLES = [
   "profile_blocked_products",
   "grower_products",
   "profiles",
-  // Not in Bubble — entered in this app only. Listed so it is in the backup
-  // and in the deleted-rows count: `delete from companies` below would take
-  // it anyway, through the foreign key, and without a trace. Since Task 20 the
-  // scores are read first and put back for every customer imported again
-  // (companies keep their ids across imports).
-  "customer_scores",
   "companies",
   "product_varieties",
   "product_families",
@@ -2089,12 +2081,6 @@ async function main() {
         await tx`insert into auth.users (id, email) select id, email from jsonb_to_recordset(${tx.json(standIns)}) as x(id uuid, email text)`;
       }
 
-      // Customer scores are this app's own data (Task 20): read them before
-      // the wipe, put them back below for the customers imported again.
-      const keptScores = await tx<{ customer_company_id: string; general_score: string; created_at: Date; updated_at: Date }[]>`
-        select customer_company_id::text as customer_company_id, general_score::text as general_score, created_at, updated_at from public.customer_scores
-      `;
-
       // ---- replace: delete the current business data, children first
       console.log("\nDeleting current data:");
       const keepLoginIds = [...loginIds.values()];
@@ -2146,12 +2132,6 @@ async function main() {
           where companies.id = link.id
         `;
       }
-      const reimportedCustomers = new Set(reference.companies.filter((company) => company.type === "customer").map((company) => String(company.id)));
-      const scoresBack = keptScores.filter((score) => reimportedCustomers.has(score.customer_company_id));
-      if (scoresBack.length > 0) {
-        await tx`insert into public.customer_scores ${tx(scoresBack as unknown as SqlRow[], "customer_company_id", "general_score", "created_at", "updated_at")}`;
-      }
-      console.log(`Customer scores kept: ${scoresBack.length} of ${keptScores.length}`);
       await insertRows(tx, "profiles", plan.rows.profiles);
       if (contactRows.length > 0) {
         await tx`

@@ -4,7 +4,6 @@ import {
   assignLots,
   dealInRounds,
   learnFrom,
-  ownerPriority,
   productScore,
   proposeArrangement,
   type DayToPropose,
@@ -50,17 +49,6 @@ describe("productScore", () => {
     [0, 1],
   ])("follows the owner's share bands: %s of the days is a %s", (share, score) => {
     expect(productScore(share)).toBe(score);
-  });
-});
-
-describe("ownerPriority", () => {
-  it.each([
-    [4.0, 5, 4.5],
-    [3.4, 3, 3.2],
-    [3.2, 2, 2.6],
-    [3.85, 1, 2.425],
-  ])("is half the general score and half the product score (%s, %s)", (general, product, want) => {
-    expect(ownerPriority(general, product)).toBeCloseTo(want, 10);
   });
 });
 
@@ -114,11 +102,11 @@ describe("dealInRounds", () => {
 
   it("compares a rank left to right", () => {
     const granted = dealInRounds(1, [
-      { customerId: "דירוג גבוה", quantity: 1, rank: [2, 4], orderedAt: at },
+      { customerId: "הרגל חזק", quantity: 1, rank: [2, 4], orderedAt: at },
       { customerId: "קיבל הרבה", quantity: 1, rank: [5, 2], orderedAt: at },
     ]);
 
-    expect(granted).toEqual({ "דירוג גבוה": 0, "קיבל הרבה": 1 });
+    expect(granted).toEqual({ "הרגל חזק": 0, "קיבל הרבה": 1 });
   });
 
   it("reads a rank that is shorter than another as zeros beyond its end", () => {
@@ -171,19 +159,21 @@ describe("dealInRounds", () => {
   });
 
   it("matches the owner's acceptance case: peach 1881, five ordered, three picked", () => {
-    // General score and "days with peach out of 20", copied from his worked example.
-    const facts: Array<[string, number, number, number]> = [
-      ["ירק הגליל", 2, 4.0, 13],
-      ["גבאי", 1, 3.4, 7],
-      ["כחלון", 1, 3.2, 2],
-      ["עטרה", 1, 3.85, 0],
+    // "Days with peach out of 20", copied from his worked example. Its general
+    // scores went with the customer rating (migration 0097); they never
+    // changed the order here.
+    const facts: Array<[string, number, number]> = [
+      ["ירק הגליל", 2, 13],
+      ["גבאי", 1, 7],
+      ["כחלון", 1, 2],
+      ["עטרה", 1, 0],
     ];
     const granted = dealInRounds(
       3,
-      facts.map(([customerId, quantity, general, days]) => ({
+      facts.map(([customerId, quantity, days]) => ({
         customerId,
         quantity,
-        rank: [ownerPriority(general, productScore(days / 20))],
+        rank: [productScore(days / 20)],
         orderedAt: at,
       })),
     );
@@ -402,16 +392,13 @@ function propose(
   today: DayToPropose,
   {
     history = [],
-    scores = {},
     since = {},
   }: {
     history?: HistoryDay[];
-    scores?: Record<string, number>;
     since?: Record<string, string>;
   } = {},
 ) {
   const customers = new Set([
-    ...Object.keys(scores),
     ...Object.keys(since),
     ...today.orders.map((order) => order.customerId),
   ]);
@@ -420,10 +407,7 @@ function propose(
     learned: learnFrom(history, FAMILY_OF),
     familyOf: FAMILY_OF,
     customers: Object.fromEntries(
-      [...customers].map((customerId) => [
-        customerId,
-        { generalScore: scores[customerId] ?? null, since: since[customerId] ?? VETERAN },
-      ]),
+      [...customers].map((customerId) => [customerId, { since: since[customerId] ?? VETERAN }]),
     ),
   });
 }
@@ -456,57 +440,29 @@ describe("proposeArrangement — who gets a product that runs short", () => {
     expect(propose(today)).toEqual([]);
   });
 
-  it("ranks by the owner's general score and family habit when history says nothing else", () => {
-    // "קבוע" orders eggplant on 65% of the days it sells: product score 5, priority 4.2.
-    // "גבוה" has no habit: 0.5 × 4.0 + 0.5 × 1 = 2.5.
+  it("ranks by family habit when history says nothing else", () => {
+    // "קבוע" orders eggplant on 2 of the 3 days it sells: product score 5.
+    // "מזדמן" has no habit: 1.
     const history = ["2026-09-01", "2026-09-02", "2026-09-03"].map((date, index) =>
       day(date, { orders: { "חציל בלאדי": index < 2 ? { קבוע: 1 } : { אחר: 1 } } }),
     );
     const lines = propose(
       oneLotDay(1, [
-        ["גבוה", 1],
+        ["מזדמן", 1],
         ["קבוע", 1],
       ]),
-      {
-        history,
-        scores: { גבוה: 4.0, קבוע: 3.4 },
-      },
+      { history },
     );
 
     expect(given(lines)).toEqual({ קבוע: 1 });
   });
 
-  it("treats a customer with no score as score one", () => {
-    const lines = propose(
-      {
-        ...oneLotDay(1, []),
-        orders: [
-          {
-            customerId: "לא מדורג",
-            varietyId: PRODUCT,
-            quantity: 1,
-            orderedAt: "2026-10-20T04:00:00Z",
-          },
-          {
-            customerId: "מדורג",
-            varietyId: PRODUCT,
-            quantity: 1,
-            orderedAt: "2026-10-20T06:00:00Z",
-          },
-        ],
-      },
-      { scores: { מדורג: 3.0 } },
-    );
-
-    expect(given(lines)).toEqual({ מדורג: 1 });
-  });
-
-  it("gives a customer of under 30 days their general score as their product score", () => {
-    // "ותיק" has the eggplant habit at 50% of days: product score 4, priority 3.5.
-    // "חדש" joined on 20.09: 0.5 × 4.0 + 0.5 × 4.0 = 4.0.
+  it("gives a customer of under 30 days the lowest product score: they have no habits yet", () => {
+    // "חדש" ordered eggplant on both days it sold and "ותיק" on one: a 5 and
+    // a 4. But "חדש" joined on 20.09, 14 days before the day, so is given 1.
     const history = [
-      day("2026-09-01", { orders: { "חציל בלאדי": { ותיק: 1 } } }),
-      day("2026-09-02", { orders: { "חציל בלאדי": { אחר: 1 } } }),
+      day("2026-09-21", { orders: { "חציל בלאדי": { חדש: 1, ותיק: 1 } } }),
+      day("2026-09-22", { orders: { "חציל בלאדי": { חדש: 1 } } }),
     ];
     const lines = propose(
       {
@@ -516,34 +472,18 @@ describe("proposeArrangement — who gets a product that runs short", () => {
         ]),
         date: "2026-10-04",
       },
-      { history, scores: { חדש: 4.0, ותיק: 3.0 }, since: { חדש: "2026-09-20" } },
+      { history, since: { חדש: "2026-09-20" } },
     );
 
-    expect(given(lines)).toEqual({ חדש: 1 });
+    expect(given(lines)).toEqual({ ותיק: 1 });
   });
 
-  it("serves the customer who usually gets this exact variety ahead of a higher score", () => {
-    const history = [
-      ...["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06"].map(
-        (date) => day(date, { recorded: { [PRODUCT]: { קבוע: 1 } } }),
-      ),
-      day("2026-09-07", { recorded: { [PRODUCT]: { "דירוג גבוה": 1 } } }),
-    ];
-    const lines = propose(
-      oneLotDay(1, [
-        ["דירוג גבוה", 1],
-        ["קבוע", 1],
-      ]),
-      {
-        history,
-        scores: { "דירוג גבוה": 4.5, קבוע: 3.0 },
-      },
+  it("puts the stronger family habit ahead of the earlier order", () => {
+    // "גבוה" ordered eggplant on both days it sold; "נמוך" never has, but
+    // orders first today.
+    const history = ["2026-09-01", "2026-09-02"].map((date) =>
+      day(date, { orders: { "חציל בלאדי": { גבוה: 1 } } }),
     );
-
-    expect(given(lines)).toEqual({ קבוע: 1 });
-  });
-
-  it("falls back to the owner's priority when history is equal", () => {
     const lines = propose(
       {
         ...oneLotDay(1, []),
@@ -562,7 +502,7 @@ describe("proposeArrangement — who gets a product that runs short", () => {
           },
         ],
       },
-      { scores: { גבוה: 4.0, נמוך: 2.0 } },
+      { history },
     );
 
     expect(given(lines)).toEqual({ גבוה: 1 });
@@ -572,7 +512,6 @@ describe("proposeArrangement — who gets a product that runs short", () => {
 // Continuous learning, as the owner described it in the meeting of 2026-10-03:
 // "if I change it the same way twice, the third time propose what I did".
 describe("proposeArrangement — learning from the owner's corrections", () => {
-  const GENERAL = { אסף: 4.5, פשה: 3.0, כבביה: 3.0, "א.צ": 3.0, חדש: 3.0 };
   const ASAF_ALWAYS = [
     shortDay("2026-09-01", "אסף"),
     shortDay("2026-09-02", "אסף"),
@@ -586,7 +525,7 @@ describe("proposeArrangement — learning from the owner's corrections", () => {
           1,
           ordered.map((name) => [name, 1]),
         ),
-        { history, scores: GENERAL },
+        { history },
       ),
     );
   }
@@ -972,9 +911,9 @@ describe("proposeArrangement — rules pinned after review", () => {
     expect(given(propose(today))).toEqual({ X: 1 });
   });
 
-  it("ranks how often a customer got this exact product above the owner's priority", () => {
+  it("ranks how often a customer got this exact product above the family habit", () => {
     // A got this product 3 days; B got its sibling 6 days, which makes B's
-    // family habit and priority the higher (4.5 against 2.5).
+    // family habit the higher (5 against 3).
     const history = [
       ...["2026-09-01", "2026-09-02", "2026-09-03"].map((date) =>
         day(date, { recorded: { [PRODUCT]: { A: 1 } } }),
@@ -988,17 +927,14 @@ describe("proposeArrangement — rules pinned after review", () => {
         ["A", 1],
         ["B", 1],
       ]),
-      {
-        history,
-        scores: { A: 2.0, B: 4.0 },
-      },
+      { history },
     );
 
     expect(given(lines)).toEqual({ A: 1 });
   });
 
   it("weighs the last three shortages, not the last two", () => {
-    // Last two: one each, a tie that the scores would settle for פשה.
+    // Last two: one each, a tie that the earlier order would settle for פשה.
     // Last three: אסף +1, פשה −1.
     const history = [
       shortDay("2026-09-01", "פשה"),
@@ -1007,14 +943,24 @@ describe("proposeArrangement — rules pinned after review", () => {
       shortDay("2026-09-04", "פשה"),
     ];
     const lines = propose(
-      oneLotDay(1, [
-        ["אסף", 1],
-        ["פשה", 1],
-      ]),
       {
-        history,
-        scores: { אסף: 3.0, פשה: 4.5 },
+        ...oneLotDay(1, []),
+        orders: [
+          {
+            customerId: "פשה",
+            varietyId: PRODUCT,
+            quantity: 1,
+            orderedAt: "2026-10-20T04:00:00Z",
+          },
+          {
+            customerId: "אסף",
+            varietyId: PRODUCT,
+            quantity: 1,
+            orderedAt: "2026-10-20T06:00:00Z",
+          },
+        ],
       },
+      { history },
     );
 
     expect(given(lines)).toEqual({ אסף: 1 });
@@ -1051,32 +997,6 @@ describe("proposeArrangement — rules pinned after review", () => {
     expect(shortages).toEqual({});
   });
 
-  it("scores a customer with no score exactly as one scored 1", () => {
-    // Equal in every other way, so the earlier order settles it.
-    const lines = propose(
-      {
-        ...oneLotDay(1, []),
-        orders: [
-          {
-            customerId: "לא מדורג",
-            varietyId: PRODUCT,
-            quantity: 1,
-            orderedAt: "2026-10-20T04:00:00Z",
-          },
-          {
-            customerId: "מדורג 1",
-            varietyId: PRODUCT,
-            quantity: 1,
-            orderedAt: "2026-10-20T06:00:00Z",
-          },
-        ],
-      },
-      { scores: { "מדורג 1": 1.0 } },
-    );
-
-    expect(given(lines)).toEqual({ "לא מדורג": 1 });
-  });
-
   it("deals the half pallet a lot has over too, to the next in line (Task 35)", () => {
     const lines = propose(
       oneLotDay(1.5, [
@@ -1091,10 +1011,11 @@ describe("proposeArrangement — rules pinned after review", () => {
   });
 
   it("counts a customer as new for fewer than 30 days, and not when the day they joined is unknown", () => {
-    // New, a 4.0 is ranked 4.0; otherwise, with no habit, 2.5 — below "ותיק"'s 3.5.
+    // "חדש" ordered eggplant on both days it sold and "ותיק" on one: a 5 and
+    // a 4 — unless "חדש" is new, and so given 1.
     const history = [
-      day("2026-09-01", { orders: { "חציל בלאדי": { ותיק: 1 } } }),
-      day("2026-09-02", { orders: { "חציל בלאדי": { אחר: 1 } } }),
+      day("2026-09-10", { orders: { "חציל בלאדי": { חדש: 1, ותיק: 1 } } }),
+      day("2026-09-11", { orders: { "חציל בלאדי": { חדש: 1 } } }),
     ];
     const winner = (since: string | null) =>
       given(
@@ -1109,15 +1030,15 @@ describe("proposeArrangement — rules pinned after review", () => {
           learned: learnFrom(history, FAMILY_OF),
           familyOf: FAMILY_OF,
           customers: {
-            חדש: { generalScore: 4.0, since },
-            ותיק: { generalScore: 3.0, since: VETERAN },
+            חדש: { since },
+            ותיק: { since: VETERAN },
           },
         }),
       );
 
-    expect(winner("2026-09-05")).toEqual({ חדש: 1 }); // 29 days
-    expect(winner("2026-09-04")).toEqual({ ותיק: 1 }); // 30 days
-    expect(winner(null)).toEqual({ ותיק: 1 });
+    expect(winner("2026-09-05")).toEqual({ ותיק: 1 }); // 29 days
+    expect(winner("2026-09-04")).toEqual({ חדש: 1 }); // 30 days
+    expect(winner(null)).toEqual({ חדש: 1 });
   });
 
   it("puts an order with no time after every order that has one", () => {
@@ -1475,7 +1396,6 @@ describe("proposeArrangement — the stock, the ranking, and a customer shut out
         })),
         arranged: [],
       },
-      { scores: { א: 2.0, ב: 3.0, ג: 4.0 } },
     );
 
     expect(given(lines)).toEqual({ א: 1, ב: 1, ג: 1 });
@@ -1487,37 +1407,10 @@ describe("proposeArrangement — the stock, the ranking, and a customer shut out
     expect(offLot("B")).toBe(1.5);
   });
 
-  it("does not rank a customer with no score above one scored 1", () => {
-    // The mirror of the case where the unscored customer ordered first: here
-    // the scored one did, and the tie goes to him.
-    const lines = propose(
-      {
-        ...oneLotDay(1, []),
-        orders: [
-          {
-            customerId: "מדורג 1",
-            varietyId: PRODUCT,
-            quantity: 1,
-            orderedAt: "2026-10-20T04:00:00Z",
-          },
-          {
-            customerId: "לא מדורג",
-            varietyId: PRODUCT,
-            quantity: 1,
-            orderedAt: "2026-10-20T06:00:00Z",
-          },
-        ],
-      },
-      { scores: { "מדורג 1": 1.0 } },
-    );
-
-    expect(given(lines)).toEqual({ "מדורג 1": 1 });
-  });
-
   it("takes a product that is in no family for a family of its own when ranking", () => {
     const MELON = "מלון";
-    // "קבוע" orders melon on 2 of its 3 days: product score 5, priority 4.2,
-    // above "גבוה"'s 0.5 × 4.0 + 0.5 × 1 = 2.5.
+    // "קבוע" orders melon on 2 of its 3 days: product score 5, above
+    // "מזדמן"'s 1.
     const history = ["2026-09-01", "2026-09-02", "2026-09-03"].map((date, index) =>
       day(date, { orders: { [MELON]: index < 2 ? { קבוע: 1 } : { אחר: 1 } } }),
     );
@@ -1525,7 +1418,7 @@ describe("proposeArrangement — the stock, the ranking, and a customer shut out
       {
         date: "2026-10-20",
         lots: [{ growerId: "מגדל", varietyId: MELON, available: 1 }],
-        orders: ["גבוה", "קבוע"].map((customerId) => ({
+        orders: ["מזדמן", "קבוע"].map((customerId) => ({
           customerId,
           varietyId: MELON,
           quantity: 1,
@@ -1533,7 +1426,7 @@ describe("proposeArrangement — the stock, the ranking, and a customer shut out
         })),
         arranged: [],
       },
-      { history, scores: { גבוה: 4.0, קבוע: 3.4 } },
+      { history },
     );
 
     expect(lines).toEqual([
@@ -1558,8 +1451,14 @@ describe("proposeArrangement — the stock, the ranking, and a customer shut out
       ],
       arranged: [{ growerId: "B", varietyId: PRODUCT, customerId: "X", quantity: 1 }],
     };
+    // Ranked by family habit: Y ordered eggplant on both days it sold (5), Z
+    // on one (4), X on neither (1).
+    const history = [
+      day("2026-09-01", { orders: { "חציל בלאדי": { Y: 1, Z: 1 } } }),
+      day("2026-09-02", { orders: { "חציל בלאדי": { Y: 1 } } }),
+    ];
 
-    expect(given(propose(today, { scores: { X: 1.0, Y: 4.0, Z: 3.0 } }))).toEqual({ Y: 1, Z: 1 });
+    expect(given(propose(today, { history }))).toEqual({ Y: 1, Z: 1 });
   });
 });
 
