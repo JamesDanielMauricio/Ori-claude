@@ -147,7 +147,18 @@ test.describe("Backoffice — arrangement workspace", () => {
     await page.goto("/backoffice/arrangement");
     await expect(page.getByText("בחר מוצר מכרטיס של מגדל כדי לסדר אותו ללקוחות.")).toBeVisible();
 
+    // --- The grower filter survives choosing a product (James, 2026-11-13) ---
+    // The product on the customer's card narrows the growers to those who
+    // brought it. Choosing it off one of them must keep that filter, so the
+    // distributor can go on to the next grower without filtering again; only
+    // "נקה סינון" (below) clears it. The variety name is unique to this test,
+    // so this is this fixture's own button.
+    await page.getByRole("button", { name: `סנן מגדלים לפי ${grower.varietyName}` }).click();
+    const growerFilter = page.getByText("מציג מגדלים עם");
+    await expect(growerFilter).toContainText(grower.varietyName);
+
     await selectGrowerProduct(page, growerName);
+    await expect(growerFilter).toContainText(grower.varietyName);
 
     // Each figure is a named `role="group"` wrapping its own label and
     // numeral, which is what makes them addressable at all — the numbers
@@ -161,6 +172,11 @@ test.describe("Backoffice — arrangement workspace", () => {
     // The dashed rule, with the customer who ordered above it and the one
     // who did not below.
     await expect(page.getByText("לא הזמינו את המוצר הנבחר")).toBeVisible();
+
+    // Clearing the filter leaves the chosen product chosen.
+    await page.getByRole("button", { name: "נקה סינון" }).click();
+    await expect(growerFilter).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "נקטף" })).toContainText("10");
 
     // --- The arrangement matrix (סידור לפי מוצרים) ---
     // Products down the side, customers across the top, reached from
