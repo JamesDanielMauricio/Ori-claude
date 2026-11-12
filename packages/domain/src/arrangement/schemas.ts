@@ -1,4 +1,5 @@
 import { isPalletQuantity, PALLET_QUANTITY_MESSAGE, roundPallets } from "@ori/shared/pallets";
+import { PRICE_TYPES } from "@ori/shared/price-type";
 import { z } from "zod";
 
 // One schema + `toRpcArgs` mapper per arrangement Postgres function
@@ -18,12 +19,17 @@ const arrangedPalletsSchema = z
   .refine(isPalletQuantity, PALLET_QUANTITY_MESSAGE)
   .transform(roundPallets);
 
+// A record's own price type (migration 0100): one of Bubble's Price Types.
+// Left out or null: none of its own — close_arrangement then gives it its
+// product's.
+const recordPriceTypeSchema = z.enum(PRICE_TYPES).nullable().optional();
+
 export const createArrangementRecordInputSchema = z.object({
   dailyPickProductId: z.string().uuid(),
   dailyOrderProductId: z.string().uuid(),
   quantityPallets: arrangedPalletsSchema,
   price: z.number().nonnegative().nullable().optional(),
-  priceType: z.string().nullable().optional(),
+  priceType: recordPriceTypeSchema,
 });
 export type CreateArrangementRecordInput = z.infer<typeof createArrangementRecordInputSchema>;
 
@@ -41,7 +47,7 @@ export const updateArrangementRecordInputSchema = z.object({
   id: z.string().uuid(),
   quantityPallets: arrangedPalletsSchema,
   price: z.number().nonnegative().nullable().optional(),
-  priceType: z.string().nullable().optional(),
+  priceType: recordPriceTypeSchema,
 });
 export type UpdateArrangementRecordInput = z.infer<typeof updateArrangementRecordInputSchema>;
 
@@ -67,7 +73,7 @@ export const arrangeToCustomerInputSchema = z.object({
   customerCompanyId: z.string().uuid(),
   quantityPallets: arrangedPalletsSchema,
   price: z.number().nonnegative().nullable().optional(),
-  priceType: z.string().nullable().optional(),
+  priceType: recordPriceTypeSchema,
 });
 export type ArrangeToCustomerInput = z.infer<typeof arrangeToCustomerInputSchema>;
 

@@ -5,7 +5,49 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-12 (latest) — The customer rating is removed (`0099`)
+## 2026-11-12 (latest) — Price types are Bubble's closed list (`0100`)
+
+James's call, 2026-11-12: the price type is Bubble's "Price Types" option set, not free text.
+`product_varieties.price_type` and `arrangement_records.price_type` become the enum
+`public.price_type`, stored as codes, in Bubble's order:
+
+| Code | Shown as | Its price |
+| --- | --- | --- |
+| `record` | תקליט | its name |
+| `record_minus_0_5` … `record_minus_2` | תקליט - ₪0.5 … תקליט - ₪2 | its name |
+| `record_plus_0_5` … `record_plus_2` | תקליט + ₪0.5 … תקליט + ₪2 | its name |
+| `fixed` | מספר | the price |
+| `range` | טווח | the range from–to |
+
+- **The type decides which price is shown**, as in Bubble (its products table: "range" shows
+  from - to, "fixed_price" the price, any other type its Display). The shop, the products screen
+  and the customer's closing message all follow it. With no type, a row shows the numbers it
+  has, a fixed price first (0083's rule). The list, the Hebrew names and the rule are in
+  `packages/shared/src/price-type.ts`; `public.price_type_label` repeats the names for the message,
+  and a test keeps the two the same.
+- **Saving.** The screens pick the type from a list, and show only the boxes it uses: מספר one
+  price, טווח from and to, a תקליט type none. A save sends only those numbers, so a number hidden
+  by the type is not stored behind it. מספר needs its price; טווח both ends, from no higher than
+  to. The database functions take the type as text as before (same signatures and grants) and
+  refuse anything that is not a code (`22P02`).
+- **Closing the day.** `populate_arrangement_prices` prices a record by its type (its own, else its
+  product's): מספר copies the price, טווח the range, a תקליט type only the type. A number the
+  product's type hides is never copied. The customer's message line now carries `priceType`, under
+  the same price permission as the price, and a תקליט line reads "… — תקליט + ₪1".
+- **The stored values.** A code stays itself and a Bubble caption becomes its type. Anything else,
+  and no value, becomes what its numbers say: a price makes it מספר, both ends of a range טווח.
+  The live project held only Bubble's captions (checked 2026-11-12), and records priced before
+  there were types become מספר. No number is changed. A price left on a תקליט product stays
+  stored and unseen, as in Bubble, until the product is next saved. The Bubble importer maps
+  captions the same way.
+- **Rollout.** Either order works. The web build reads Bubble's captions as well as the codes, and
+  sends only codes, which the old text column accepts. James applies `0100` on production. Safe to
+  run again.
+- Supersedes the 2026-07-10 entry's note that `price_type` stays free text.
+
+---
+
+## 2026-11-12 — The customer rating is removed (`0099`)
 
 James's call, 2026-11-12: Bubble never had a customer rating, so Ori does not either. `0099` drops
 `customer_scores` and `set_customer_score` (0074), and every rating entered with them. The

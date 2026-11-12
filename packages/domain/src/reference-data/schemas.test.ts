@@ -1,3 +1,9 @@
+import {
+  PRICE_MISSING_MESSAGE,
+  PRICE_RANGE_MISSING_MESSAGE,
+  PRICE_RANGE_ORDER_MESSAGE,
+  PRICE_TYPES,
+} from "@ori/shared/price-type";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -148,5 +154,64 @@ describe("save_product args: the variety picture (migration 0094)", () => {
     expect(argsFor({ imageUrl: " https://x.test/a.jpg " }).p_image_url).toBe("https://x.test/a.jpg");
     expect(argsFor({ imageUrl: "" }).p_image_url).toBe("");
     expect("p_image_url" in argsFor({})).toBe(false);
+  });
+});
+
+// Price types (migration 0100): Bubble's list, and the numbers each one uses.
+describe("save_product args: the price type (migration 0100)", () => {
+  const product = {
+    id: null,
+    familyId: "00000000-0000-4000-8000-000000000201",
+    name: "קוונדיש",
+    sizes: null,
+    packType: null,
+    price: null,
+    priceRangeFrom: null,
+    priceRangeTo: null,
+    priceType: null,
+    noOverbooking: 0,
+    highlightPriceFluctuations: false,
+    isSeasonalAvailable: true,
+    numberOfOrdersPerCustomer: null,
+    expectedVersion: null,
+  };
+  const all = { price: 8, priceRangeFrom: 10, priceRangeTo: 12 };
+  const parse = (extra: Record<string, unknown>) => saveProductInputSchema.safeParse({ ...product, ...extra });
+  const argsFor = (extra: Record<string, unknown>) =>
+    toSaveProductRpcArgs(saveProductInputSchema.parse({ ...product, ...extra }));
+  const messageOf = (extra: Record<string, unknown>) => {
+    const result = parse(extra);
+    return result.success ? null : result.error.issues[0]?.message;
+  };
+
+  it("accepts every one of Bubble's types, as its code, and no type", () => {
+    for (const priceType of PRICE_TYPES) {
+      expect(parse({ ...all, priceType }).success, priceType).toBe(true);
+    }
+    expect(parse({ priceType: null }).success).toBe(true);
+  });
+
+  it("refuses a type that is not on the list, Bubble's caption included", () => {
+    for (const priceType of ["לפי גודל", "מספר", "Fixed", ""]) {
+      expect(parse({ ...all, priceType }).success, priceType).toBe(false);
+    }
+  });
+
+  it("asks מספר for a price, and טווח for both ends, from no higher than to", () => {
+    expect(messageOf({ priceType: "fixed" })).toBe(PRICE_MISSING_MESSAGE);
+    expect(messageOf({ priceType: "range", priceRangeFrom: 10 })).toBe(PRICE_RANGE_MISSING_MESSAGE);
+    expect(messageOf({ priceType: "range", priceRangeFrom: 12, priceRangeTo: 10 })).toBe(PRICE_RANGE_ORDER_MESSAGE);
+    expect(messageOf({ priceType: "record_plus_1" })).toBeNull();
+  });
+
+  it("sends only the numbers the type shows", () => {
+    const sent = (priceType: string | null) => {
+      const args = argsFor({ ...all, priceType });
+      return [args.p_price, args.p_price_range_from, args.p_price_range_to, args.p_price_type];
+    };
+    expect(sent("fixed")).toEqual([8, null, null, "fixed"]);
+    expect(sent("range")).toEqual([null, 10, 12, "range"]);
+    expect(sent("record_minus_0_5")).toEqual([null, null, null, "record_minus_0_5"]);
+    expect(sent(null)).toEqual([null, null, null, null]);
   });
 });

@@ -1,9 +1,10 @@
-import { numeric, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { numeric, pgTable, timestamp, uuid } from "drizzle-orm/pg-core";
 
 import { companies } from "./company";
 import { dailyArrangements } from "./daily-arrangement";
 import { dailyOrderProducts } from "./daily-order-product";
 import { dailyPickProducts } from "./daily-pick-product";
+import { priceTypeEnum } from "./enums";
 
 // A single grower-supply-to-customer-demand match: `quantity_pallets` of
 // one `daily_pick_product` line arranged to one `daily_order_product`
@@ -38,11 +39,11 @@ export const arrangementRecords = pgTable("arrangement_records", {
   // empty — a range is never turned into one number (D8, migration 0083).
   priceRangeFrom: numeric("price_range_from", { precision: 10, scale: 2 }),
   priceRangeTo: numeric("price_range_to", { precision: 10, scale: 2 }),
-  // Snapshot of which price type produced `price` — populated alongside
-  // it by close_arrangement's price-population step (or by an explicit
-  // override at create/update time). Free text, matching
-  // product_varieties.priceType (R1 — the PRD never gives a closed list).
-  priceType: text("price_type"),
+  // The record's price type (migration 0100, the same list as
+  // product_varieties.priceType): set on the record by the distributor, or
+  // copied from its product by close_arrangement's price-population step.
+  // It decides what the closing message shows.
+  priceType: priceTypeEnum("price_type"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

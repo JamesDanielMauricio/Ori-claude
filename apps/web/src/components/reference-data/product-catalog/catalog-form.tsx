@@ -1,3 +1,5 @@
+import { priceTypeOf, type PriceType, type Prices } from "@ori/shared/price-type";
+
 import { toInputText } from "@/lib/number-field";
 import type { ProduceCategory } from "@/lib/produce-categories";
 import type { ProductFamily, ProductVariety } from "@/lib/queries/reference-data";
@@ -15,7 +17,9 @@ export interface FormState {
   price: string;
   priceRangeFrom: string;
   priceRangeTo: string;
-  priceType: string;
+  // "" = no price type. The type decides which of the three boxes above the
+  // row shows and saves (migration 0100).
+  priceType: PriceType | "";
   noOverbooking: string;
   highlightPriceFluctuations: boolean;
   isSeasonalAvailable: boolean;
@@ -178,6 +182,17 @@ export function blankFamily(): ProductFamily {
   return { id: NEW_FAMILY_ID, name: "", category: null, image_url: null };
 }
 
+// The three price boxes as numbers, an empty box as null — what a save
+// validates against the price type (saveProductInputSchema).
+export function formPrices(form: FormState): Prices {
+  const toNumber = (text: string) => (text === "" ? null : Number(text));
+  return {
+    price: toNumber(form.price),
+    priceRangeFrom: toNumber(form.priceRangeFrom),
+    priceRangeTo: toNumber(form.priceRangeTo),
+  };
+}
+
 // The form holds text (see FormState); the numeric columns arrive as
 // numbers. Converting here also keeps both sides of `hasChanges` the same
 // shape — a number baseline against a typed string read as "changed" even
@@ -191,7 +206,14 @@ export function toFormState(row: ProductVariety): FormState {
     price: toInputText(row.price),
     priceRangeFrom: toInputText(row.price_range_from),
     priceRangeTo: toInputText(row.price_range_to),
-    priceType: row.price_type ?? "",
+    // A code — or Bubble's caption, or none but a price, on a row stored
+    // before migration 0100 (priceTypeOf reads it as the migration does).
+    priceType:
+      priceTypeOf(row.price_type, {
+        price: row.price,
+        priceRangeFrom: row.price_range_from,
+        priceRangeTo: row.price_range_to,
+      }) ?? "",
     noOverbooking: String(row.no_overbooking),
     highlightPriceFluctuations: row.highlight_price_fluctuations,
     isSeasonalAvailable: row.is_seasonal_available,

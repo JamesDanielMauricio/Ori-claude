@@ -28,6 +28,7 @@
 // distributor is trusting when they decide a customer is covered — can be
 // read and tested on its own, exactly as board-data.ts is.
 import { isPalletQuantity, roundPallets } from "@ori/shared/pallets";
+import { parsePriceType } from "@ori/shared/price-type";
 
 import { formatVarietyName } from "@/lib/variety-label";
 
@@ -340,7 +341,8 @@ export function buildMatrix({
       proposed: 0,
       recordId: record.id,
       price: record.price === null ? null : parsePallets(record.price),
-      priceType: record.price_type,
+      // As board-data.ts reads it: always a code (migration 0100).
+      priceType: parsePriceType(record.price_type),
     });
   }
 

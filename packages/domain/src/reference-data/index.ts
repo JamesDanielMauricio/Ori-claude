@@ -14,6 +14,7 @@
 export {
   companyStatusSchema,
   packTypeSchema,
+  priceTypeSchema,
   COMPANY_DETAIL_MAX_LENGTH,
   companyDetailsSchema,
   toCompanyDetailsRpcArgs,

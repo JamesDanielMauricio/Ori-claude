@@ -1,11 +1,13 @@
+import { PRICE_TYPES, pricesForType, priceTypeProblem } from "@ori/shared/price-type";
 import { userRoleSchema } from "@ori/shared/roles";
 import { z } from "zod";
 
-// Shared with the two real, PRD-confirmed enums (company_status, pack_type
-// — see packages/db/src/schema/enums.ts for why price_type/category are
-// left as free text instead of guessed enums).
+// The same values as the Postgres enums of the same names
+// (packages/db/src/schema/enums.ts).
 export const companyStatusSchema = z.enum(["active", "inactive"]);
 export const packTypeSchema = z.enum(["pallets", "crates"]);
+// Bubble's Price Types (migration 0100) — see packages/shared/src/price-type.ts.
+export const priceTypeSchema = z.enum(PRICE_TYPES);
 
 // One schema + one `toRpcArgs` mapper per `save_*` Postgres function
 // (packages/db/migrations/0007_reference-data-functions.sql). Validating
@@ -160,7 +162,10 @@ export const saveProductInputSchema = z.object({
   price: z.number().nullable(),
   priceRangeFrom: z.number().nullable(),
   priceRangeTo: z.number().nullable(),
-  priceType: z.string().nullable(),
+  // Which of the three numbers above is the price (migration 0100): מספר the
+  // price, טווח the range, a תקליט type none. Checked below; the numbers the
+  // type does not use are not sent (toSaveProductRpcArgs).
+  priceType: priceTypeSchema.nullable(),
   // Pallets are always whole units — never a fractional pallet.
   noOverbooking: z.number().int(),
   highlightPriceFluctuations: z.boolean(),
@@ -177,19 +182,26 @@ export const saveProductInputSchema = z.object({
   // stored picture; left out (undefined) it is not sent, and save_product
   // keeps what is stored.
   imageUrl: z.string().trim().optional(),
+}).superRefine((input, context) => {
+  // מספר needs its price; טווח both ends, the first no higher than the last.
+  const problem = priceTypeProblem(input.priceType, input);
+  if (problem) context.addIssue({ code: z.ZodIssueCode.custom, message: problem, path: ["priceType"] });
 });
 export type SaveProductInput = z.infer<typeof saveProductInputSchema>;
 
 export function toSaveProductRpcArgs(input: SaveProductInput) {
+  // Only the numbers the price type shows: a price typed and then hidden by
+  // switching to טווח or a תקליט type is not stored behind it.
+  const prices = pricesForType(input.priceType, input);
   return {
     p_id: input.id,
     p_family_id: input.familyId,
     p_name: input.name,
     p_sizes: input.sizes,
     p_pack_type: input.packType,
-    p_price: input.price,
-    p_price_range_from: input.priceRangeFrom,
-    p_price_range_to: input.priceRangeTo,
+    p_price: prices.price,
+    p_price_range_from: prices.priceRangeFrom,
+    p_price_range_to: prices.priceRangeTo,
     p_price_type: input.priceType,
     p_no_overbooking: input.noOverbooking,
     p_highlight_price_fluctuations: input.highlightPriceFluctuations,

@@ -1493,6 +1493,58 @@ describe("arrangement module", () => {
     expect(line).toMatchObject({ price: null, priceRangeFrom: 10, priceRangeTo: 12 });
   }, 30000);
 
+  it("close_arrangement (migration 0100) gives a record its product's תקליט price type and no number, and the customer's line carries the type", async () => {
+    const { day, grower, customer, pickProductId, orderProductId } =
+      await setUpDayWithSupplyAndDemand(5, 5);
+    // A price left on the product from before is hidden by its type, so it
+    // is not copied.
+    await db
+      .update(productVarieties)
+      .set({ priceType: "record_plus_1", price: "12.50", priceRangeFrom: null, priceRangeTo: null })
+      .where(eq(productVarieties.id, grower.varietyId));
+    await db.update(companies).set({ canSeeProductPrices: true }).where(eq(companies.id, customer.id));
+
+    const created = await admin.client.rpc(
+      "create_arrangement_record",
+      toCreateArrangementRecordRpcArgs({ dailyPickProductId: pickProductId, dailyOrderProductId: orderProductId, quantityPallets: 5 }),
+    );
+    expect(created.error).toBeNull();
+    await db
+      .update(dailyOrders)
+      .set({ status: "submitted" })
+      .where(and(eq(dailyOrders.tradingDayId, day.id), eq(dailyOrders.customerCompanyId, customer.id)));
+    expect((await admin.client.rpc("close_shop")).error).toBeNull();
+    expect((await admin.client.rpc("close_arrangement")).error).toBeNull();
+
+    const { data: record } = await admin.client
+      .from("arrangement_records")
+      .select("price, price_range_from, price_range_to, price_type")
+      .eq("id", created.data!.id)
+      .single();
+    expect(record).toEqual({ price: null, price_range_from: null, price_range_to: null, price_type: "record_plus_1" });
+
+    const { data: rows } = await admin.client
+      .from("notification_outbox")
+      .select("payload")
+      .eq("trading_day_id", day.id)
+      .eq("template_key", "close_arrangement_customer")
+      .eq("recipient_company_id", customer.id);
+    const [line] = (rows?.[0]?.payload as { lines: Array<Record<string, unknown>> }).lines;
+    expect(line).toMatchObject({ price: null, priceRangeFrom: null, priceRangeTo: null, priceType: "record_plus_1" });
+  }, 30000);
+
+  it("a record's price type is one of the codes (migration 0100): free text is refused", async () => {
+    const { pickProductId, orderProductId } = await setUpDayWithSupplyAndDemand(5, 5);
+    const refused = await admin.client.rpc("create_arrangement_record", {
+      p_daily_pick_product_id: pickProductId,
+      p_daily_order_product_id: orderProductId,
+      p_quantity_pallets: 1,
+      p_price: null,
+      p_price_type: "לפי גודל",
+    });
+    expect(refused.error?.code).toBe("22P02");
+  }, 30000);
+
   it("close_arrangement does not cc a transporter when the grower has none assigned", async () => {
     const { day, grower, customer, pickProductId, orderProductId } =
       await setUpDayWithSupplyAndDemand(5, 5);

@@ -24,6 +24,7 @@
 // isn't worth the workspace-graph change) — every arg shape below was
 // copied verbatim from the actual migration that defines each function
 // (cited inline), not guessed.
+import { priceTypeOf } from "@ori/shared/price-type";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
@@ -142,7 +143,14 @@ async function saveProduct(
     p_price: args.price ?? null,
     p_price_range_from: args.priceRangeFrom ?? null,
     p_price_range_to: args.priceRangeTo ?? null,
-    p_price_type: args.priceType ?? null,
+    // One of the codes (migration 0100); left out, what the numbers say.
+    p_price_type:
+      args.priceType ??
+      priceTypeOf(null, {
+        price: args.price ?? null,
+        priceRangeFrom: args.priceRangeFrom ?? null,
+        priceRangeTo: args.priceRangeTo ?? null,
+      }),
     p_no_overbooking: 0,
     p_highlight_price_fluctuations: false,
     p_is_seasonal_available: true,
@@ -285,7 +293,7 @@ async function main() {
     name: "מלון גליה",
     priceRangeFrom: 10,
     priceRangeTo: 14,
-    priceType: "לפי גודל",
+    priceType: "range",
   });
   console.log("  varieties:", {
     cabbage: cabbage.id,

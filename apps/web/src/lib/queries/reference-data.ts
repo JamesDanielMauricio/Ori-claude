@@ -41,6 +41,8 @@ export interface ProductVariety {
   price: number | null;
   price_range_from: number | null;
   price_range_to: number | null;
+  // A price type code (migration 0100), or Bubble's caption on a row stored
+  // before it — read with parsePriceType (@ori/shared/price-type).
   price_type: string | null;
   no_overbooking: number;
   highlight_price_fluctuations: boolean;

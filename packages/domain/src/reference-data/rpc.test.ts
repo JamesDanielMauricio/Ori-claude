@@ -662,4 +662,45 @@ describe("reference-data save functions", () => {
     const removed = await save(3, "");
     expect(removed.data).toMatchObject({ image_url: null, version: 4 });
   });
+
+  it("save_product (migration 0100): stores a price type as its code with only the numbers it shows, and refuses free text", async () => {
+    const family = await createTestProductFamily();
+    cleanupFns.push(() => deleteTestProductFamily(family.id));
+    const product = await createTestProductVariety({ familyId: family.id });
+    cleanupFns.push(() => deleteTestProductVariety(product.id));
+    const client = await signedInBackofficeClient();
+
+    const args = (expectedVersion: number, priceType: "range" | "record_minus_1") =>
+      toSaveProductRpcArgs({
+        id: product.id,
+        familyId: family.id,
+        name: product.name,
+        sizes: null,
+        packType: null,
+        price: 9,
+        priceRangeFrom: 10,
+        priceRangeTo: 12,
+        priceType,
+        noOverbooking: 0,
+        highlightPriceFluctuations: false,
+        isSeasonalAvailable: true,
+        numberOfOrdersPerCustomer: null,
+        expectedVersion,
+      });
+
+    const range = await client.rpc("save_product", args(1, "range"));
+    expect(range.error).toBeNull();
+    expect(range.data).toMatchObject({ price_type: "range", price: null, price_range_from: 10, price_range_to: 12, version: 2 });
+
+    const record = await client.rpc("save_product", args(2, "record_minus_1"));
+    expect(record.data).toMatchObject({ price_type: "record_minus_1", price: null, price_range_from: null, price_range_to: null, version: 3 });
+
+    // Bubble's caption, or any other text, is not a code.
+    for (const text of ["תקליט - ₪1", "לפי גודל"]) {
+      const refused = await client.rpc("save_product", { ...args(3, "range"), p_price_type: text });
+      expect(refused.error?.code, text).toBe("22P02");
+    }
+    const [stored] = await db.select({ priceType: productVarieties.priceType, version: productVarieties.version }).from(productVarieties).where(eq(productVarieties.id, product.id));
+    expect(stored).toEqual({ priceType: "record_minus_1", version: 3 });
+  });
 });

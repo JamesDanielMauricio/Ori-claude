@@ -1,4 +1,10 @@
 import { saveProductInputSchema, toSaveProductRpcArgs } from "@ori/domain/reference-data";
+import {
+  PRICE_TYPE_LABELS,
+  pricesForType,
+  priceTypeOf,
+  type PriceType,
+} from "@ori/shared/price-type";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
@@ -6,11 +12,13 @@ import { FormField, inputClassName } from "@/components/reference-data/form-fiel
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { QueryError } from "@/components/ui/query-error";
+import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { blockWheel } from "@/lib/integer-input";
 import { toInputText } from "@/lib/number-field";
 import { optimisticUpdate } from "@/lib/optimistic-mutation";
+import { PRICE_TYPE_OPTIONS } from "@/lib/price-types";
 import {
   arrangementKeys,
   arrangementQueries,
@@ -41,7 +49,8 @@ export function PriceEditDialog({
   const [price, setPrice] = useState("");
   const [priceRangeFrom, setPriceRangeFrom] = useState("");
   const [priceRangeTo, setPriceRangeTo] = useState("");
-  const [priceType, setPriceType] = useState("");
+  // "" = no price type. The type decides which boxes show (migration 0100).
+  const [priceType, setPriceType] = useState<PriceType | "">("");
 
   const varietyQuery = useQuery(arrangementQueries.priceVariety(varietyId));
 
@@ -73,10 +82,25 @@ export function PriceEditDialog({
     setPrice(toInputText(varietyQuery.data.price));
     setPriceRangeFrom(toInputText(varietyQuery.data.price_range_from));
     setPriceRangeTo(toInputText(varietyQuery.data.price_range_to));
-    setPriceType(varietyQuery.data.price_type ?? "");
+    // As the Products screen reads it (catalog-form.tsx's toFormState).
+    setPriceType(
+      priceTypeOf(varietyQuery.data.price_type, {
+        price: varietyQuery.data.price,
+        priceRangeFrom: varietyQuery.data.price_range_from,
+        priceRangeTo: varietyQuery.data.price_range_to,
+      }) ?? "",
+    );
   }, [varietyQuery.data, varietyId, seeded]);
 
   type VarietyRow = ProductVarietyRow & { product_families: { name: string } | null };
+
+  const typedPrices = {
+    price: price === "" ? null : Number(price),
+    priceRangeFrom: priceRangeFrom === "" ? null : Number(priceRangeFrom),
+    priceRangeTo: priceRangeTo === "" ? null : Number(priceRangeTo),
+  };
+  // What the save stores (toSaveProductRpcArgs): only the numbers the type shows.
+  const savedPrices = pricesForType(priceType || null, typedPrices);
 
   // Keyed by the variety a save was started for, never by the render: a
   // mutation's callbacks run with the options of whichever render is latest
@@ -91,9 +115,9 @@ export function PriceEditDialog({
         row
           ? {
               ...row,
-              price: price === "" ? null : Number(price),
-              price_range_from: priceRangeFrom === "" ? null : Number(priceRangeFrom),
-              price_range_to: priceRangeTo === "" ? null : Number(priceRangeTo),
+              price: savedPrices.price,
+              price_range_from: savedPrices.priceRangeFrom,
+              price_range_to: savedPrices.priceRangeTo,
               price_type: priceType || null,
             }
           : row,
@@ -114,9 +138,7 @@ export function PriceEditDialog({
         name: row.name,
         sizes: row.sizes,
         packType: row.pack_type,
-        price: price === "" ? null : Number(price),
-        priceRangeFrom: priceRangeFrom === "" ? null : Number(priceRangeFrom),
-        priceRangeTo: priceRangeTo === "" ? null : Number(priceRangeTo),
+        ...typedPrices,
         priceType: priceType || null,
         noOverbooking: Number(row.no_overbooking),
         highlightPriceFluctuations: row.highlight_price_fluctuations,
@@ -178,7 +200,17 @@ export function PriceEditDialog({
         />
       ) : (
         <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {/* The type first; the boxes it uses follow (migration 0100): מספר
+              one price, טווח from and to, a תקליט type none. */}
+          <FormField label="סוג מחיר" htmlFor="arr-price-type">
+            <Select
+              id="arr-price-type"
+              value={priceType}
+              onChange={setPriceType}
+              options={PRICE_TYPE_OPTIONS}
+            />
+          </FormField>
+          {priceType === "fixed" && (
             <FormField label="מחיר" htmlFor="arr-price">
               <input
                 id="arr-price"
@@ -190,37 +222,38 @@ export function PriceEditDialog({
                 onChange={(event) => setPrice(event.target.value)}
               />
             </FormField>
-            <FormField label="טווח מ-" htmlFor="arr-price-from">
-              <input
-                id="arr-price-from"
-                type="number"
-                step="0.01"
-                className={inputClassName}
-                value={priceRangeFrom}
-                onWheel={blockWheel}
-                onChange={(event) => setPriceRangeFrom(event.target.value)}
-              />
-            </FormField>
-            <FormField label="טווח עד" htmlFor="arr-price-to">
-              <input
-                id="arr-price-to"
-                type="number"
-                step="0.01"
-                className={inputClassName}
-                value={priceRangeTo}
-                onWheel={blockWheel}
-                onChange={(event) => setPriceRangeTo(event.target.value)}
-              />
-            </FormField>
-          </div>
-          <FormField label="סוג תמחור" htmlFor="arr-price-type">
-            <input
-              id="arr-price-type"
-              className={inputClassName}
-              value={priceType}
-              onChange={(event) => setPriceType(event.target.value)}
-            />
-          </FormField>
+          )}
+          {priceType === "range" && (
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="מחיר מ-" htmlFor="arr-price-from">
+                <input
+                  id="arr-price-from"
+                  type="number"
+                  step="0.01"
+                  className={inputClassName}
+                  value={priceRangeFrom}
+                  onWheel={blockWheel}
+                  onChange={(event) => setPriceRangeFrom(event.target.value)}
+                />
+              </FormField>
+              <FormField label="מחיר עד" htmlFor="arr-price-to">
+                <input
+                  id="arr-price-to"
+                  type="number"
+                  step="0.01"
+                  className={inputClassName}
+                  value={priceRangeTo}
+                  onWheel={blockWheel}
+                  onChange={(event) => setPriceRangeTo(event.target.value)}
+                />
+              </FormField>
+            </div>
+          )}
+          {priceType !== "" && priceType !== "fixed" && priceType !== "range" && (
+            <p className="text-sm text-ink-muted">
+              אין מחיר להזין: ללקוחות יוצג &quot;{PRICE_TYPE_LABELS[priceType]}&quot;.
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={onClose}>
               ביטול

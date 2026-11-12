@@ -34,6 +34,17 @@ const validProduct = {
 };
 
 describe("errorMessage", () => {
+  it("says which price a price type needs (migration 0100)", () => {
+    expect(errorMessage(thrownBy(() => saveProductInputSchema.parse({ ...validProduct, priceType: "fixed" })))).toBe(
+      'לסוג המחיר "מספר" יש להזין מחיר.',
+    );
+    expect(
+      errorMessage(
+        thrownBy(() => saveProductInputSchema.parse({ ...validProduct, priceType: "range", priceRangeFrom: 12, priceRangeTo: 10 })),
+      ),
+    ).toBe('בטווח המחירים, "מ-" לא יכול להיות גבוה מ"עד".');
+  });
+
   it("says what to fix for a blank required name, instead of the ZodError's JSON", () => {
     const error = thrownBy(() =>
       saveCustomerInputSchema.parse({

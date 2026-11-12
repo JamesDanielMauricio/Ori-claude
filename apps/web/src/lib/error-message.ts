@@ -9,6 +9,7 @@
 // depend on zod directly.
 
 import { PALLET_QUANTITY_MESSAGE } from "@ori/shared/pallets";
+import { PRICE_TYPE_MESSAGES } from "@ori/shared/price-type";
 
 interface ValidationIssue {
   code?: unknown;
@@ -22,6 +23,11 @@ function validationMessage(issue: ValidationIssue | undefined): string {
   // A quantity with a second decimal place (workbook Task 35) — the order and
   // arrangement schemas' own Hebrew message.
   if (issue?.code === "custom" && issue.message === PALLET_QUANTITY_MESSAGE) return PALLET_QUANTITY_MESSAGE;
+  // A product's price that its price type needs (migration 0100) — the
+  // product schema's own Hebrew messages.
+  if (issue?.code === "custom" && typeof issue.message === "string" && PRICE_TYPE_MESSAGES.includes(issue.message)) {
+    return issue.message;
+  }
   if (issue?.code === "too_small" && issue.type === "string") return "יש למלא את כל שדות החובה.";
   if (issue?.code === "invalid_string" && issue.validation === "uuid") return "יש לבחור ערך מהרשימה.";
   if (issue?.code === "invalid_type" && issue.expected === "integer") return "יש להזין מספר שלם.";

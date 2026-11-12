@@ -3,6 +3,7 @@ import {
   saveProductInputSchema,
   toSaveProductRpcArgs,
 } from "@ori/domain/reference-data";
+import { pricesForType } from "@ori/shared/price-type";
 import { useMutation, type QueryClient } from "@tanstack/react-query";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -13,7 +14,7 @@ import { customerKeys } from "@/lib/queries/customer";
 import { referenceDataQueries, type ProductVariety } from "@/lib/queries/reference-data";
 import { createClient } from "@/lib/supabase/client";
 
-import { productPhotoPathFromUrl, toFormState, type FormState } from "./catalog-form";
+import { formPrices, productPhotoPathFromUrl, toFormState, type FormState } from "./catalog-form";
 import { removeVarietyPhotoFile, replacedPhotoPath, uploadVarietyPhoto } from "./variety-photo";
 
 // Saving and deleting a variety, each patching the table at once and
@@ -58,6 +59,10 @@ export function useVarietyMutations({
   const cachedRows = queryClient.getQueryData<ProductVariety[]>(productsQueryKey);
   const previousImageUrl = cachedRows?.find((row) => row.id === editingRowId)?.image_url ?? null;
 
+  // The same numbers the save itself sends (toSaveProductRpcArgs): only
+  // those the price type shows.
+  const savedPrices = pricesForType(form.priceType || null, formPrices(form));
+
   // Patches every field the form edits except `version` — that's a real
   // optimistic-concurrency column, bumped by the server only. Leaving it
   // alone here means a stale version still gets caught by the real
@@ -75,10 +80,9 @@ export function useVarietyMutations({
               name: form.name,
               sizes: form.sizes || null,
               pack_type: form.packType || null,
-              // The same numbers the save itself sends (saveMutation below).
-              price: form.price === "" ? null : Number(form.price),
-              price_range_from: form.priceRangeFrom === "" ? null : Number(form.priceRangeFrom),
-              price_range_to: form.priceRangeTo === "" ? null : Number(form.priceRangeTo),
+              price: savedPrices.price,
+              price_range_from: savedPrices.priceRangeFrom,
+              price_range_to: savedPrices.priceRangeTo,
               price_type: form.priceType || null,
               no_overbooking: Number(form.noOverbooking || "0"),
               highlight_price_fluctuations: form.highlightPriceFluctuations,
@@ -108,9 +112,7 @@ export function useVarietyMutations({
         name: form.name,
         sizes: form.sizes || null,
         packType: form.packType || null,
-        price: form.price === "" ? null : Number(form.price),
-        priceRangeFrom: form.priceRangeFrom === "" ? null : Number(form.priceRangeFrom),
-        priceRangeTo: form.priceRangeTo === "" ? null : Number(form.priceRangeTo),
+        ...formPrices(form),
         priceType: form.priceType || null,
         noOverbooking: Number(form.noOverbooking || "0"),
         highlightPriceFluctuations: form.highlightPriceFluctuations,

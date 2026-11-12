@@ -1,3 +1,4 @@
+import { PRICE_TYPES } from "@ori/shared/price-type";
 import { pgEnum } from "drizzle-orm/pg-core";
 
 // Admin and Distributor are, by PRD confirmation, permission-identical — one
@@ -25,10 +26,16 @@ export const companyTypeEnum = pgEnum("company_type", [
 // way.
 export const companyStatusEnum = pgEnum("company_status", ["active", "inactive"]);
 
-// The PRD documents exactly two Pack Type values ("Pallets or Crates") —
-// unlike Price Type or Product Category below, this one IS fully
-// enumerated, so it's a real Postgres enum rather than free text.
+// The PRD documents exactly two Pack Type values ("Pallets or Crates"), so
+// it's a real Postgres enum rather than free text.
 export const packTypeEnum = pgEnum("pack_type", ["pallets", "crates"]);
+
+// A product's price type (migration 0100): Bubble's "Price Types" option set,
+// in its order — the תקליט types, מספר (fixed) and טווח (range). Free text
+// until then, because the PRD named only a few of them. The type decides which
+// price is shown; the list, its Hebrew names and that rule live in
+// packages/shared/src/price-type.ts.
+export const priceTypeEnum = pgEnum("price_type", PRICE_TYPES);
 
 // The single canonical phase of a trading day — replaces the source's four
 // separate, partially-redundant flags (`day_status`, `shop_status`,

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   ARRANGEMENT_ERROR_CODES,
+  arrangeToCustomerInputSchema,
   saveArrangementProposalInputSchema,
   toSaveArrangementProposalRpcArgs,
+  updateArrangementRecordInputSchema,
 } from "./schemas";
 
 // Pure: no database. The function itself is exercised in arrangement.test.ts.
@@ -137,5 +139,33 @@ describe("toSaveArrangementProposalRpcArgs", () => {
 describe("ARRANGEMENT_ERROR_CODES", () => {
   it("names the code a filled cell is refused with", () => {
     expect(ARRANGEMENT_ERROR_CODES.CONFLICT).toBe("P0006");
+  });
+});
+
+// A record's own price type (migration 0100): one of the codes, or none.
+describe("a record's price type", () => {
+  const RECORD = "5a0f8a8e-4a5b-4c35-9a3e-2f6f1d1f7c11";
+
+  it("is one of Bubble's types as its code, or none", () => {
+    for (const priceType of ["fixed", "range", "record_plus_1", null, undefined]) {
+      expect(
+        updateArrangementRecordInputSchema.safeParse({ id: RECORD, quantityPallets: 1, priceType }).success,
+        String(priceType),
+      ).toBe(true);
+    }
+  });
+
+  it("is never free text", () => {
+    for (const priceType of ["לפי גודל", "מספר", ""]) {
+      expect(
+        arrangeToCustomerInputSchema.safeParse({
+          dailyPickProductId: LOT,
+          customerCompanyId: CUSTOMER,
+          quantityPallets: 1,
+          priceType,
+        }).success,
+        priceType,
+      ).toBe(false);
+    }
   });
 });

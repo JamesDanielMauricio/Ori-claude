@@ -56,6 +56,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { normalizePhoneNumber } from "@ori/shared/phone";
+import { parsePriceType, priceTypeOf } from "@ori/shared/price-type";
 import { createClient } from "@supabase/supabase-js";
 import postgres from "postgres";
 
@@ -687,16 +688,29 @@ export function planReference(data: ExportData, report: Report, previousIds: Pre
       cap = null;
     }
 
+    // Bubble's Price Types are an option set; its caption ("תקליט + ₪1",
+    // "מספר") is stored as the type's code (migration 0100). With no type,
+    // the numbers say which it is, as the migration converted them.
+    const prices = {
+      price: numberValue(variety, "Price"),
+      priceRangeFrom: numberValue(variety, "Price Range from"),
+      priceRangeTo: numberValue(variety, "Price Range to"),
+    };
+    const bubblePriceType = text(variety, "Price Type");
+    if (bubblePriceType && !parsePriceType(bubblePriceType)) {
+      report.note("warning", "productvarieties", variety._id, "variety.price_type_unknown", `"${name}" price type "${bubblePriceType}" is not one of Bubble's Price Types — imported by its numbers.`);
+    }
+
     const id = previousIds.productvarieties.get(variety._id) ?? randomUUID();
     productVarieties.push({
       id,
       family_id: familyId,
       name,
       sizes,
-      price: numberValue(variety, "Price"),
-      price_range_from: numberValue(variety, "Price Range from"),
-      price_range_to: numberValue(variety, "Price Range to"),
-      price_type: text(variety, "Price Type"),
+      price: prices.price,
+      price_range_from: prices.priceRangeFrom,
+      price_range_to: prices.priceRangeTo,
+      price_type: priceTypeOf(bubblePriceType, prices),
       no_overbooking: numberValue(variety, "Overbooking") ?? 0,
       highlight_price_fluctuations: booleanValue(variety, "Highlight Price Fluctuations") ?? false,
       is_seasonal_available: inSeason ?? false,
@@ -1492,6 +1506,11 @@ export function planTrading(data: ExportData, reference: ReferencePlan, loginIds
     if (price === "invalid") {
       report.note("warning", "dailyarrangementrecords", record._id, "record.price_invalid", `Price "${text(record, "price")}" is not a number — left empty.`);
     }
+    // As the product's (above): a code, else by its price.
+    const bubblePriceType = text(record, "price type");
+    if (bubblePriceType && !parsePriceType(bubblePriceType)) {
+      report.note("warning", "dailyarrangementrecords", record._id, "record.price_type_unknown", `Price type "${bubblePriceType}" is not one of Bubble's Price Types — imported by its price.`);
+    }
     const id = randomUUID();
     rows.arrangement_records.push({
       id,
@@ -1501,7 +1520,11 @@ export function planTrading(data: ExportData, reference: ReferencePlan, loginIds
       customer_company_id: customerId,
       quantity_pallets: quantity,
       price: price === "invalid" ? null : price,
-      price_type: text(record, "price type"),
+      price_type: priceTypeOf(bubblePriceType, {
+        price: price === "invalid" ? null : price,
+        priceRangeFrom: null,
+        priceRangeTo: null,
+      }),
       created_at: createdAt(record),
       updated_at: modifiedAt(record),
     });

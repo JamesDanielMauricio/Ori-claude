@@ -174,7 +174,7 @@ export type Database = {
           price: number | null;
           price_range_from: number | null;
           price_range_to: number | null;
-          price_type: string | null;
+          price_type: Database["public"]["Enums"]["price_type"] | null;
           no_overbooking: number;
           highlight_price_fluctuations: boolean;
           is_seasonal_available: boolean;
@@ -194,7 +194,7 @@ export type Database = {
           price?: number | null;
           price_range_from?: number | null;
           price_range_to?: number | null;
-          price_type?: string | null;
+          price_type?: Database["public"]["Enums"]["price_type"] | null;
           no_overbooking?: number;
           highlight_price_fluctuations?: boolean;
           is_seasonal_available?: boolean;
@@ -213,7 +213,7 @@ export type Database = {
           price?: number | null;
           price_range_from?: number | null;
           price_range_to?: number | null;
-          price_type?: string | null;
+          price_type?: Database["public"]["Enums"]["price_type"] | null;
           no_overbooking?: number;
           highlight_price_fluctuations?: boolean;
           is_seasonal_available?: boolean;
@@ -759,7 +759,7 @@ export type Database = {
           price: number | null;
           price_range_from: number | null;
           price_range_to: number | null;
-          price_type: string | null;
+          price_type: Database["public"]["Enums"]["price_type"] | null;
           created_at: string;
           updated_at: string;
         };
@@ -773,7 +773,7 @@ export type Database = {
           price?: number | null;
           price_range_from?: number | null;
           price_range_to?: number | null;
-          price_type?: string | null;
+          price_type?: Database["public"]["Enums"]["price_type"] | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -787,7 +787,7 @@ export type Database = {
           price?: number | null;
           price_range_from?: number | null;
           price_range_to?: number | null;
-          price_type?: string | null;
+          price_type?: Database["public"]["Enums"]["price_type"] | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -1615,6 +1615,13 @@ export type Database = {
         };
         Returns: number;
       };
+      // A price type code's Hebrew name, null for anything else (migration 0100).
+      price_type_label: {
+        Args: {
+          p_price_type: string;
+        };
+        Returns: string;
+      };
       build_notification_outbox: {
         Args: {
           p_trading_day_id: string;
@@ -1673,6 +1680,19 @@ export type Database = {
       company_type: "backoffice" | "grower" | "customer" | "transporter";
       company_status: "active" | "inactive";
       pack_type: "pallets" | "crates";
+      // Migration 0100: Bubble's Price Types (packages/shared/src/price-type.ts).
+      price_type:
+        | "record"
+        | "record_minus_0_5"
+        | "record_minus_1"
+        | "record_minus_1_5"
+        | "record_minus_2"
+        | "record_plus_0_5"
+        | "record_plus_1"
+        | "record_plus_1_5"
+        | "record_plus_2"
+        | "fixed"
+        | "range";
       produce_category: "fruit" | "vegetable" | "both";
       trading_day_phase: "initiated" | "shop_open" | "shop_closed" | "closed";
       daily_shop_status: "open" | "closed";
@@ -1815,6 +1835,19 @@ export const Constants = {
       company_type: ["backoffice", "grower", "customer", "transporter"],
       company_status: ["active", "inactive"],
       pack_type: ["pallets", "crates"],
+      price_type: [
+        "record",
+        "record_minus_0_5",
+        "record_minus_1",
+        "record_minus_1_5",
+        "record_minus_2",
+        "record_plus_0_5",
+        "record_plus_1",
+        "record_plus_1_5",
+        "record_plus_2",
+        "fixed",
+        "range",
+      ],
       trading_day_phase: ["initiated", "shop_open", "shop_closed", "closed"],
       daily_shop_status: ["open", "closed"],
       daily_arrangement_status: ["open", "closed"],

@@ -1,8 +1,10 @@
+import { parsePriceType, type PriceType } from "@ori/shared/price-type";
 import { useMemo, useState } from "react";
 
 import { inputClassName } from "@/components/reference-data/form-field";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
+import { Select } from "@/components/ui/select";
 import {
   TableBody,
   TableCell,
@@ -14,6 +16,7 @@ import {
 import { hasChanges } from "@/lib/has-changes";
 import { blockWheel } from "@/lib/integer-input";
 import { limitToOneDecimal } from "@/lib/pallet-input";
+import { PRICE_TYPE_OPTIONS } from "@/lib/price-types";
 
 import { type FlatRecord } from "./board-data";
 import { type AllocationPatch } from "./customer-demand-board";
@@ -25,18 +28,26 @@ import { sortRecords, type RecordsViewMode } from "./records-sort";
 // decided by the values that would actually be written rather than by the
 // text in the boxes. Retyping "12" over a stored 12, or "3.50" over a stored
 // 3.5, is then correctly not a change.
+//
+// A record's price is a number only for מספר, or with no type of its own
+// (migration 0100): טווח and the תקליט types show no number of the record's,
+// so none is written for them.
 function toPatch(
   recordId: string,
   quantity: string,
   price: string,
-  priceType: string,
+  priceType: PriceType | "",
 ): AllocationPatch {
   return {
     id: recordId,
     quantityPallets: Number(quantity),
-    price: price === "" ? null : Number(price),
+    price: price === "" || !takesPrice(priceType) ? null : Number(price),
     priceType: priceType || null,
   };
+}
+
+function takesPrice(priceType: PriceType | ""): boolean {
+  return priceType === "" || priceType === "fixed";
 }
 
 // The flat records table, kept from the previous version of this screen and
@@ -187,7 +198,7 @@ function ArrangementRecordRow({
 }) {
   const [quantity, setQuantity] = useState(String(row.quantity));
   const [price, setPrice] = useState(row.price === null ? "" : String(row.price));
-  const [priceType, setPriceType] = useState(row.priceType ?? "");
+  const [priceType, setPriceType] = useState<PriceType | "">(parsePriceType(row.priceType) ?? "");
 
   // Re-seed the inputs when the server's copy of this record changes under us.
   //
@@ -216,7 +227,7 @@ function ArrangementRecordRow({
     setLastServer(row);
     setQuantity(String(row.quantity));
     setPrice(row.price === null ? "" : String(row.price));
-    setPriceType(row.priceType ?? "");
+    setPriceType(parsePriceType(row.priceType) ?? "");
   }
 
   // What "שמור" would write, and what the row already holds. Built from the
@@ -229,7 +240,7 @@ function ArrangementRecordRow({
       row.recordId,
       String(row.quantity),
       row.price === null ? "" : String(row.price),
-      row.priceType ?? "",
+      parsePriceType(row.priceType) ?? "",
     ),
   );
 
@@ -257,21 +268,23 @@ function ArrangementRecordRow({
           type="number"
           step="0.01"
           min={0}
-          disabled={!editable}
+          // Only מספר, or no type, has a number of its own (toPatch above).
+          disabled={!editable || !takesPrice(priceType)}
           aria-label="מחיר"
           className={`${inputClassName} w-24`}
-          value={price}
+          value={takesPrice(priceType) ? price : ""}
           onWheel={blockWheel}
           onChange={(event) => setPrice(event.target.value)}
         />
       </TableCell>
       <TableCell>
-        <input
+        <Select
           disabled={!editable}
           aria-label="סוג תמחור"
-          className={`${inputClassName} w-24`}
+          className="w-32"
           value={priceType}
-          onChange={(event) => setPriceType(event.target.value)}
+          onChange={setPriceType}
+          options={PRICE_TYPE_OPTIONS}
         />
       </TableCell>
       <TableCell>

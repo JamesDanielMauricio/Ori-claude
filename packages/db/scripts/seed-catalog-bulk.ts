@@ -104,7 +104,8 @@ function buildVarietyRow(familyId: string, familyName: string, descriptor: strin
     price: isRanged ? null : base,
     price_range_from: isRanged ? base : null,
     price_range_to: isRanged ? Math.round(base * (1.2 + Math.random() * 0.2)) : null,
-    price_type: isRanged ? ["לפי גודל", "לפי איכות", "לפי משקל"][randomInt(0, 2)]! : null,
+    // Migration 0100: טווח for a range, מספר for a price.
+    price_type: isRanged ? "range" : "fixed",
     no_overbooking: Math.random() < 0.1 ? randomInt(1, 3) : 0,
     highlight_price_fluctuations: Math.random() < 0.05,
     is_seasonal_available: Math.random() >= 0.1,

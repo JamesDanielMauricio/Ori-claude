@@ -12,6 +12,7 @@
 // customer's order is covered — can be read and tested on its own.
 import type { Json } from "@ori/db/supabase-types";
 import { roundPallets } from "@ori/shared/pallets";
+import { parsePriceType } from "@ori/shared/price-type";
 
 import { effectivePickupTime } from "@/lib/pickup-time";
 import { formatVarietyName } from "@/lib/variety-label";
@@ -431,7 +432,9 @@ export function buildBoard({
       growerName: growerId ? nameOf(growerId) : "—",
       quantity,
       price: record.price === null ? null : num(record.price),
-      priceType: record.price_type,
+      // A code, or Bubble's caption on a record stored before migration
+      // 0100 — read as a code either way, as every save sends one.
+      priceType: parsePriceType(record.price_type),
     });
     recordsByOrderLine.set(record.daily_order_product_id, list);
   }

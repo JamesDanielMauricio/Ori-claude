@@ -25,6 +25,7 @@
 // untouched/reminded-but-silent customers (08/09) from seed-more-sample-data
 // stay exactly as they were, and the new in-stock lines are left for you to
 // order against by hand in the running app.
+import { priceTypeOf } from "@ori/shared/price-type";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
@@ -114,7 +115,14 @@ async function saveProduct(
     p_price: args.price ?? null,
     p_price_range_from: args.priceRangeFrom ?? null,
     p_price_range_to: args.priceRangeTo ?? null,
-    p_price_type: args.priceType ?? null,
+    // One of the codes (migration 0100); left out, what the numbers say.
+    p_price_type:
+      args.priceType ??
+      priceTypeOf(null, {
+        price: args.price ?? null,
+        priceRangeFrom: args.priceRangeFrom ?? null,
+        priceRangeTo: args.priceRangeTo ?? null,
+      }),
     p_no_overbooking: args.noOverbooking ?? 0,
     p_highlight_price_fluctuations: args.highlightPriceFluctuations ?? false,
     p_is_seasonal_available: args.isSeasonalAvailable ?? true,
@@ -188,7 +196,7 @@ async function main() {
     name: "עגבנית שרי",
     priceRangeFrom: 18,
     priceRangeTo: 22,
-    priceType: "לפי איכות",
+    priceType: "range",
   });
   const yellowMelon = await saveProduct(client, {
     familyId: familyId("מלון"),

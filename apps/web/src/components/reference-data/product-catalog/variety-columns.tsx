@@ -1,3 +1,4 @@
+import { formatPriceByType, parsePriceType, PRICE_TYPE_LABELS } from "@ori/shared/price-type";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { Dispatch, SetStateAction } from "react";
 
@@ -7,6 +8,7 @@ import { StatusPill } from "@/components/ui/card";
 import { ProductThumbnail } from "@/components/ui/product-thumbnail";
 import { Select } from "@/components/ui/select";
 import { blockWheel } from "@/lib/integer-input";
+import { PRICE_TYPE_OPTIONS } from "@/lib/price-types";
 import { formatPallets } from "@/components/arrangement/board-data";
 import type { ProductFamily, ProductVariety } from "@/lib/queries/reference-data";
 
@@ -34,6 +36,68 @@ export interface VarietyColumnsContext {
   saving: boolean;
   // מוצרים שנקטפו only — see ProductCatalogScreen's prop of the same name.
   stockByVariety?: ReadonlyMap<string, number> | undefined;
+}
+
+// The price boxes the chosen type uses (migration 0100): מספר one price,
+// טווח from and to, a תקליט type none — its name is the price, so it is
+// shown here instead. With no type there is no price to enter.
+function PriceEdit({
+  form,
+  setForm,
+}: {
+  form: FormState;
+  setForm: Dispatch<SetStateAction<FormState>>;
+}) {
+  if (form.priceType === "fixed") {
+    return (
+      <input
+        type="number"
+        step="0.01"
+        aria-label="מחיר"
+        className={`${inputClassName} w-24`}
+        value={form.price}
+        onWheel={blockWheel}
+        onChange={(event) => setForm((current) => ({ ...current, price: event.target.value }))}
+      />
+    );
+  }
+  if (form.priceType === "range") {
+    return (
+      <div className="flex items-center gap-1">
+        <input
+          type="number"
+          step="0.01"
+          aria-label="מחיר מ-"
+          placeholder="מ-"
+          className={`${inputClassName} w-20`}
+          value={form.priceRangeFrom}
+          onWheel={blockWheel}
+          onChange={(event) =>
+            setForm((current) => ({ ...current, priceRangeFrom: event.target.value }))
+          }
+        />
+        <span aria-hidden className="text-ink-subtle">
+          –
+        </span>
+        <input
+          type="number"
+          step="0.01"
+          aria-label="מחיר עד"
+          placeholder="עד"
+          className={`${inputClassName} w-20`}
+          value={form.priceRangeTo}
+          onWheel={blockWheel}
+          onChange={(event) =>
+            setForm((current) => ({ ...current, priceRangeTo: event.target.value }))
+          }
+        />
+      </div>
+    );
+  }
+  if (form.priceType) {
+    return <span className="text-sm text-ink-muted">{PRICE_TYPE_LABELS[form.priceType]}</span>;
+  }
+  return orDash(null);
 }
 
 // The two family-level fields the flat table used to repeat on every
@@ -186,72 +250,39 @@ export function buildVarietyColumns({
         />
       ),
     },
-    {
-      key: "price",
-      label: "מחיר",
-      render: (row) => orDash(row.price),
-      renderEdit: () => (
-        <input
-          type="number"
-          step="0.01"
-          aria-label="מחיר"
-          className={`${inputClassName} w-24`}
-          value={form.price}
-          onWheel={blockWheel}
-          onChange={(event) => setForm((current) => ({ ...current, price: event.target.value }))}
-        />
-      ),
-    },
-    {
-      key: "priceFrom",
-      label: "טווח מ-",
-      render: (row) => orDash(row.price_range_from),
-      renderEdit: () => (
-        <input
-          type="number"
-          step="0.01"
-          aria-label="טווח מ-"
-          className={`${inputClassName} w-24`}
-          value={form.priceRangeFrom}
-          onWheel={blockWheel}
-          onChange={(event) =>
-            setForm((current) => ({ ...current, priceRangeFrom: event.target.value }))
-          }
-        />
-      ),
-    },
-    {
-      key: "priceTo",
-      label: "טווח עד",
-      render: (row) => orDash(row.price_range_to),
-      renderEdit: () => (
-        <input
-          type="number"
-          step="0.01"
-          aria-label="טווח עד"
-          className={`${inputClassName} w-24`}
-          value={form.priceRangeTo}
-          onWheel={blockWheel}
-          onChange={(event) =>
-            setForm((current) => ({ ...current, priceRangeTo: event.target.value }))
-          }
-        />
-      ),
-    },
+    // Price type, then the price it shows (migration 0100): Bubble's Price
+    // Types. מספר shows the price, טווח the range from–to, a תקליט type its
+    // own name — which is why a תקליט row reads the same in both columns.
     {
       key: "priceType",
       label: "סוג מחיר",
-      render: (row) => orDash(row.price_type),
+      render: (row) => {
+        const type = parsePriceType(row.price_type);
+        return orDash(type ? PRICE_TYPE_LABELS[type] : row.price_type);
+      },
       renderEdit: () => (
-        <input
-          aria-label="סוג תמחור"
-          className={`${inputClassName} w-28`}
+        <Select
+          aria-label="סוג מחיר"
+          className="w-32"
           value={form.priceType}
-          onChange={(event) =>
-            setForm((current) => ({ ...current, priceType: event.target.value }))
-          }
+          onChange={(next) => setForm((current) => ({ ...current, priceType: next }))}
+          options={PRICE_TYPE_OPTIONS}
         />
       ),
+    },
+    {
+      key: "price",
+      label: "מחיר",
+      render: (row) =>
+        orDash(
+          formatPriceByType({
+            priceType: row.price_type,
+            price: row.price,
+            priceRangeFrom: row.price_range_from,
+            priceRangeTo: row.price_range_to,
+          }),
+        ),
+      renderEdit: () => <PriceEdit form={form} setForm={setForm} />,
     },
     {
       key: "overbooking",

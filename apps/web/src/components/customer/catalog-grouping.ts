@@ -10,6 +10,8 @@
 // packages/db/migrations/0018_customer-order-functions.sql's header
 // comment for the backend half of this rule).
 
+import { formatPriceByType } from "@ori/shared/price-type";
+
 export interface CatalogRow {
   family_id: string;
   family_name: string;
@@ -88,14 +90,19 @@ export function groupCatalogForBrowsing(rows: CatalogRow[]): FamilyGroup[] {
   return [...groups].sort((a, b) => Number(hasOrder(b)) - Number(hasOrder(a)));
 }
 
+// A product's price as the shop shows it, by its price type (migration
+// 0100): מספר "₪12", טווח "₪10–₪12", a תקליט type its name ("תקליט + ₪1").
+// Null when there is nothing to show — prices hidden from this customer
+// come back empty, the type included.
 export function formatPrice(
-  row: Pick<CatalogRow, "price" | "price_range_from" | "price_range_to">,
+  row: Pick<CatalogRow, "price" | "price_range_from" | "price_range_to" | "price_type">,
 ): string | null {
-  if (row.price != null) return `₪${row.price}`;
-  if (row.price_range_from != null && row.price_range_to != null) {
-    return `₪${row.price_range_from}–₪${row.price_range_to}`;
-  }
-  return null;
+  return formatPriceByType({
+    priceType: row.price_type,
+    price: row.price,
+    priceRangeFrom: row.price_range_from,
+    priceRangeTo: row.price_range_to,
+  });
 }
 
 // "ליום רביעי ה- 10.7.24" — the reference design's date pill wording, used
