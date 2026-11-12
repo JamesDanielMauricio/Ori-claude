@@ -1669,7 +1669,8 @@ export function planTrading(data: ExportData, reference: ReferencePlan, loginIds
   report.fieldsNotImported("dailyorder", data.dailyorder, ["activity history", "actively editing", "processing?", "processing date", "last editing date"], "editing/locking state with no equivalent");
   report.fieldsNotImported("dailypick", data.dailypick, ["activity history"], "no equivalent column");
   report.fieldsNotImported("dailyshop", data.dailyshop, ["out of stock products", "list of products that has been notified to distributors when all picked products are ordered"], "this app computes stock live instead");
-  report.fieldsNotImported("dailyorderproducts", data.dailyorderproducts, ["price type", "price type text", "price value (fixed)", "price value (range)", "Actual Pallets Received"], "no column for it in daily_order_products");
+  report.fieldsNotImported("dailyorderproducts", data.dailyorderproducts, ["price type", "price type text", "price value (fixed)", "price value (range)"], "not imported: daily_order_products has these columns since migration 0101, but only submit_order fills them");
+  report.fieldsNotImported("dailyorderproducts", data.dailyorderproducts, ["Actual Pallets Received"], "no column for it in daily_order_products");
   report.fieldsNotImported("dailyarrangementrecords", data.dailyarrangementrecords, ["Time"], "created_at already records when it was arranged");
 
   return { rows, idMap, liveDay: days.find((day) => day.isLive) ?? null };

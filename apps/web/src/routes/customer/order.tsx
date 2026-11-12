@@ -295,8 +295,9 @@ function groupHistoricalLines(lines: HistoricalLineRow[]): OrderFamilyRow[] {
 
 // Read-only: the trading day is closed, so submit_order would reject any
 // edit anyway (see 0018_customer-order-functions.sql's P0007). No price is
-// shown — daily_order_products never captured a per-line price snapshot,
-// so there's nothing historical to show even though the live editor has it.
+// shown. Since migration 0101 each line records the price it was last saved
+// at (daily_order_products.price_type and the rest), but that record is kept
+// for later use, not shown (James, 2026-11-12).
 function ClosedOrderView({ order }: { order: SpecificOrder }) {
   const linesQuery = useQuery(customerQueries.orderLines(order.id));
 

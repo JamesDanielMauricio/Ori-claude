@@ -708,6 +708,13 @@
       "when": 1792789200000,
       "tag": "0100_price-type-enum",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1792875600000,
+      "tag": "0101_order-line-prices",
+      "breakpoints": true
     }
   ]
 }

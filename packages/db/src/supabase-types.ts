@@ -671,6 +671,12 @@ export type Database = {
           product_variety_id: string;
           pallets_ordered: number;
           comment: string | null;
+          // The price this line was last saved at, as its customer was shown
+          // it (migration 0101; written by submit_order, shown nowhere).
+          price: number | null;
+          price_range_from: number | null;
+          price_range_to: number | null;
+          price_type: Database["public"]["Enums"]["price_type"] | null;
           created_at: string;
           updated_at: string;
         };
@@ -680,6 +686,10 @@ export type Database = {
           product_variety_id: string;
           pallets_ordered?: number;
           comment?: string | null;
+          price?: number | null;
+          price_range_from?: number | null;
+          price_range_to?: number | null;
+          price_type?: Database["public"]["Enums"]["price_type"] | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -689,6 +699,10 @@ export type Database = {
           product_variety_id?: string;
           pallets_ordered?: number;
           comment?: string | null;
+          price?: number | null;
+          price_range_from?: number | null;
+          price_range_to?: number | null;
+          price_type?: Database["public"]["Enums"]["price_type"] | null;
           created_at?: string;
           updated_at?: string;
         };

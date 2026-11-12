@@ -1348,6 +1348,190 @@ describe("customer ordering module", () => {
     expect(await shopOpenMessages(laterId)).toBe(1);
   }, 30000);
 
+  // The price each order line records when it is saved (James, 2026-11-12):
+  // for a customer who may see prices — their company's permission AND the
+  // day's shop showing prices, the same test the shop uses to show one — by
+  // the product's price type, on every save. Kept for the record; no screen
+  // shows it. Written for CI; checked where it was written against a local
+  // PGlite copy of every migration instead (no local Supabase there).
+  describe("submit_order's price record (migration 0101)", () => {
+    const NOTHING = { priceType: null, price: null, priceRangeFrom: null, priceRangeTo: null };
+
+    // A product picked today whose stored numbers include ones its type
+    // hides, so the record has to choose by type.
+    async function pricedProduct(
+      tradingDayId: string,
+      prices: Partial<typeof productVarieties.$inferInsert>,
+    ) {
+      const grower = await createTestGrowerWithProduct();
+      cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+      await db
+        .update(productVarieties)
+        .set(prices)
+        .where(eq(productVarieties.id, grower.varietyId));
+      await pickLine(tradingDayId, grower.companyId, grower.varietyId, 10);
+      return grower.varietyId;
+    }
+
+    async function customerWithPermission(tradingDayId: string, maySeePrices: boolean | null) {
+      const customer = await createTestCustomer(tradingDayId);
+      await db
+        .update(companies)
+        .set({ canSeeProductPrices: maySeePrices })
+        .where(eq(companies.id, customer.companyId));
+      return customer;
+    }
+
+    async function savedLine(tradingDayId: string, customerCompanyId: string, varietyId: string) {
+      const order = await getDailyOrderForCustomer(tradingDayId, customerCompanyId);
+      const line = await getOrderProductLine(order!.id, varietyId);
+      expect(line).toBeTruthy();
+      return {
+        pallets: line!.palletsOrdered,
+        record: {
+          priceType: line!.priceType,
+          price: line!.price,
+          priceRangeFrom: line!.priceRangeFrom,
+          priceRangeTo: line!.priceRangeTo,
+        },
+      };
+    }
+
+    it("records מספר as its price, טווח as its range and a תקליט type as the type alone — again on every save, untouched lines too", async () => {
+      const day = await createOpenTestDay(admin.userId);
+      const fixed = await pricedProduct(day.id, {
+        priceType: "fixed",
+        price: "12.5",
+        priceRangeFrom: "9",
+        priceRangeTo: "11",
+      });
+      const range = await pricedProduct(day.id, {
+        priceType: "range",
+        price: "7",
+        priceRangeFrom: "10",
+        priceRangeTo: "12",
+      });
+      const record = await pricedProduct(day.id, { priceType: "record_plus_1", price: "5" });
+      const customer = await customerWithPermission(day.id, true);
+      const client = await signedInCustomer(customer.companyId);
+      cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+      const sendAll = () =>
+        client.rpc(
+          "submit_order",
+          toSubmitOrderRpcArgs({
+            tradingDayId: day.id,
+            lines: [fixed, range, record].map((productVarietyId) => ({
+              productVarietyId,
+              palletsOrdered: 1,
+              comment: null,
+            })),
+          }),
+        );
+
+      expect((await sendAll()).error).toBeNull();
+      expect((await savedLine(day.id, customer.companyId, fixed)).record).toEqual({
+        ...NOTHING,
+        priceType: "fixed",
+        price: "12.50",
+      });
+      expect((await savedLine(day.id, customer.companyId, range)).record).toEqual({
+        ...NOTHING,
+        priceType: "range",
+        priceRangeFrom: "10.00",
+        priceRangeTo: "12.00",
+      });
+      expect((await savedLine(day.id, customer.companyId, record)).record).toEqual({
+        ...NOTHING,
+        priceType: "record_plus_1",
+      });
+
+      // The office changes the prices, and the customer sends the same order
+      // again without touching a line: every line records today's price.
+      await db.update(productVarieties).set({ price: "14" }).where(eq(productVarieties.id, fixed));
+      await db
+        .update(productVarieties)
+        .set({ priceType: "record_minus_1" })
+        .where(eq(productVarieties.id, record));
+      expect((await sendAll()).error).toBeNull();
+      expect((await savedLine(day.id, customer.companyId, fixed)).record).toEqual({
+        ...NOTHING,
+        priceType: "fixed",
+        price: "14.00",
+      });
+      expect((await savedLine(day.id, customer.companyId, record)).record).toEqual({
+        ...NOTHING,
+        priceType: "record_minus_1",
+      });
+    }, 45000);
+
+    it("records only when the customer may see prices — on staff's saves too, by the customer's own permission — and otherwise leaves a line's record as it was", async () => {
+      const day = await createOpenTestDay(admin.userId);
+      const fixed = await pricedProduct(day.id, { priceType: "fixed", price: "12.5" });
+      const maySee = await customerWithPermission(day.id, true);
+      const mayNot = await customerWithPermission(day.id, false);
+      const neverSet = await customerWithPermission(day.id, null);
+      const maySeeClient = await signedInCustomer(maySee.companyId);
+      const mayNotClient = await signedInCustomer(mayNot.companyId);
+      const neverSetClient = await signedInCustomer(neverSet.companyId);
+      cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+      const send = (
+        viewer: SupabaseClient<Database>,
+        palletsOrdered: number,
+        customerCompanyId?: string,
+      ) =>
+        viewer.rpc(
+          "submit_order",
+          toSubmitOrderRpcArgs({
+            tradingDayId: day.id,
+            lines: [{ productVarietyId: fixed, palletsOrdered, comment: null }],
+            ...(customerCompanyId ? { customerCompanyId } : {}),
+          }),
+        );
+      const recordOf = async (customerCompanyId: string) =>
+        (await savedLine(day.id, customerCompanyId, fixed)).record;
+
+      // Their own saves: only the company with the permission records it. A
+      // permission never set counts as "may not", as in the shop.
+      expect((await send(maySeeClient, 1)).error).toBeNull();
+      expect((await send(mayNotClient, 1)).error).toBeNull();
+      expect((await send(neverSetClient, 1)).error).toBeNull();
+      expect(await recordOf(maySee.companyId)).toEqual({
+        ...NOTHING,
+        priceType: "fixed",
+        price: "12.50",
+      });
+      expect(await recordOf(mayNot.companyId)).toEqual(NOTHING);
+      expect(await recordOf(neverSet.companyId)).toEqual(NOTHING);
+
+      // Staff saving on a customer's behalf see the price on either screen,
+      // but what the line records follows the customer's own permission.
+      await db.update(productVarieties).set({ price: "13" }).where(eq(productVarieties.id, fixed));
+      expect((await send(admin.client, 2, maySee.companyId)).error).toBeNull();
+      expect((await send(admin.client, 2, mayNot.companyId)).error).toBeNull();
+      expect(await recordOf(maySee.companyId)).toEqual({
+        ...NOTHING,
+        priceType: "fixed",
+        price: "13.00",
+      });
+      expect(await recordOf(mayNot.companyId)).toEqual(NOTHING);
+
+      // On a day the shop hides prices, a save records nothing new and
+      // clears nothing: the quantity changes, the record stays.
+      await db
+        .update(dailyShops)
+        .set({ canSeePrices: false })
+        .where(eq(dailyShops.tradingDayId, day.id));
+      await db.update(productVarieties).set({ price: "14" }).where(eq(productVarieties.id, fixed));
+      expect((await send(maySeeClient, 3)).error).toBeNull();
+      expect(await savedLine(day.id, maySee.companyId, fixed)).toEqual({
+        pallets: "3.00",
+        record: { ...NOTHING, priceType: "fixed", price: "13.00" },
+      });
+    }, 45000);
+  });
+
   // Workbook Task 36: the growers behind the order screen's "מגדל מועדף"
   // button. Written for CI; not run where they were written (no local
   // database there).
