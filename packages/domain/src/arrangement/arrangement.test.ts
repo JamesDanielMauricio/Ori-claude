@@ -1326,6 +1326,53 @@ describe("arrangement module", () => {
     expect(byCustomer(await recordsOn(line))).toEqual({ [customer.id]: 4 });
   }, 30000);
 
+  it("save_arrangement_changes refuses a cell whose record hangs off another customer's order line, names it, and writes no second record", async () => {
+    const c2 = await customerWhoOrdersNothing();
+    const { day, pickProductId: line, customer } = await setUpDayWithSupplyAndDemand(5, 3);
+    const r = await arrangeNow(line, customer.id, 2);
+    // A direct write to the table leaves the record on the customer's order
+    // line but naming c2 as its own customer. The check then finds it in c2's
+    // cell as expected, while arrange_to_customer, which goes by c2's order
+    // line, would write a second record beside it.
+    const copied = await admin.client
+      .from("arrangement_records")
+      .update({ customer_company_id: c2.id })
+      .eq("id", r.id);
+    expect(copied.error).toBeNull();
+
+    const saved = await saveChanges(day.id, [
+      {
+        dailyPickProductId: line,
+        customerCompanyId: c2.id,
+        quantityPallets: 3,
+        expected: { recordId: r.id, quantityPallets: 2 },
+      },
+    ]);
+
+    expect(saved.error?.code).toBe(ARRANGEMENT_ERROR_CODES.CONFLICT);
+    expect(JSON.parse(saved.error?.details ?? "{}")).toEqual({
+      index: 0,
+      dailyPickProductId: line,
+      customerCompanyId: c2.id,
+      quantityPallets: 3,
+    });
+    const records = async () =>
+      (await recordsOn(line)).map((record) => [record.id, Number(record.quantity_pallets)]);
+    expect(await records()).toEqual([[r.id, 2]]);
+
+    // The cell its order line names is the record's own, and still saves.
+    const ownCell = await saveChanges(day.id, [
+      {
+        dailyPickProductId: line,
+        customerCompanyId: customer.id,
+        quantityPallets: 3,
+        expected: { recordId: r.id, quantityPallets: 2 },
+      },
+    ]);
+    expect(ownCell.error).toBeNull();
+    expect(await records()).toEqual([[r.id, 3]]);
+  }, 30000);
+
   it("save_arrangement_changes moves pallets between two customers on a lot with nothing free, whichever is listed first", async () => {
     const c2 = await customerWhoOrdersNothing();
     const { day, pickProductId: line, customer } = await setUpDayWithSupplyAndDemand(5, 5);
