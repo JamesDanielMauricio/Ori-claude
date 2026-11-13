@@ -9,9 +9,7 @@ import {
   saveRefusalMessage,
   resolveProposal,
   savedAllocation,
-  setProposalCell,
   setUnsavedCell,
-  typeIntoProposal,
   typeIntoUnsaved,
   type ProposalLine,
 } from "./arrangement-proposal";
@@ -657,11 +655,11 @@ describe("a suggested line whose order has changed since", () => {
   });
 
   it("leaves a number the distributor typed alone: pushing stock to someone is theirs to decide", () => {
-    const typed = setProposalCell(
+    const typed = setUnsavedCell(
       [],
       { growerId: GROWER_A, varietyId: LEMON, customerId: CUSTOMER_3 },
       2,
-      false,
+      { forOrder: false, saved: null },
     );
 
     expect(resolve(typed).allocations).toEqual([
@@ -679,14 +677,17 @@ describe("a number typed for a customer's order", () => {
     { ...line(GROWER_B, LEMON, CUSTOMER_2, 1), forOrder: "suggested" },
   ];
   const day = { picks, orders };
-  /** A number typed into the cell at (pick line, customer), on the day as read. */
+  /**
+   * A number typed into the cell at (pick line, customer), on the day as read
+   * — with nothing saved in the cell, as in every case here.
+   */
   const typedInto = (
     lines: ProposalLine[],
     pickLineId: string,
     customerId: string,
     quantity: number,
     read = day,
-  ) => typeIntoProposal(lines, read, { pickLineId, customerId, quantity, recordId: null })?.lines;
+  ) => typeIntoUnsaved(lines, { ...read, records: [] }, { pickLineId, customerId, quantity });
   const withdrawnLychee = orders.map((order) =>
     order.id === "order-1" ? { ...order, daily_order_products: [] } : order,
   );
@@ -1191,138 +1192,25 @@ describe("lotOfPickLine", () => {
   });
 });
 
-describe("setProposalCell", () => {
-  const lychees1 = { growerId: GROWER_A, varietyId: LYCHEE, customerId: CUSTOMER_1 };
-  const offered = [
-    line(GROWER_A, LEMON, CUSTOMER_1, 1),
-    line(GROWER_A, LYCHEE, CUSTOMER_1, 3),
-    line(GROWER_B, LEMON, CUSTOMER_3, 2),
-  ];
-
-  it("changes the quantity of a cell the proposal already holds, where it stands", () => {
-    expect(setProposalCell(offered, lychees1, 5, false)).toEqual([
-      line(GROWER_A, LEMON, CUSTOMER_1, 1),
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 5),
-      line(GROWER_B, LEMON, CUSTOMER_3, 2),
-    ]);
-  });
-
-  it("adds a cell the proposal had nothing in, after the ones it holds", () => {
-    const added = { growerId: GROWER_A, varietyId: LYCHEE, customerId: CUSTOMER_3 };
-
-    expect(setProposalCell(offered, added, 2, false)).toEqual([
-      ...offered,
-      line(GROWER_A, LYCHEE, CUSTOMER_3, 2),
-    ]);
-  });
-
-  it("marks the number typed as for the customer's order when told so, whatever stood in the cell", () => {
-    const suggestedOffer: ProposalLine[] = [
-      { ...line(GROWER_A, LYCHEE, CUSTOMER_1, 3), forOrder: "suggested" },
-    ];
-
-    expect(setProposalCell(suggestedOffer, lychees1, 5, true)).toEqual([
-      { ...line(GROWER_A, LYCHEE, CUSTOMER_1, 5), forOrder: "typed" },
-    ]);
-    expect(setProposalCell(offered, lychees1, 5, true)[1]).toEqual({
-      ...line(GROWER_A, LYCHEE, CUSTOMER_1, 5),
-      forOrder: "typed",
-    });
-  });
-
-  it("makes the number typed a push when told the customer has no order for it, whatever stood in the cell", () => {
-    const suggestedOffer: ProposalLine[] = [
-      { ...line(GROWER_A, LYCHEE, CUSTOMER_1, 3), forOrder: "suggested" },
-    ];
-
-    expect(setProposalCell(suggestedOffer, lychees1, 5, false)).toEqual([
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 5),
-    ]);
-  });
-
-  it("takes a cell out of the proposal when it is emptied", () => {
-    expect(setProposalCell(offered, lychees1, 0, false)).toEqual([
-      line(GROWER_A, LEMON, CUSTOMER_1, 1),
-      line(GROWER_B, LEMON, CUSTOMER_3, 2),
-    ]);
-  });
-
-  it("leaves one line where several stood for the same cell: the number typed, not a sum", () => {
-    const doubled = [
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 3),
-      line(GROWER_B, LEMON, CUSTOMER_3, 2),
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 1),
-    ];
-
-    expect(setProposalCell(doubled, lychees1, 2, false)).toEqual([
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 2),
-      line(GROWER_B, LEMON, CUSTOMER_3, 2),
-    ]);
-    expect(setProposalCell(doubled, lychees1, 0, false)).toEqual([
-      line(GROWER_B, LEMON, CUSTOMER_3, 2),
-    ]);
-  });
-
-  it("touches that grower's lot for that customer and nothing next to it", () => {
-    const neighbours = [
-      line(GROWER_A, LEMON, CUSTOMER_1, 1),
-      line(GROWER_B, LEMON, CUSTOMER_1, 1),
-      line(GROWER_A, LEMON, CUSTOMER_2, 1),
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 1),
-    ];
-
-    expect(
-      setProposalCell(
-        neighbours,
-        { growerId: GROWER_A, varietyId: LEMON, customerId: CUSTOMER_1 },
-        4,
-        false,
-      ),
-    ).toEqual([
-      line(GROWER_A, LEMON, CUSTOMER_1, 4),
-      line(GROWER_B, LEMON, CUSTOMER_1, 1),
-      line(GROWER_A, LEMON, CUSTOMER_2, 1),
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 1),
-    ]);
-  });
-
-  it("leaves the proposal alone when the quantity has more than one decimal place, or is no quantity", () => {
-    for (const quantity of [2.55, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(setProposalCell(offered, lychees1, quantity, false)).toEqual(offered);
-    }
-  });
-
-  it("does not change the lines it was given", () => {
-    // Its own lines, not the ones the cases above share: a version that did
-    // change them in place would already have emptied those of this cell.
-    const given = [
-      line(GROWER_A, LEMON, CUSTOMER_1, 1),
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 3),
-      line(GROWER_A, LYCHEE, CUSTOMER_1, 1),
-    ];
-    const before = structuredClone(given);
-    setProposalCell(given, lychees1, 5, false);
-    setProposalCell(given, lychees1, 0, false);
-
-    expect(given).toEqual(before);
-  });
-});
-
 // The same sequence the screen runs: a suggestion is offered, the distributor
 // types over it, and the day is re-read — by this device after a save, or
 // because someone else changed it.
 describe("a proposal while it is being corrected", () => {
   const offered = [line(GROWER_B, LEMON, CUSTOMER_1, 1), line(GROWER_A, LYCHEE, CUSTOMER_1, 3)];
 
-  /** A number typed into the cell at (pick line, customer), as the screen applies it. */
+  /**
+   * A number typed into the cell at (pick line, customer), as the screen
+   * applies it, on the day these cases read back: every cell typed into here
+   * holds nothing saved.
+   */
   function typed(lines: ProposalLine[], pickLineId: string, customerId: string, quantity: number) {
-    const result = typeIntoProposal(
+    const result = typeIntoUnsaved(
       lines,
-      { picks, orders },
-      { pickLineId, customerId, quantity, recordId: null },
+      { picks, orders, records: [savedLemons] },
+      { pickLineId, customerId, quantity },
     );
     if (!result) throw new Error(`no lot for ${pickLineId}`);
-    return result.lines;
+    return result;
   }
 
   it("saves the number that was typed, in the cell it was typed into", () => {
@@ -1404,83 +1292,6 @@ describe("a proposal while it is being corrected", () => {
       { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 5, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(afterRead.alreadyArranged).toBe(0);
-  });
-});
-
-// A number typed into the grid while a proposal is open — where it goes.
-describe("typeIntoProposal", () => {
-  const typedInto = (
-    pickLineId: string,
-    customerId: string,
-    quantity: number,
-    recordId: string | null = null,
-  ) => ({ pickLineId, customerId, quantity, recordId });
-  // Suggested for customer 2 on grower B's lemons, where customer 2 already
-  // has two pallets saved: hidden behind the record, never offered.
-  const hidden: ProposalLine = { ...line(GROWER_B, LEMON, CUSTOMER_2, 1), forOrder: "suggested" };
-  const suggested: ProposalLine = {
-    ...line(GROWER_A, LYCHEE, CUSTOMER_1, 3),
-    forOrder: "suggested",
-  };
-  const day = { picks, orders };
-
-  it("keeps a number typed into an empty cell in the proposal, for the order it was typed for, and writes nothing", () => {
-    expect(typeIntoProposal([suggested], day, typedInto("line-a-lychee", CUSTOMER_1, 4))).toEqual({
-      lines: [{ ...line(GROWER_A, LYCHEE, CUSTOMER_1, 4), forOrder: "typed" }],
-      saveNow: false,
-    });
-  });
-
-  it("writes a cell with an allocation saved in it at once, and lets go of any suggestion behind it", () => {
-    const typed = typeIntoProposal(
-      [hidden, suggested],
-      day,
-      typedInto("line-b-lemon", CUSTOMER_2, 3, "record-1"),
-    );
-
-    expect(typed).toEqual({ lines: [suggested], saveNow: true });
-    // Emptied afterwards, the cell stays empty: nothing comes back into it.
-    expect(resolve(typed?.lines ?? [], []).allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, forOrder: true, expected: { recordId: null, quantity: 0 } },
-    ]);
-  });
-
-  it("refuses a number for a lot the proposal cannot address, with nothing saved in it", () => {
-    const orphanPicks: BoardPick[] = [
-      {
-        ...picks[0]!,
-        daily_pick_products: [
-          { ...pickLine("line-orphan", "pick-a", LEMON, 3), product_varieties: null },
-        ],
-      },
-    ];
-
-    expect(
-      typeIntoProposal(
-        [suggested],
-        { picks: orphanPicks, orders },
-        typedInto("line-orphan", CUSTOMER_1, 2),
-      ),
-    ).toBeNull();
-  });
-
-  it("still writes a saved cell on such a lot, leaving the proposal as it was", () => {
-    const orphanPicks: BoardPick[] = [
-      {
-        ...picks[0]!,
-        daily_pick_products: [
-          { ...pickLine("line-orphan", "pick-a", LEMON, 3), product_varieties: null },
-        ],
-      },
-    ];
-
-    expect(
-      typeIntoProposal(
-        [suggested],
-        { picks: orphanPicks, orders },
-        typedInto("line-orphan", CUSTOMER_1, 0, "record-x"),
-      ),
-    ).toEqual({ lines: [suggested], saveNow: true });
   });
 });
 
