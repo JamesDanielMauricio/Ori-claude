@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   cellLabel,
+  dropCells,
   lotOfPickLine,
+  pruneSaved,
   refusedCells,
   saveRefusalMessage,
   resolveProposal,
+  savedAllocation,
   setProposalCell,
+  setUnsavedCell,
   typeIntoProposal,
+  typeIntoUnsaved,
   type ProposalLine,
 } from "./arrangement-proposal";
 import type { BoardCompany, BoardOrder, BoardPick, BoardRecord } from "./board-data";
@@ -134,6 +139,9 @@ describe("resolveProposal", () => {
       alreadyArranged: 0,
       unplaceable: 0,
       heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 0,
+      suggestedPallets: 0,
     });
   });
 
@@ -162,12 +170,19 @@ describe("resolveProposal", () => {
     ]);
   });
 
-  it("leaves out a cell that already has an allocation saved in it", () => {
+  it("lands a number typed into a cell that already has an allocation saved in it, for the save to judge", () => {
+    // Typed over nothing it remembers, so it expects the cell empty: the save
+    // refuses it rather than overwrite the two pallets saved there.
     expect(resolve([line(GROWER_B, LEMON, CUSTOMER_2, 5)])).toEqual({
-      allocations: [],
-      alreadyArranged: 1,
+      allocations: [
+        { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 5, expected: { recordId: null, quantity: 0 } },
+      ],
+      alreadyArranged: 0,
       unplaceable: 0,
       heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 0,
+      suggestedPallets: 0,
     });
   });
 
@@ -178,6 +193,9 @@ describe("resolveProposal", () => {
       alreadyArranged: 0,
       unplaceable: 1,
       heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 0,
+      suggestedPallets: 0,
     });
   });
 
@@ -198,7 +216,15 @@ describe("resolveProposal", () => {
         orders,
         records: [],
       }),
-    ).toEqual({ allocations: [], alreadyArranged: 0, unplaceable: 1, heldToOrder: 0 });
+    ).toEqual({
+      allocations: [],
+      alreadyArranged: 0,
+      unplaceable: 1,
+      heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 0,
+      suggestedPallets: 0,
+    });
   });
 
   it("cannot place a line for a customer who is not trading on the day", () => {
@@ -207,6 +233,9 @@ describe("resolveProposal", () => {
       alreadyArranged: 0,
       unplaceable: 1,
       heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 0,
+      suggestedPallets: 0,
     });
   });
 
@@ -222,6 +251,9 @@ describe("resolveProposal", () => {
       alreadyArranged: 0,
       unplaceable: 3,
       heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 0,
+      suggestedPallets: 0,
     });
   });
 
@@ -256,13 +288,16 @@ describe("resolveProposal", () => {
     ]);
   });
 
-  it("shows a saved allocation under its order line's customer, and takes its cell for both names", () => {
+  it("shows a saved allocation under its order line's customer, and lands numbers typed into its cell under either name", () => {
     // The record's own copy of the customer says 1; the order line it was
     // arranged against is customer 2's. The two never differ in real data —
     // which is why the rule for when they do has to be pinned in one place:
-    // the grid shows it where the order line puts it, and the cell is taken
-    // for both customers, as save_arrangement_proposal judges it — a preview
-    // that offered it to customer 1 would be refused on every save.
+    // the grid shows it where the order line puts it. A number typed for
+    // either customer lands, as every number typed does; typed over nothing
+    // it remembers, each expects its cell empty, and the save, which finds the
+    // record under both names, refuses both rather than write beside it. (For
+    // a suggestion, which stays out, see "a cell taken under either name its
+    // record carries".)
     const miscopied = { ...savedLemons, customer_company_id: CUSTOMER_1 };
 
     const result = resolve(
@@ -275,10 +310,16 @@ describe("resolveProposal", () => {
 
     expect(growerB?.cells.map((cell) => cell.allocated)).toEqual([0, 2, 0]);
     expect(result).toEqual({
-      allocations: [],
-      alreadyArranged: 2,
+      allocations: [
+        { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 1, expected: { recordId: null, quantity: 0 } },
+        { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, expected: { recordId: null, quantity: 0 } },
+      ],
+      alreadyArranged: 0,
       unplaceable: 0,
       heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 0,
+      suggestedPallets: 0,
     });
   });
 });
@@ -299,7 +340,15 @@ describe("a proposal on a pick closed since it was offered", () => {
         orders,
         records: [savedLemons],
       }),
-    ).toEqual({ allocations: [], alreadyArranged: 0, unplaceable: 2, heldToOrder: 0 });
+    ).toEqual({
+      allocations: [],
+      alreadyArranged: 0,
+      unplaceable: 2,
+      heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 0,
+      suggestedPallets: 0,
+    });
   });
 
   it("still counts what was saved off the closed pick against the customer's order", () => {
@@ -378,11 +427,15 @@ describe("a proposal while its cells are being saved", () => {
   const records = [savedLemons, savedPush];
 
   it("drops each cell from the proposal once its allocation is saved", () => {
+    // Customer 2's cell now holds the very number typed for it: already saved.
     expect(resolveProposal({ lines, picks, orders: ordersAfterSave, records })).toEqual({
       allocations: [{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } }],
-      alreadyArranged: 1,
+      alreadyArranged: 0,
       unplaceable: 0,
       heldToOrder: 0,
+      alreadySaved: 1,
+      suggestedCells: 0,
+      suggestedPallets: 0,
     });
   });
 
@@ -563,6 +616,9 @@ describe("a suggested line whose order has changed since", () => {
       alreadyArranged: 1,
       unplaceable: 0,
       heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 1,
+      suggestedPallets: 1,
     });
   });
 
@@ -663,20 +719,27 @@ describe("a number typed for a customer's order", () => {
     });
   });
 
-  it("is dropped once the customer has withdrawn the order it was for", () => {
+  it("is kept, still for the order, once the customer has withdrawn the order it was for", () => {
+    // No read drops a number typed. Still marked for the order, it is refused
+    // by the save (P0006), naming the cell, rather than saved as a push.
     const typed = typedInto(offered, "line-a-lychee", CUSTOMER_1, 2) ?? [];
 
     const resolved = resolveProposal({ lines: typed, picks, orders: withdrawnLychee, records: [] });
 
-    expect(resolved.allocations.map((allocation) => allocation.customerId)).not.toContain(
-      CUSTOMER_1,
-    );
-    expect(resolved.heldToOrder).toBe(1);
+    expect(resolved.allocations).toContainEqual({
+      pickLineId: "line-a-lychee",
+      customerId: CUSTOMER_1,
+      quantity: 2,
+      forOrder: true,
+      expected: { recordId: null, quantity: 0 },
+    });
+    expect(resolved.heldToOrder).toBe(0);
   });
 
-  it("is dropped when the order it was for has been left at no pallets", () => {
+  it("is kept, still for the order, when the order it was for has been left at no pallets", () => {
     // A push saved to a customer leaves a line for no pallets behind; a line
-    // for no pallets is no order, as the save judges it.
+    // for no pallets is no order, as the save judges it — and refuses this
+    // cell for it.
     const typed = typedInto(offered, "line-a-lychee", CUSTOMER_1, 2) ?? [];
     const atNoPallets = orders.map((order) =>
       order.id === "order-1"
@@ -687,9 +750,10 @@ describe("a number typed for a customer's order", () => {
     const resolved = resolveProposal({ lines: typed, picks, orders: atNoPallets, records: [] });
 
     expect(resolved.allocations).toEqual([
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, forOrder: true, expected: { recordId: null, quantity: 0 } },
       { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
-    expect(resolved.heldToOrder).toBe(1);
+    expect(resolved.heldToOrder).toBe(0);
   });
 
   it("stands as typed once the whole of the order has been arranged elsewhere", () => {
@@ -731,6 +795,9 @@ describe("a number typed for a customer's order", () => {
       alreadyArranged: 0,
       unplaceable: 0,
       heldToOrder: 0,
+      alreadySaved: 0,
+      suggestedCells: 1,
+      suggestedPallets: 1,
     });
   });
 
@@ -748,13 +815,16 @@ describe("a number typed for a customer's order", () => {
     expect(resolve(moved ?? [], []).allocations).toEqual([
       { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
-    // ...so it goes when the order goes, rather than being saved as a push.
+    // ...so when the order goes, it is still for the order: the save refuses
+    // it (P0006) rather than save it as a push.
     const withdrawn = orders.map((order) =>
       order.id === "order-2" ? { ...order, daily_order_products: [] } : order,
     );
     expect(
       resolveProposal({ lines: moved ?? [], picks, orders: withdrawn, records: [] }).allocations,
-    ).toEqual([]);
+    ).toEqual([
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
+    ]);
   });
 
   it("stays for the order when a cell is emptied and typed into again", () => {
@@ -904,9 +974,12 @@ describe("a number typed for a customer's order", () => {
 });
 
 describe("a cell taken under either name its record carries", () => {
-  it("is not suggested over for the customer the record's own copy names", () => {
+  it("takes a number typed for the customer the record's own copy names, for the save to judge", () => {
     // The order line says customer 2; the record's copy says customer 3. The
-    // save treats the cell as filled for both, so the preview must too.
+    // save treats the cell as filled for both, so a number typed for
+    // customer 3 over nothing it remembers is refused there rather than
+    // written beside the record. The preview only shows it, as it shows every
+    // number typed.
     const disagreeing: BoardRecord = { ...savedLemons, customer_company_id: CUSTOMER_3 };
     const resolved = resolveProposal({
       lines: [line(GROWER_B, LEMON, CUSTOMER_3, 1)],
@@ -915,8 +988,35 @@ describe("a cell taken under either name its record carries", () => {
       records: [disagreeing],
     });
 
+    expect(resolved.allocations).toEqual([
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_3, quantity: 1, expected: { recordId: null, quantity: 0 } },
+    ]);
+    expect(resolved.alreadyArranged).toBe(0);
+  });
+
+  it("keeps a suggestion out of it for the customer the record's own copy names", () => {
+    const disagreeing: BoardRecord = { ...savedLemons, customer_company_id: CUSTOMER_3 };
+    const resolved = resolveProposal({
+      lines: [{ ...line(GROWER_B, LEMON, CUSTOMER_3, 1), forOrder: "suggested" }],
+      picks,
+      orders,
+      records: [disagreeing],
+    });
+
     expect(resolved.allocations).toEqual([]);
     expect(resolved.alreadyArranged).toBe(1);
+  });
+
+  it("is what a number typed for either customer is typed over", () => {
+    const read = { orders, records: [{ ...savedLemons, customer_company_id: CUSTOMER_3 }] };
+
+    for (const customerId of [CUSTOMER_2, CUSTOMER_3]) {
+      expect(savedAllocation(read, "line-b-lemon", customerId)).toEqual({
+        recordId: "record-1",
+        quantity: 2,
+      });
+    }
+    expect(savedAllocation(read, "line-b-lemon", CUSTOMER_1)).toBeNull();
   });
 });
 
@@ -1264,7 +1364,9 @@ describe("a proposal while it is being corrected", () => {
     expect(resolve(emptied).allocations).toEqual([]);
   });
 
-  it("lets go of a corrected cell once somebody else's allocation is saved in it", () => {
+  it("keeps a corrected cell once somebody else's allocation is saved in it, for the save to judge", () => {
+    // Typed while the cell was empty, so the save, finding their record in
+    // it, refuses the cell rather than overwrite it.
     const corrected = typed(offered, "line-a-lychee", CUSTOMER_1, 5);
     const theirs: BoardRecord = {
       id: "record-theirs",
@@ -1280,8 +1382,9 @@ describe("a proposal while it is being corrected", () => {
 
     expect(afterRead.allocations).toEqual([
       { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 1, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 5, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
-    expect(afterRead.alreadyArranged).toBe(1);
+    expect(afterRead.alreadyArranged).toBe(0);
   });
 });
 
@@ -1362,6 +1465,123 @@ describe("typeIntoProposal", () => {
   });
 });
 
+// The grid's unsaved changes. A number typed into any cell — empty, saved, or
+// emptied — waits as a line for "שמור שינויים", remembering the saved
+// allocation it was typed over, so the save can refuse a cell that changed
+// since rather than overwrite it.
+const B_LEMON_C2 = { growerId: GROWER_B, varietyId: LEMON, customerId: CUSTOMER_2 };
+const SAVED = { recordId: "record-1", quantity: 2 };
+const day = (records: BoardRecord[] = [savedLemons]) => ({ picks, orders, records });
+
+describe("setUnsavedCell", () => {
+  it("typed over a saved cell, remembers what the cell held", () => {
+    expect(setUnsavedCell([], B_LEMON_C2, 5, { forOrder: true, saved: SAVED }))
+      .toEqual([{ ...B_LEMON_C2, quantity: 5, forOrder: "typed", expected: SAVED }]);
+  });
+  it("typed back to the saved number, is no change at all", () => {
+    const lines = setUnsavedCell([], B_LEMON_C2, 5, { forOrder: true, saved: SAVED });
+    expect(setUnsavedCell(lines, B_LEMON_C2, 2, { forOrder: true, saved: SAVED })).toEqual([]);
+  });
+  it("emptying a saved cell is a removal", () => {
+    expect(setUnsavedCell([], B_LEMON_C2, 0, { forOrder: true, saved: SAVED }))
+      .toEqual([{ ...B_LEMON_C2, quantity: 0, forOrder: "typed", expected: SAVED }]);
+  });
+  it("emptying an empty cell leaves nothing", () => {
+    expect(setUnsavedCell([], { growerId: GROWER_A, varietyId: LYCHEE, customerId: CUSTOMER_1 }, 0, { forOrder: true, saved: null })).toEqual([]);
+  });
+  it("keeps what the cell held when it was first typed over", () => {
+    const lines = setUnsavedCell([], B_LEMON_C2, 5, { forOrder: true, saved: SAVED });
+    expect(setUnsavedCell(lines, B_LEMON_C2, 6, { forOrder: true, saved: { recordId: "record-9", quantity: 4 } })[0]?.expected).toEqual(SAVED);
+  });
+  it("typed over a suggestion hidden behind a saved cell, remembers what the cell holds", () => {
+    // Suggested while the cell was empty; 2 pallets have been saved in it since,
+    // so the grid shows those (no suggestion lands on a filled cell). A
+    // suggestion remembers nothing: emptying the cell is still a removal, and
+    // typing the saved number back is still no change.
+    const hidden: ProposalLine[] = [{ ...B_LEMON_C2, quantity: 1, forOrder: "suggested" }];
+    expect(setUnsavedCell(hidden, B_LEMON_C2, 0, { forOrder: true, saved: SAVED }))
+      .toEqual([{ ...B_LEMON_C2, quantity: 0, forOrder: "typed", expected: SAVED }]);
+    expect(setUnsavedCell(hidden, B_LEMON_C2, 2, { forOrder: true, saved: SAVED })).toEqual([]);
+  });
+  it("a quantity finer than a tenth changes nothing", () => {
+    const lines = [line(GROWER_A, LYCHEE, CUSTOMER_1, 3)];
+    expect(setUnsavedCell(lines, { growerId: GROWER_A, varietyId: LYCHEE, customerId: CUSTOMER_1 }, 2.55, { forOrder: true, saved: null })).toBe(lines);
+  });
+});
+
+describe("typeIntoUnsaved", () => {
+  it("finds the saved allocation behind the cell", () => {
+    expect(typeIntoUnsaved([], day(), { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 4 }))
+      .toEqual([{ ...B_LEMON_C2, quantity: 4, forOrder: "typed", expected: SAVED }]);
+  });
+  it("a push into an empty cell is neither for an order nor over anything", () => {
+    expect(typeIntoUnsaved([], day(), { pickLineId: "line-a-lemon", customerId: CUSTOMER_3, quantity: 1 }))
+      .toEqual([{ growerId: GROWER_A, varietyId: LEMON, customerId: CUSTOMER_3, quantity: 1 }]);
+  });
+  it("is null for a lot that is not on the day", () => {
+    expect(typeIntoUnsaved([], day(), { pickLineId: "line-x", customerId: CUSTOMER_1, quantity: 1 })).toBeNull();
+  });
+});
+
+describe("resolveProposal with typed changes", () => {
+  it("lands a typed number over a saved cell, with what it replaces", () => {
+    expect(resolve([{ ...B_LEMON_C2, quantity: 5, forOrder: "typed", expected: SAVED }]).allocations).toEqual([
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 5, forOrder: true, expected: SAVED },
+    ]);
+  });
+  it("lands a removal", () => {
+    expect(resolve([{ ...B_LEMON_C2, quantity: 0, forOrder: "typed", expected: SAVED }]).allocations[0]?.quantity).toBe(0);
+  });
+  it("keeps a typed number whose empty cell somebody filled since, for the save to refuse", () => {
+    const resolved = resolve([{ ...B_LEMON_C2, quantity: 3, forOrder: "typed" }]);
+    expect(resolved.allocations).toEqual([
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 3, forOrder: true, expected: { recordId: null, quantity: 0 } },
+    ]);
+    expect(resolved.alreadyArranged).toBe(0);
+  });
+  it("still drops a suggestion whose cell is filled", () => {
+    const resolved = resolve([{ ...B_LEMON_C2, quantity: 1, forOrder: "suggested" }]);
+    expect(resolved.allocations).toEqual([]);
+    expect(resolved.alreadyArranged).toBe(1);
+  });
+  it("keeps a number typed for an order the customer withdrew, still marked for the order", () => {
+    const withdrawn = orders.map((order) => (order.id === "order-2" ? { ...order, daily_order_products: [] } : order));
+    const resolved = resolveProposal({ lines: [{ growerId: GROWER_A, varietyId: LEMON, customerId: CUSTOMER_2, quantity: 1, forOrder: "typed" }], picks, orders: withdrawn, records: [] });
+    expect(resolved.allocations).toEqual([{ pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } }]);
+    expect(resolved.heldToOrder).toBe(0);
+  });
+  it("counts a line whose cell already holds its number as already saved", () => {
+    const resolved = resolve([{ ...B_LEMON_C2, quantity: 2, forOrder: "typed", expected: SAVED }]);
+    expect(resolved.allocations).toEqual([]);
+    expect(resolved.alreadySaved).toBe(1);
+  });
+  it("holds a suggestion to what a typed change leaves of the order, replacing the saved number rather than adding to it", () => {
+    // Ordered 3; saved 2 on B is changed to 1, so 2 are left for the suggestion of 3 on A.
+    const resolved = resolve([
+      { ...B_LEMON_C2, quantity: 1, forOrder: "typed", expected: SAVED },
+      { growerId: GROWER_A, varietyId: LEMON, customerId: CUSTOMER_2, quantity: 3, forOrder: "suggested" },
+    ]);
+    expect(resolved.allocations.find((a) => a.pickLineId === "line-a-lemon")?.quantity).toBe(2);
+    expect(resolved.heldToOrder).toBe(1);
+  });
+  it("counts suggested cells and pallets", () => {
+    const resolved = resolve([{ growerId: GROWER_A, varietyId: LYCHEE, customerId: CUSTOMER_1, quantity: 3, forOrder: "suggested" }]);
+    expect([resolved.suggestedCells, resolved.suggestedPallets]).toEqual([1, 3]);
+  });
+});
+
+describe("dropCells and pruneSaved", () => {
+  const lychee = { growerId: GROWER_A, varietyId: LYCHEE, customerId: CUSTOMER_1, quantity: 4, forOrder: "typed" as const };
+  it("dropCells removes the lines of the cells named", () => {
+    const lines = [{ ...B_LEMON_C2, quantity: 5, forOrder: "typed" as const, expected: SAVED }, lychee];
+    expect(dropCells(lines, picks, [{ pickLineId: "line-b-lemon", customerId: CUSTOMER_2 }])).toEqual([lychee]);
+  });
+  it("pruneSaved removes a line whose cell already holds its number", () => {
+    const lines = [{ ...B_LEMON_C2, quantity: 2, forOrder: "typed" as const, expected: SAVED }, lychee];
+    expect(pruneSaved(lines, day())).toEqual([lychee]);
+  });
+});
+
 // What the banner says when a save is refused — the one place a refusal is
 // put into words, so the wording can be checked without a database.
 describe("saveRefusalMessage", () => {
@@ -1372,7 +1592,7 @@ describe("saveRefusalMessage", () => {
     customerCompanyId,
   });
 
-  it("says that cells changed meanwhile have left the proposal, names them, and that it can be saved again", () => {
+  it("says that cells changed meanwhile and the numbers in them were taken out, names them, and that it can be saved again", () => {
     const message = saveRefusalMessage({
       error: {
         code: "P0006",
@@ -1386,7 +1606,7 @@ describe("saveRefusalMessage", () => {
     });
 
     expect(message).toBe(
-      `לא נשמר דבר: תאים אלה השתנו בינתיים — שובצו, או שההזמנה שלהם בוטלה — והם ירדו מההצעה: ${LEMON} (גולדי) ← בני שיווק, ${LYCHEE} (אברהמי אהוד) ← אבי הפצה. אפשר לשמור שוב.`,
+      `לא נשמר דבר: תאים אלה השתנו בינתיים — שובצו או שונו, או שההזמנה שלהם בוטלה — והמספרים שלך בהם הוסרו: ${LEMON} (גולדי) ← בני שיווק, ${LYCHEE} (אברהמי אהוד) ← אבי הפצה. אפשר לשמור שוב.`,
     );
   });
 
@@ -1398,7 +1618,7 @@ describe("saveRefusalMessage", () => {
         names,
         reason: "ignored for a conflict",
       }),
-    ).toBe("לא נשמר דבר: חלק מהתאים השתנו בינתיים, והם ירדו מההצעה. אפשר לשמור שוב.");
+    ).toBe("לא נשמר דבר: חלק מהתאים השתנו בינתיים, והמספרים שלך בהם הוסרו. אפשר לשמור שוב.");
   });
 
   it("names the one cell any other refusal was about, with the reason", () => {
