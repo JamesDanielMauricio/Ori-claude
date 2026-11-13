@@ -1,6 +1,6 @@
 # Products grid: one save button instead of auto-save — design
 
-**Date:** 2026-11-13 · **Status:** for James's review · **Screen:** סידור לפי מוצרים (`/backoffice/new-arrangement`)
+**Date:** 2026-11-13 · **Status:** approved 2026-11-13 · implemented on feat/grid-save-button · **Screen:** סידור לפי מוצרים (`/backoffice/new-arrangement`)
 
 ## 1. Goal
 

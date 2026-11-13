@@ -41,6 +41,7 @@ import { expect, type Page, test } from "@playwright/test";
 //
 // REQUIRES migration 0040 (arrange_to_customer). The ✓ button is that
 // function; without it the board reports "פעולה זו דורשת מיגרציה שטרם הורצה".
+// The grid's "שמור שינויים" needs 0103 (save_arrangement_changes) the same way.
 test.describe("Backoffice — arrangement workspace", () => {
   const cleanupFns: Array<() => Promise<void>> = [];
 
@@ -203,22 +204,111 @@ test.describe("Backoffice — arrangement workspace", () => {
     const matrixCell = page.getByLabel(`${grower.varietyName} — ${customerCompany.name}`, {
       exact: true,
     });
+    const saveButton = page.getByRole("button", { name: "שמור שינויים" });
+    const search = page.getByPlaceholder("חיפוש מוצר…");
     await expect(matrixCell).toHaveValue("");
+
+    // 1. Enter only moves on; the number waits, marked unsaved, for שמור
+    // שינויים (James, 2026-11-13).
     await matrixCell.fill("5");
-    // Enter commits the cell, the same as it would in a spreadsheet. There is
-    // deliberately no success toast — a distributor types across a whole row
-    // — so the confirmation is the value coming back from the server.
     await matrixCell.press("Enter");
     await expect(matrixCell).toHaveValue("5");
+    await expect(matrixCell).toHaveAttribute("title", "עדיין לא נשמר");
+    await expect(page.getByText("שינוי אחד שלא נשמר.")).toBeVisible();
+    const written = await adminClient
+      .from("arrangement_records")
+      .select("id")
+      .eq("daily_pick_product_id", pickLine!.id);
+    expect(written.data).toEqual([]); // nothing is written while typing
+    await saveButton.click();
+    await expect(page.getByText("הסידור נשמר: 1 תאים.")).toBeVisible();
+    await expect(matrixCell).not.toHaveAttribute("title", "עדיין לא נשמר");
 
-    // A refused quantity must not be left sitting in the cell. Only 10 were
-    // picked, so 99 over-allocates and arrange_to_customer raises P0009; the
-    // grid has to fall back to the stored value rather than keep a number the
-    // day does not actually contain.
+    // 2. A refused save saves nothing and keeps the number to correct;
+    // discarding asks first. Only 10 were picked, so 99 over-allocates and
+    // the save is refused (P0009).
     await matrixCell.fill("99");
     await matrixCell.press("Enter");
-    await expect(page.getByText(/חורגת ממה שנקטף/)).toBeVisible();
+    await saveButton.click();
+    await expect(page.getByText(/חורגת ממה שנקטף/).first()).toBeVisible();
+    await expect(matrixCell).toHaveValue("99");
+    await page.getByRole("button", { name: "בטל שינויים" }).click();
+    await page.locator("dialog[open]").getByRole("button", { name: "בטל שינויים" }).click();
     await expect(matrixCell).toHaveValue("5");
+    // The dialog stays open, holding the page behind it inert, while it
+    // animates out (lib/use-exit-animation.ts). Typing into the grid before
+    // it has gone would type into nothing.
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+
+    // 3. Someone else changes the same cell meanwhile: refused, named, their
+    // number shows.
+    await matrixCell.fill("4");
+    await matrixCell.press("Enter");
+    const theirs = await adminClient.rpc("arrange_to_customer", {
+      p_daily_pick_product_id: pickLine!.id,
+      p_customer_company_id: customerCompany.id,
+      p_quantity_pallets: 2,
+    });
+    if (theirs.error) throw theirs.error;
+    await saveButton.click();
+    await expect(page.getByText(/השתנו בינתיים/).first()).toBeVisible();
+    await expect(matrixCell).toHaveValue("2");
+    await expect(matrixCell).not.toHaveAttribute("title", "עדיין לא נשמר");
+
+    // 4. Leaving while the save is still on its way: it lands anyway.
+    //
+    // Step 1's toast says the same words and lives four seconds. Waiting for
+    // it to clear first is what makes the toast check below prove THIS save:
+    // otherwise it could pass on that stale toast before this save landed.
+    await expect(page.getByText("הסידור נשמר: 1 תאים.")).toHaveCount(0);
+    await matrixCell.fill("5");
+    await matrixCell.press("Enter");
+    await page.route("**/rest/v1/rpc/save_arrangement_changes", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await route.continue();
+    });
+    await saveButton.click();
+    await page.getByRole("link", { name: "לסידור לפי מגדל" }).click();
+    await expect(page.getByText("הסידור נשמר: 1 תאים.")).toBeVisible({ timeout: 10000 });
+    await page.unroute("**/rest/v1/rpc/save_arrangement_changes");
+    await page.getByRole("link", { name: "סידור לפי מוצרים" }).click();
+    await search.fill(grower.varietyName);
+    await expect(matrixCell).toHaveValue("5");
+    // The bar, not page text: a closed <dialog> keeps its words in the DOM.
+    await expect(page.getByRole("status").filter({ hasText: "שלא נשמר" })).toHaveCount(0);
+
+    // Unsaved numbers survive switching screens…
+    await matrixCell.fill("3");
+    await matrixCell.press("Enter");
+    await page.getByRole("link", { name: "לסידור לפי מגדל" }).click();
+    // On the board for real before coming back: two clicks in a row could
+    // otherwise both land before the grid was ever taken off the page.
+    await expect(page.getByText("בחר מוצר מכרטיס של מגדל כדי לסדר אותו ללקוחות.")).toBeVisible();
+    await page.getByRole("link", { name: "סידור לפי מוצרים" }).click();
+    await search.fill(grower.varietyName);
+    await expect(matrixCell).toHaveValue("3");
+    await expect(matrixCell).toHaveAttribute("title", "עדיין לא נשמר");
+
+    // …a reload drops them (James: fine to lose on reload)…
+    await page.reload();
+    await search.fill(grower.varietyName);
+    await expect(matrixCell).toHaveValue("5");
+    await matrixCell.fill("3");
+    await matrixCell.press("Enter");
+    // Unsaved before signing out, so the check after signing back in has
+    // something to prove.
+    await expect(matrixCell).toHaveAttribute("title", "עדיין לא נשמר");
+
+    // 5. …and so does signing out and back in.
+    await page.getByRole("button", { name: "התנתקות" }).click();
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+    await page.getByRole("link", { name: "סידור לפי מוצרים" }).click();
+    await search.fill(grower.varietyName);
+    await expect(matrixCell).toHaveValue("5");
+    await expect(matrixCell).not.toHaveAttribute("title", "עדיין לא נשמר");
 
     // --- Back on the board: the matrix's record shows against the day ---
     await page.goto("/backoffice/arrangement");
