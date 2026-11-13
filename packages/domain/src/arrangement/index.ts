@@ -35,5 +35,8 @@ export {
   saveArrangementProposalInputSchema,
   toSaveArrangementProposalRpcArgs,
   type SaveArrangementProposalInput,
+  saveArrangementChangesInputSchema,
+  toSaveArrangementChangesRpcArgs,
+  type SaveArrangementChangesInput,
   ARRANGEMENT_ERROR_CODES,
 } from "./schemas";

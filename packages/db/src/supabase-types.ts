@@ -1623,6 +1623,15 @@ export type Database = {
         };
         Returns: number;
       };
+      // The products grid's one save (migration 0103): all the changed
+      // cells in one transaction. Returns how many cells it changed.
+      save_arrangement_changes: {
+        Args: {
+          p_trading_day_id: string;
+          p_changes: Json;
+        };
+        Returns: number;
+      };
       populate_arrangement_prices: {
         Args: {
           p_trading_day_id: string;

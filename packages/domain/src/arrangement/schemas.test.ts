@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   ARRANGEMENT_ERROR_CODES,
   arrangeToCustomerInputSchema,
+  saveArrangementChangesInputSchema,
   saveArrangementProposalInputSchema,
+  toSaveArrangementChangesRpcArgs,
   toSaveArrangementProposalRpcArgs,
   updateArrangementRecordInputSchema,
 } from "./schemas";
@@ -167,5 +169,61 @@ describe("a record's price type", () => {
         priceType,
       ).toBe(false);
     }
+  });
+});
+
+describe("saveArrangementChangesInputSchema", () => {
+  const GDAY = "00000000-0000-4000-8000-000000000001";
+  const LINE = "00000000-0000-4000-8000-000000000002";
+  const C1 = "00000000-0000-4000-8000-000000000003";
+  const C2 = "00000000-0000-4000-8000-000000000004";
+  const C3 = "00000000-0000-4000-8000-000000000005";
+  const R2 = "00000000-0000-4000-8000-000000000006";
+  const R3 = "00000000-0000-4000-8000-000000000007";
+  const EMPTY = { recordId: null, quantityPallets: 0 };
+  const change = (over: Record<string, unknown> = {}) => ({
+    dailyPickProductId: LINE,
+    customerCompanyId: C1,
+    quantityPallets: 3,
+    expected: EMPTY,
+    ...over,
+  });
+  const parse = (changes: unknown[]) =>
+    saveArrangementChangesInputSchema.safeParse({ tradingDayId: GDAY, changes });
+
+  it("accepts a new, a changed and a cleared cell", () => {
+    expect(
+      parse([
+        change(),
+        change({ customerCompanyId: C2, quantityPallets: 5, expected: { recordId: R2, quantityPallets: 2 } }),
+        change({ customerCompanyId: C3, quantityPallets: 0, expected: { recordId: R3, quantityPallets: 1 } }),
+      ]).success,
+    ).toBe(true);
+  });
+
+  it("refuses a cell that appears twice", () => {
+    expect(parse([change(), change({ quantityPallets: 4 })]).success).toBe(false);
+  });
+
+  it("refuses clearing a cell that held nothing", () => {
+    expect(parse([change({ quantityPallets: 0 })]).success).toBe(false);
+  });
+
+  it("takes tenths of a pallet and nothing finer, and no negatives", () => {
+    expect(parse([change({ quantityPallets: 0.5 })]).success).toBe(true);
+    expect(parse([change({ quantityPallets: 0.55 })]).success).toBe(false);
+    expect(parse([change({ quantityPallets: -1 })]).success).toBe(false);
+    expect(parse([change({ expected: { recordId: R2, quantityPallets: 0.55 } })]).success).toBe(false);
+  });
+
+  it("maps to the function's argument names", () => {
+    const input = saveArrangementChangesInputSchema.parse({
+      tradingDayId: GDAY,
+      changes: [change({ forOrder: true })],
+    });
+    expect(toSaveArrangementChangesRpcArgs(input)).toEqual({
+      p_trading_day_id: GDAY,
+      p_changes: input.changes,
+    });
   });
 });
