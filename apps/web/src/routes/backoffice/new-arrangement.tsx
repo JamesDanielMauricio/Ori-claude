@@ -308,13 +308,15 @@ export default function NewArrangementPage() {
       // Re-read BEFORE the changes are let go, and wait for it — the mutation
       // stays pending meanwhile, so the grid stays held. Letting them go first
       // would show every cell just saved as it stood before, for the moment
-      // between the two. Every cached copy of the grid, not only one on
-      // screen (refetchType "all"): a grid left mid-save is read again too,
-      // so coming back to it shows the saved numbers, not its copy from
-      // before the save.
+      // between the two. The saved day's grid whether or not it is on screen
+      // (refetchType "all"): a grid left mid-save is read again too, so
+      // coming back to it shows the saved numbers, not its copy from before
+      // the save. That day's only: the save changed no other, and re-reading
+      // every day still cached would keep the grid held for downloads it
+      // cannot need.
       void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
       await queryClient.invalidateQueries({
-        queryKey: newArrangementKeys.matrixAll,
+        queryKey: newArrangementKeys.matrix(tradingDayId),
         refetchType: "all",
       });
       // The lines that were sent, not whatever the day holds by now: what
@@ -329,12 +331,12 @@ export default function NewArrangementPage() {
     onError: async (error: RpcError, { tradingDayId }) => {
       // Nothing was saved. Re-read anyway, and wait for it: a refusal usually
       // means this screen's copy of the day is behind, and what is said and
-      // let go below is worked out from the day as it is now. Every cached
-      // copy of the grid, as on success: with the screen left mid-save,
+      // let go below is worked out from the day as it is now. That day's
+      // grid, on screen or not, as on success: with the screen left mid-save,
       // nothing else would read it again before it is shown.
       void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
       await queryClient.invalidateQueries({
-        queryKey: newArrangementKeys.matrixAll,
+        queryKey: newArrangementKeys.matrix(tradingDayId),
         refetchType: "all",
       });
       const fresh = queryClient.getQueryData<MatrixDay | null>(
