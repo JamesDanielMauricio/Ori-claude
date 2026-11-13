@@ -172,6 +172,12 @@ export default function NewArrangementPage() {
     [boardDay, arrangement, editable, unsaved.lines],
   );
 
+  // What the distributor sees as unsaved: the cells "שמור שינויים" will
+  // change, on the day as last read. Never the lines in the store, some of
+  // which may land nowhere (see resolveProposal) and so show, and save,
+  // nothing. The bar's count, and what holds "הצע סידור" back.
+  const unsavedCount = proposal?.allocations.length ?? 0;
+
   // A day that can no longer be edited — its arrangement closed, say — has
   // nothing to save into, and loses its unsaved changes (spec §4.4), the bar
   // and the unsaved marks with them. Not while they are being saved, though:
@@ -302,9 +308,15 @@ export default function NewArrangementPage() {
       // Re-read BEFORE the changes are let go, and wait for it — the mutation
       // stays pending meanwhile, so the grid stays held. Letting them go first
       // would show every cell just saved as it stood before, for the moment
-      // between the two.
+      // between the two. Every cached copy of the grid, not only one on
+      // screen (refetchType "all"): a grid left mid-save is read again too,
+      // so coming back to it shows the saved numbers, not its copy from
+      // before the save.
       void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
-      await queryClient.invalidateQueries({ queryKey: newArrangementKeys.matrixAll });
+      await queryClient.invalidateQueries({
+        queryKey: newArrangementKeys.matrixAll,
+        refetchType: "all",
+      });
       // The lines that were sent, not whatever the day holds by now: what
       // this save did not carry, it did not save. Lines that landed nowhere
       // (already saved, a suggestion left out) go with them.
@@ -315,13 +327,16 @@ export default function NewArrangementPage() {
       showToast(`הסידור נשמר: ${saved} תאים.`, "success");
     },
     onError: async (error: RpcError, { tradingDayId }) => {
-      // Nothing was saved. Re-read anyway: a refusal usually means this
-      // screen's copy of the day is behind, and what is said and let go below
-      // is worked out from the newest copy there is — the re-read, or, with
-      // the screen left (nothing re-reads a grid nobody is looking at), the
-      // last read.
+      // Nothing was saved. Re-read anyway, and wait for it: a refusal usually
+      // means this screen's copy of the day is behind, and what is said and
+      // let go below is worked out from the day as it is now. Every cached
+      // copy of the grid, as on success: with the screen left mid-save,
+      // nothing else would read it again before it is shown.
       void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
-      await queryClient.invalidateQueries({ queryKey: newArrangementKeys.matrixAll });
+      await queryClient.invalidateQueries({
+        queryKey: newArrangementKeys.matrixAll,
+        refetchType: "all",
+      });
       const fresh = queryClient.getQueryData<MatrixDay | null>(
         arrangementQueries.matrix(tradingDayId).queryKey,
       );
@@ -367,13 +382,19 @@ export default function NewArrangementPage() {
    * The day on screen as it stands — orders, what is free on each lot, what
    * is already arranged — plus the last HISTORY_DAYS days, read now; the rules
    * are arrangement-engine.ts's (see proposeForDay). Cells already arranged
-   * are never proposed over. Only with nothing unsaved: the engine plans
-   * against what is saved, and beside unsaved numbers it could plan the same
-   * pallets twice.
+   * are never proposed over.
+   *
+   * Only while nothing unsaved is on the grid (unsavedCount): the engine
+   * plans against what is saved, and beside unsaved numbers it could plan the
+   * same pallets twice. Lines that land nowhere — a suggestion whose cells
+   * were filled meanwhile, one held to an order since withdrawn — show
+   * nothing and save nothing, so they do not hold it back; the suggestion
+   * replaces them. The grid is held while it is worked out (gridEditable),
+   * so nothing can be typed in the meantime for it to replace.
    */
   const suggestArrangement = async () => {
     if (!boardDay || !arrangement || savingChanges || proposing) return;
-    if (unsaved.lines.length > 0) return;
+    if (unsavedCount > 0) return;
     setProposing(true);
     try {
       const learnedFrom = await readEngineHistory(supabase, boardDay.trade_date);
@@ -405,8 +426,10 @@ export default function NewArrangementPage() {
         showToast("אין מה להציע: כל מה שהוזמן ויש לו מלאי כבר משובץ.");
         return;
       }
-      // Into the store, under the day it was worked out for. Replaces a
-      // leftover refusal message too: the suggestion starts afresh.
+      // Into the store, under the day it was worked out for, in place of
+      // whatever lines it held: none of them was on the grid (see the guard
+      // above). A leftover refusal message goes too: the suggestion starts
+      // afresh.
       updateDay(today.id, () => ({ lines, refusal: null }));
     } catch (error) {
       showToast(`חישוב הצעת הסידור נכשל: ${errorMessage(error)}`, "error");
@@ -489,11 +512,11 @@ export default function NewArrangementPage() {
   // told by how the box is drawn, not by locking it (see commitCell for where
   // a typed number goes). A save that is still running does hold every cell,
   // whichever mount of this screen began it: a number typed into a cell while
-  // its change is being saved would race the save.
-  const gridEditable = editable && !savingChanges;
-  // The cells "שמור שינויים" will change, on the day as last read — never the
-  // lines in the store, some of which may land nowhere (see resolveProposal).
-  const unsavedCount = proposal?.allocations.length ?? 0;
+  // its change is being saved would race the save. So does "הצע סידור" while
+  // it works a suggestion out: the engine plans against what is saved only,
+  // so a number typed meanwhile would be planned over — and then thrown away,
+  // since the suggestion takes the day's lines (see suggestArrangement).
+  const gridEditable = editable && !savingChanges && !proposing;
   // A refusal stays on the bar even once there is nothing left to save: a
   // conflict can let go of every change it was about.
   const showBar = editable && (unsavedCount > 0 || unsaved.refusal !== null);
@@ -530,8 +553,11 @@ export default function NewArrangementPage() {
                 {dayView.isLive ? "הסידור נסגר — קריאה בלבד" : "צפייה בעבר — לא ניתן לערוך"}
               </StatusPill>
             )}
-            {/* Only while nothing is unsaved — see suggestArrangement. */}
-            {gridEditable && unsaved.lines.length === 0 && (
+            {/* Only while nothing unsaved is on the grid — see
+                suggestArrangement. Gated on `editable`, not gridEditable:
+                that is false while the suggestion is being worked out, and
+                the button stays then, disabled, saying so. */}
+            {editable && !savingChanges && unsavedCount === 0 && (
               <Button onClick={() => void suggestArrangement()} disabled={proposing}>
                 {proposing ? "מחשב הצעה…" : "הצע סידור"}
               </Button>
