@@ -62,9 +62,10 @@ export interface ProposalLine {
   /**
    * The saved allocation this line was typed over, as it stood then. Absent
    * when the cell was empty then, and on every suggestion. Kept as first
-   * recorded when the cell is typed again: the save refuses the cell (P0006),
-   * rather than overwrite it, once it no longer holds this — somebody saved,
-   * changed or cleared it in the meantime.
+   * recorded when the cell is typed again — unless the cell has come to hold
+   * the line's own number by then (see setUnsavedCell): the save refuses the
+   * cell (P0006), rather than overwrite it, once it no longer holds this —
+   * somebody saved, changed or cleared it in the meantime.
    */
   expected?: { recordId: string; quantity: number };
 }
@@ -469,7 +470,11 @@ export function savedAllocation(
  * the cell holds on the day as read now, counts only that first time. A
  * suggestion remembers nothing (it is made for an empty cell, and left out
  * once that cell is filled), so typing over one is typing over the cell as it
- * is read now.
+ * is read now. So is typing over a number typed before that the cell has come
+ * to hold since — somebody saved that same number there, or cleared the cell
+ * a removal was typed for. That line has nothing left to save, and the box
+ * shows what is saved, unmarked (see resolveProposal); what it remembers
+ * would have the save refuse the next number as a change made meanwhile.
  *
  * Typed back to that saved number — or a cell that held nothing emptied — the
  * cell has no change left, and its lines go. Emptying a cell that holds a
@@ -498,7 +503,14 @@ export function setUnsavedCell(
     line.growerId === cell.growerId &&
     line.varietyId === cell.varietyId &&
     line.customerId === cell.customerId;
-  const typedBefore = lines.find((line) => isCell(line) && line.forOrder !== "suggested");
+  // A number typed into this box before — unless the box holds it by now:
+  // then it is already saved, and the box shows that, unmarked.
+  const typedBefore = lines.find(
+    (line) =>
+      isCell(line) &&
+      line.forOrder !== "suggested" &&
+      (context.saved?.quantity ?? 0) !== roundPallets(line.quantity),
+  );
   const savedNow = context.saved && {
     recordId: context.saved.recordId,
     quantity: context.saved.quantity,

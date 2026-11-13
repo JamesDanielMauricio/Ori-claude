@@ -1351,6 +1351,42 @@ describe("typeIntoUnsaved", () => {
   it("is null for a lot that is not on the day", () => {
     expect(typeIntoUnsaved([], day(), { pickLineId: "line-x", customerId: CUSTOMER_1, quantity: 1 })).toBeNull();
   });
+  it("types over what a box shows once its unsaved change is saved there since, a removal included", () => {
+    // 3 typed into grower A's empty box for customer 2, and grower B's box,
+    // which holds 2, emptied. Then somebody saves 3 into the first box and
+    // clears the second — another distributor, or the board's ✓: each box
+    // now holds what was typed into it, so neither has anything left to save,
+    // and both show what is saved, unmarked.
+    const theirs: BoardRecord = {
+      id: "record-3",
+      daily_pick_product_id: "line-a-lemon",
+      daily_order_product_id: "ol-2-lemon",
+      customer_company_id: CUSTOMER_2,
+      quantity_pallets: 3,
+      price: null,
+      price_type: null,
+    };
+    const before = day();
+    const after = day([theirs]);
+    const typed = (lines: ProposalLine[], read: typeof before, pickLineId: string, quantity: number) =>
+      typeIntoUnsaved(lines, read, { pickLineId, customerId: CUSTOMER_2, quantity }) ?? [];
+    let lines = typed([], before, "line-a-lemon", 3);
+    lines = typed(lines, before, "line-b-lemon", 0);
+
+    const reread = resolveProposal({ lines, ...after });
+    expect(reread.allocations).toEqual([]);
+    expect(reread.alreadySaved).toBe(2);
+
+    // A number typed now is typed over what the box shows — not over what it
+    // held when it was first typed into, which the save would refuse as
+    // changed meanwhile (P0006) though nothing changed after it was typed.
+    lines = typed(lines, after, "line-a-lemon", 4);
+    lines = typed(lines, after, "line-b-lemon", 1);
+    expect(resolveProposal({ lines, ...after }).allocations).toEqual([
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 4, forOrder: true, expected: { recordId: "record-3", quantity: 3 } },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
+    ]);
+  });
 });
 
 describe("resolveProposal with typed changes", () => {
