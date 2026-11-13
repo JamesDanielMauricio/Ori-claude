@@ -329,18 +329,18 @@ function CustomerCellList({
               <MatrixMobileInput
                 label={`${column.customerName} — כמות`}
                 displayValue={displayValue}
-                unsaved={cell.proposed > 0}
+                unsaved={cell.unsaved}
                 target={target}
                 onCommit={onCommit}
               />
             ) : (
               // Same dashed "this is a total, not a control" treatment the
               // desktop grid uses for its own read-only cells — including the
-              // accent on a number that is a proposal's and not yet saved.
+              // accent on a number that is not saved yet.
               <span
-                title={cell.proposed > 0 ? UNSAVED_TITLE : undefined}
+                title={cell.unsaved ? UNSAVED_TITLE : undefined}
                 className={`flex h-11 w-24 shrink-0 items-center justify-center rounded-md border text-center text-sm font-semibold ${
-                  cell.proposed > 0
+                  cell.unsaved
                     ? UNSAVED_BOX
                     : "border-dashed border-border-strong bg-surface-muted/70 text-ink-muted"
                 }`}
@@ -364,7 +364,7 @@ function MatrixMobileInput({
 }: {
   label: string;
   displayValue: string;
-  /** The number shown is a proposal's, not yet in the database — see UNSAVED_BOX. */
+  /** The number shown is not saved yet — see UNSAVED_BOX. */
   unsaved: boolean;
   target: CellTarget;
   onCommit: (write: MatrixWrite) => Promise<boolean>;

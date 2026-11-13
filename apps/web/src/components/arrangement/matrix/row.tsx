@@ -25,7 +25,7 @@ const BLANK_CELL = {
   ordered: 0,
   comment: null,
   allocated: 0,
-  proposed: 0,
+  unsaved: false,
   recordId: null,
   price: null,
   priceType: null,
@@ -243,9 +243,9 @@ export function MatrixRowCells({
                   // Unsaved numbers keep their own look in the box as well:
                   // it is the only thing telling them from what is already
                   // in the day now that both can be typed over.
-                  title={cell.proposed > 0 ? UNSAVED_TITLE : undefined}
+                  title={cell.unsaved ? UNSAVED_TITLE : undefined}
                   className={`h-7 w-full rounded-sm border px-1 text-center text-sm font-semibold outline-none transition-colors duration-150 focus:border-accent focus:bg-surface focus:ring-2 focus:ring-accent/30 ${
-                    cell.proposed > 0 ? UNSAVED_BOX : "border-border-strong bg-surface text-ink"
+                    cell.unsaved ? UNSAVED_BOX : "border-border-strong bg-surface text-ink"
                   }`}
                   onFocus={(event) => {
                     onFocusCell({ row: rowIndex, col: colIndex, key: row.key });
@@ -274,9 +274,9 @@ export function MatrixRowCells({
                 // A sum with unsaved pallets in it takes the same accent as
                 // the boxes they were typed or suggested into.
                 <span
-                  title={cell.proposed > 0 ? UNSAVED_TITLE : undefined}
+                  title={cell.unsaved ? UNSAVED_TITLE : undefined}
                   className={`flex h-7 w-full items-center justify-center rounded-sm border text-center text-sm font-semibold ${
-                    cell.proposed > 0
+                    cell.unsaved
                       ? UNSAVED_BOX
                       : "border-dashed border-border-strong bg-surface-muted/70 text-ink-muted"
                   }`}

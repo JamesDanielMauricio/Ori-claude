@@ -250,6 +250,8 @@ export function resolveProposal({
       pickLineId: entry.pickLineId,
       customerId: entry.line.customerId,
       quantity: roundPallets((existing?.quantity ?? 0) + entry.quantity),
+      // Task 4 makes this real: what the cell held when the suggestion was made.
+      expected: { recordId: null, quantity: 0 },
       ...(forOrder ? { forOrder: true } : {}),
     });
   }

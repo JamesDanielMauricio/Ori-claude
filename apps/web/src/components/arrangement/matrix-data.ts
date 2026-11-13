@@ -70,16 +70,17 @@ export interface MatrixCell {
    */
   comment: string | null;
   /**
-   * Pallets arranged to this customer out of this row's supply — saved, plus
-   * any a proposal on preview holds for the cell (see `proposed`).
+   * Pallets arranged to this customer out of this row's supply — as saved,
+   * or as an unsaved change sets the cell (see `unsaved`).
    */
   allocated: number;
   /**
-   * How many of `allocated` are a proposal's and not saved: suggested, or
-   * typed into the grid while it was open. Zero everywhere unless a proposal
-   * is on preview — see `proposal` on buildMatrix.
+   * The number shown is not what is saved: typed, cleared or suggested, and
+   * not saved yet. On a multi-grower product row's sum: true when any grower
+   * cell under it is. False everywhere unless buildMatrix was given a
+   * `proposal`.
    */
-  proposed: number;
+  unsaved: boolean;
   /**
    * The arrangement record behind `allocated`, when this row addresses
    * exactly one pick line. Null on a multi-grower product row (whose sum
@@ -197,14 +198,15 @@ export function cellTone(cell: Pick<MatrixCell, "ordered" | "allocated">): CellT
 }
 
 /**
- * Pallets suggested for one cell but not saved: this many, off this grower's
- * lot, to this customer. Addressed exactly as a cell write is (see
- * CellTarget), which is what lets a suggestion be shown in the grid and then
- * saved through the same arrange_to_customer call a typed cell makes.
+ * What one cell is to hold once saved, not saved yet: this many pallets, off
+ * this grower's lot, to this customer. Addressed exactly as a cell write is
+ * (see CellTarget), which is what lets a typed, cleared or suggested number
+ * be shown in the grid and then saved through the same call.
  */
 export interface ProposedAllocation {
   pickLineId: string;
   customerId: string;
+  /** What the cell is to hold once saved; 0 removes the saved allocation. */
   quantity: number;
   /**
    * Meant to fill the customer's order (suggested, or typed for a customer who
@@ -213,6 +215,8 @@ export interface ProposedAllocation {
    * has gone.
    */
   forOrder?: boolean;
+  /** What the cell held when the change was made — sent with the save (0103). */
+  expected: { recordId: string | null; quantity: number };
 }
 
 export interface Matrix {
@@ -238,13 +242,12 @@ export function buildMatrix({
   records: BoardRecord[];
   companies: BoardCompany[];
   /**
-   * Allocations on preview: suggested for the day and corrected by whoever
-   * is looking at it, not yet saved. The grid shows the day as it would
-   * stand once they are — they count in every total and sum exactly as a
-   * saved record does — and each cell's `proposed` says how much of its
-   * number is not in the database.
+   * Unsaved changes: numbers typed, cleared or suggested for the day, not
+   * yet saved. The grid shows the day as it would stand once they are. Per
+   * cell, the SUM of its allocations replaces the saved number (0 clears
+   * it), and every total moves with it. Each cell named is marked `unsaved`.
    */
-  proposal?: ProposedAllocation[];
+  proposal?: ReadonlyArray<Pick<ProposedAllocation, "pickLineId" | "customerId" | "quantity">>;
 }): Matrix {
   const companyById = new Map(companies.map((company) => [company.id, company]));
   const nameOf = (id: string) => companyById.get(id)?.name ?? id;
@@ -311,7 +314,7 @@ export function buildMatrix({
     string,
     {
       allocated: number;
-      proposed: number;
+      unsaved: boolean;
       recordId: string | null;
       price: number | null;
       priceType: string | null;
@@ -338,7 +341,7 @@ export function buildMatrix({
     const existing = cellByPickLineCustomer.get(key);
     cellByPickLineCustomer.set(key, {
       allocated: roundPallets((existing?.allocated ?? 0) + quantity),
-      proposed: 0,
+      unsaved: false,
       recordId: record.id,
       price: record.price === null ? null : parsePallets(record.price),
       // As board-data.ts reads it: always a code (migration 0100).
@@ -346,24 +349,32 @@ export function buildMatrix({
     });
   }
 
-  // A proposal rides the same two indexes as the saved records above, added
-  // on top of whatever they already hold. Everything below this point — a
-  // cell, a product row's sum, זמין — then needs no second code path to show
-  // the day with the proposal in it.
+  // Unsaved changes ride the same two indexes as the saved records above, but
+  // they SET a cell rather than add to it: the sum of the changes named for a
+  // cell (two numbers for one cell add up) replaces whatever was saved there,
+  // and 0 empties it. The pick line's total moves by the difference, so
+  // everything below this point — a cell, a product row's sum, זמין — needs no
+  // second code path to show the day with the changes in it. The record, price
+  // and price type are kept: they are still what is saved, and the save needs
+  // the record to rewrite or remove.
+  const unsavedByCell = new Map<string, { pickLineId: string; quantity: number }>();
   for (const allocation of proposal) {
-    allocatedByPickLine.set(
-      allocation.pickLineId,
-      roundPallets((allocatedByPickLine.get(allocation.pickLineId) ?? 0) + allocation.quantity),
-    );
-
     const key = `${allocation.pickLineId}${SEP}${allocation.customerId}`;
-    const existing = cellByPickLineCustomer.get(key);
+    const sum = roundPallets((unsavedByCell.get(key)?.quantity ?? 0) + allocation.quantity);
+    unsavedByCell.set(key, { pickLineId: allocation.pickLineId, quantity: sum });
+  }
+  for (const [key, { pickLineId, quantity }] of unsavedByCell) {
+    const saved = cellByPickLineCustomer.get(key);
+    allocatedByPickLine.set(
+      pickLineId,
+      roundPallets((allocatedByPickLine.get(pickLineId) ?? 0) - (saved?.allocated ?? 0) + quantity),
+    );
     cellByPickLineCustomer.set(key, {
-      allocated: roundPallets((existing?.allocated ?? 0) + allocation.quantity),
-      proposed: roundPallets((existing?.proposed ?? 0) + allocation.quantity),
-      recordId: existing?.recordId ?? null,
-      price: existing?.price ?? null,
-      priceType: existing?.priceType ?? null,
+      allocated: quantity,
+      unsaved: true,
+      recordId: saved?.recordId ?? null,
+      price: saved?.price ?? null,
+      priceType: saved?.priceType ?? null,
     });
   }
 
@@ -407,7 +418,7 @@ export function buildMatrix({
           ordered: orderedByVarietyCustomer.get(demand) ?? 0,
           comment: commentByVarietyCustomer.get(demand) ?? null,
           allocated: allocation?.allocated ?? 0,
-          proposed: allocation?.proposed ?? 0,
+          unsaved: allocation?.unsaved ?? false,
           recordId: allocation?.recordId ?? null,
           price: allocation?.price ?? null,
           priceType: allocation?.priceType ?? null,
@@ -458,9 +469,7 @@ export function buildMatrix({
               allocated: roundPallets(
                 growers.reduce((sum, grower) => sum + (grower.cells[index]?.allocated ?? 0), 0),
               ),
-              proposed: roundPallets(
-                growers.reduce((sum, grower) => sum + (grower.cells[index]?.proposed ?? 0), 0),
-              ),
+              unsaved: growers.some((grower) => grower.cells[index]?.unsaved === true),
               recordId: null,
               price: null,
               priceType: null,
@@ -530,8 +539,9 @@ export function filterMatrixRows(rows: MatrixProductRow[], query: string): Matri
  * push — stays, and so does the customer they went to: they are off a
  * grower's stock whether or not an order stands behind them, and a view that
  * left them out would show the day as emptier than it is. "Holding pallets"
- * is `allocated`, so a suggestion on preview counts (see buildMatrix): the
- * cut-down view of a proposal shows the whole proposal.
+ * is `allocated`, so an unsaved number counts (see buildMatrix): the
+ * cut-down view shows every unsaved change. So does a cell being cleared:
+ * its row and its column stay while it is marked unsaved, even at zero.
  *
  * An order line of zero pallets is not an order — it is what
  * arrange_to_customer creates to hang a push on, and what is left of one
@@ -554,7 +564,7 @@ export function orderedOnly(matrix: Matrix): Matrix {
     .filter((index) =>
       matrix.rows.some((row) => {
         const cell = row.cells[index];
-        return cell !== undefined && (cell.ordered > 0 || cell.allocated > 0);
+        return cell !== undefined && (cell.ordered > 0 || cell.allocated > 0 || cell.unsaved);
       }),
     );
   const cut = (cells: MatrixCell[]) =>
@@ -569,7 +579,9 @@ export function orderedOnly(matrix: Matrix): Matrix {
       return column ? [column] : [];
     }),
     rows: matrix.rows
-      .filter((row) => row.ordered > 0 || row.allocated > 0)
+      .filter(
+        (row) => row.ordered > 0 || row.allocated > 0 || row.cells.some((cell) => cell.unsaved),
+      )
       .map((row) => ({
         ...row,
         cells: cut(row.cells),

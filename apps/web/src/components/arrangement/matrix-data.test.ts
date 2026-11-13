@@ -436,10 +436,11 @@ describe("filterMatrixRows", () => {
   });
 });
 
-// A proposal is a set of allocations that has been suggested but not saved.
-// The grid shows the day as it would stand once they are saved, and says
-// which numbers are not in the database yet.
-describe("buildMatrix with a proposal on preview", () => {
+// Unsaved changes are numbers typed, cleared or suggested in the grid and not
+// saved yet. The grid shows the day as it would stand once they are saved, and
+// says which numbers are not in the database yet. A change SETS its cell: it
+// replaces a saved number (0 removes it) instead of adding on top of it.
+describe("buildMatrix with unsaved changes", () => {
   // Three of grower A's lychee pallets suggested for customer 1.
   const lycheeProposal = [{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 }];
 
@@ -453,11 +454,11 @@ describe("buildMatrix with a proposal on preview", () => {
     return { lemons: row(lemon.id), lychees: row(lychee.id) };
   }
 
-  it("shows a suggested quantity in its cell and marks it as not saved", () => {
-    expect(preview().lychees.cells[0]).toMatchObject({ allocated: 3, proposed: 3, recordId: null });
+  it("shows a new number in an empty cell and marks it unsaved", () => {
+    expect(preview().lychees.cells[0]).toMatchObject({ allocated: 3, unsaved: true, recordId: null });
   });
 
-  it("takes a suggestion off what is still available on the lot", () => {
+  it("takes it off what is still available on the lot", () => {
     const { lychees } = preview();
 
     expect(lychees.allocated).toBe(3);
@@ -467,51 +468,66 @@ describe("buildMatrix with a proposal on preview", () => {
   it("leaves a saved allocation unmarked", () => {
     const growerB = preview().lemons.growers[1];
 
-    expect(growerB?.cells[1]).toMatchObject({ allocated: 2, proposed: 0, recordId: "record-1" });
+    expect(growerB?.cells[1]).toMatchObject({ allocated: 2, unsaved: false, recordId: "record-1" });
   });
 
-  it("carries a suggestion on one grower's lot up into the product row's sum", () => {
+  it("carries an unsaved number on one grower's lot up into the product row's sum", () => {
     const { lemons } = preview([
       { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1 },
     ]);
 
-    // Grower B's two saved pallets plus the one suggested off grower A.
-    expect(lemons.cells[1]).toMatchObject({ allocated: 3, proposed: 1 });
-    expect(lemons.growers[0]?.cells[1]).toMatchObject({ allocated: 1, proposed: 1 });
+    // Grower B's two saved pallets plus the one unsaved off grower A.
+    expect(lemons.cells[1]).toMatchObject({ allocated: 3, unsaved: true });
+    expect(lemons.growers[0]?.cells[1]).toMatchObject({ allocated: 1, unsaved: true });
     expect(lemons.available).toBe(12);
   });
 
-  it("adds a suggestion on top of a saved allocation without losing its record", () => {
+  it("sets a saved cell to the unsaved number, keeping its record and price", () => {
     const { lemons } = preview([
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1 },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 5 },
     ]);
 
     expect(lemons.growers[1]?.cells[1]).toMatchObject({
-      allocated: 3,
-      proposed: 1,
+      allocated: 5,
+      unsaved: true,
       recordId: "record-1",
       price: 12.5,
       priceType: "fixed",
     });
+    expect(lemons.growers[1]?.allocated).toBe(5);
+    expect(lemons.available).toBe(10);
   });
 
-  it("adds up two suggestions for the same cell", () => {
+  it("clears a saved cell: shows it empty, marked unsaved, and frees its pallets", () => {
+    const { lemons } = preview([
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 0 },
+    ]);
+
+    expect(lemons.growers[1]?.cells[1]).toMatchObject({
+      allocated: 0,
+      unsaved: true,
+      recordId: "record-1",
+    });
+    expect(lemons.available).toBe(15);
+  });
+
+  it("adds up two numbers for the same cell", () => {
     const { lychees } = preview([
       { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 },
       { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2 },
     ]);
 
-    expect(lychees.cells[0]).toMatchObject({ allocated: 5, proposed: 5 });
+    expect(lychees.cells[0]).toMatchObject({ allocated: 5, unsaved: true });
     expect(lychees.available).toBe(2);
   });
 
-  it("marks nothing when no proposal is on preview", () => {
+  it("marks nothing when nothing is unsaved", () => {
     const cells = build().rows.flatMap((row) => [
       ...row.cells,
       ...row.growers.flatMap((grower) => grower.cells),
     ]);
 
-    expect(cells.every((cell) => cell.proposed === 0)).toBe(true);
+    expect(cells.every((cell) => cell.unsaved === false)).toBe(true);
   });
 });
 
@@ -678,7 +694,7 @@ describe("orderedOnly", () => {
   }: {
     dayOrdersOverride?: BoardOrder[];
     dayRecords?: BoardRecord[];
-    proposal?: ProposedAllocation[];
+    proposal?: Array<Pick<ProposedAllocation, "pickLineId" | "customerId" | "quantity">>;
   } = {}) {
     return buildMatrix({
       picks: dayPicks,
@@ -725,6 +741,19 @@ describe("orderedOnly", () => {
   it("counts a suggestion on preview as pallets held", () => {
     const cut = orderedOnly(
       day({ proposal: [{ pickLineId: "line-c-mango", customerId: CUSTOMER_3, quantity: 2 }] }),
+    );
+
+    expect(varieties(cut)).toEqual([lemon.id, lychee.id, mango.id]);
+    expect(customers(cut)).toEqual([CUSTOMER_1, CUSTOMER_2, CUSTOMER_3]);
+  });
+
+  it("keeps a product and a customer whose only pallets are being taken back, unsaved", () => {
+    const cut = orderedOnly(
+      day({
+        dayOrdersOverride: pushedOrders,
+        dayRecords: [pushedRecord],
+        proposal: [{ pickLineId: "line-c-mango", customerId: CUSTOMER_3, quantity: 0 }],
+      }),
     );
 
     expect(varieties(cut)).toEqual([lemon.id, lychee.id, mango.id]);

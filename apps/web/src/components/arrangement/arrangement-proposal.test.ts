@@ -130,7 +130,7 @@ function resolve(lines: ProposalLine[], records: BoardRecord[] = [savedLemons]) 
 describe("resolveProposal", () => {
   it("places a line on that grower's lot of that product", () => {
     expect(resolve([line(GROWER_A, LYCHEE, CUSTOMER_1, 3)])).toEqual({
-      allocations: [{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 }],
+      allocations: [{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } }],
       alreadyArranged: 0,
       unplaceable: 0,
       heldToOrder: 0,
@@ -144,21 +144,21 @@ describe("resolveProposal", () => {
     ]);
 
     expect(allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_1, quantity: 1 },
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 2 },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_1, quantity: 1, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 2, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
   it("places a product on a customer who never ordered it", () => {
     // Customer 2 is trading today but has no lychee line: a push.
     expect(resolve([line(GROWER_A, LYCHEE, CUSTOMER_2, 1)]).allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_2, quantity: 1 },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_2, quantity: 1, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
   it("suggests to a customer who is trading but has ordered nothing at all", () => {
     expect(resolve([line(GROWER_A, LYCHEE, CUSTOMER_3, 2)]).allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_3, quantity: 2 },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_3, quantity: 2, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -230,7 +230,7 @@ describe("resolveProposal", () => {
 
     expect(unplaceable).toBe(0);
     expect(allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 0.4 },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 0.4, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -241,7 +241,7 @@ describe("resolveProposal", () => {
     ]);
 
     expect(allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 0.3 },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 0.3, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -252,7 +252,7 @@ describe("resolveProposal", () => {
     ]);
 
     expect(allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -312,7 +312,7 @@ describe("a proposal on a pick closed since it was offered", () => {
     });
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -323,7 +323,7 @@ describe("a proposal on a pick closed since it was offered", () => {
 
     expect(closed.allocations).toEqual([]);
     expect(reopened.allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -379,7 +379,7 @@ describe("a proposal while its cells are being saved", () => {
 
   it("drops each cell from the proposal once its allocation is saved", () => {
     expect(resolveProposal({ lines, picks, orders: ordersAfterSave, records })).toEqual({
-      allocations: [{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 }],
+      allocations: [{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } }],
       alreadyArranged: 1,
       unplaceable: 0,
       heldToOrder: 0,
@@ -399,10 +399,10 @@ describe("a proposal while its cells are being saved", () => {
     // 1 saved to customer 2 + 3 still suggested for customer 1, off 7 picked.
     expect(lychees?.allocated).toBe(4);
     expect(lychees?.available).toBe(3);
-    expect(lychees?.cells.map((cell) => [cell.allocated, cell.proposed])).toEqual([
-      [3, 3],
-      [1, 0],
-      [0, 0],
+    expect(lychees?.cells.map((cell) => [cell.allocated, cell.unsaved])).toEqual([
+      [3, true],
+      [1, false],
+      [0, false],
     ]);
   });
 
@@ -412,7 +412,7 @@ describe("a proposal while its cells are being saved", () => {
     const orphaned = { ...savedPush, daily_order_product_id: "an-order-line-not-in-this-read" };
 
     expect(resolve(lines, [savedLemons, orphaned]).allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 });
@@ -461,7 +461,7 @@ describe("a suggested line whose order has changed since", () => {
     });
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, forOrder: true },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(1);
   });
@@ -471,7 +471,7 @@ describe("a suggested line whose order has changed since", () => {
     const resolved = resolve([suggested(GROWER_A, LEMON, CUSTOMER_2, 3)]);
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -479,7 +479,7 @@ describe("a suggested line whose order has changed since", () => {
     const resolved = resolve([suggested(GROWER_A, LYCHEE, CUSTOMER_1, 3)]);
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, forOrder: true },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(0);
   });
@@ -488,7 +488,7 @@ describe("a suggested line whose order has changed since", () => {
     const resolved = resolve([suggested(GROWER_A, LYCHEE, CUSTOMER_1, 5)]);
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 5, forOrder: true },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 5, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(0);
   });
@@ -502,7 +502,7 @@ describe("a suggested line whose order has changed since", () => {
     });
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2.5, forOrder: true },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2.5, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(1);
   });
@@ -515,8 +515,8 @@ describe("a suggested line whose order has changed since", () => {
     );
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 2, forOrder: true },
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 2, forOrder: true, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(1);
   });
@@ -525,7 +525,7 @@ describe("a suggested line whose order has changed since", () => {
     const onePallet = { ...savedLemons, quantity_pallets: 1 };
 
     expect(resolve([suggested(GROWER_A, LEMON, CUSTOMER_2, 3)], [onePallet]).allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 2, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 2, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -535,7 +535,7 @@ describe("a suggested line whose order has changed since", () => {
     const miscopied = { ...savedLemons, customer_company_id: CUSTOMER_1 };
 
     expect(resolve([suggested(GROWER_A, LEMON, CUSTOMER_2, 3)], [miscopied]).allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -543,7 +543,7 @@ describe("a suggested line whose order has changed since", () => {
     const orphaned = { ...savedLemons, daily_order_product_id: "an-order-line-not-in-this-read" };
 
     expect(resolve([suggested(GROWER_A, LEMON, CUSTOMER_2, 3)], [orphaned]).allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -558,7 +558,7 @@ describe("a suggested line whose order has changed since", () => {
 
     expect(resolved).toEqual({
       allocations: [
-        { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+        { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
       ],
       alreadyArranged: 1,
       unplaceable: 0,
@@ -583,7 +583,7 @@ describe("a suggested line whose order has changed since", () => {
     });
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, forOrder: true },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(1);
   });
@@ -609,7 +609,7 @@ describe("a suggested line whose order has changed since", () => {
     );
 
     expect(resolve(typed).allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_3, quantity: 2 },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_3, quantity: 2, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 });
@@ -659,6 +659,7 @@ describe("a number typed for a customer's order", () => {
       customerId: CUSTOMER_1,
       quantity: 7,
       forOrder: true,
+      expected: { recordId: null, quantity: 0 },
     });
   });
 
@@ -686,7 +687,7 @@ describe("a number typed for a customer's order", () => {
     const resolved = resolveProposal({ lines: typed, picks, orders: atNoPallets, records: [] });
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(1);
   });
@@ -706,7 +707,7 @@ describe("a number typed for a customer's order", () => {
     const resolved = resolve(typed ?? [], [allOfIt]);
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 2, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 2, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(0);
   });
@@ -724,8 +725,8 @@ describe("a number typed for a customer's order", () => {
       resolveProposal({ lines: typed ?? [], picks, orders: withdrawnLychee, records: [] }),
     ).toEqual({
       allocations: [
-        { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2 },
-        { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+        { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, expected: { recordId: null, quantity: 0 } },
+        { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
       ],
       alreadyArranged: 0,
       unplaceable: 0,
@@ -745,7 +746,7 @@ describe("a number typed for a customer's order", () => {
     );
 
     expect(resolve(moved ?? [], []).allocations).toEqual([
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     // ...so it goes when the order goes, rather than being saved as a push.
     const withdrawn = orders.map((order) =>
@@ -769,6 +770,7 @@ describe("a number typed for a customer's order", () => {
       customerId: CUSTOMER_1,
       quantity: 3,
       forOrder: true,
+      expected: { recordId: null, quantity: 0 },
     });
   });
 
@@ -785,8 +787,8 @@ describe("a number typed for a customer's order", () => {
     const resolved = resolveProposal({ lines: typed, picks, orders: lemonsFor2(2), records: [] });
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(1);
   });
@@ -798,7 +800,7 @@ describe("a number typed for a customer's order", () => {
     const resolved = resolveProposal({ lines: typed, picks, orders: lemonsFor2(1), records: [] });
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 3, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 3, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolved.heldToOrder).toBe(0);
   });
@@ -815,7 +817,7 @@ describe("a number typed for a customer's order", () => {
     expect(typed).toEqual([line(GROWER_A, LYCHEE, CUSTOMER_1, 2)]);
     expect(
       resolveProposal({ lines: typed ?? [], picks, orders: atNoPallets, records: [] }).allocations,
-    ).toEqual([{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2 }]);
+    ).toEqual([{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, expected: { recordId: null, quantity: 0 } }]);
   });
 
   it("counts a push against an order the customer places afterwards, before the suggestions", () => {
@@ -837,8 +839,8 @@ describe("a number typed for a customer's order", () => {
     const resolved = resolveProposal({ lines: lines ?? [], picks, orders, records: [] });
 
     expect(resolved.allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 2 },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 2, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -855,11 +857,11 @@ describe("a number typed for a customer's order", () => {
     const lowered = typedInto(allOfIt, "line-a-lemon", CUSTOMER_2, 2) ?? [];
 
     expect(resolve(allOfIt, []).allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 3, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 3, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(resolve(lowered, []).allocations).toEqual([
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 2, forOrder: true },
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_2, quantity: 2, forOrder: true, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -874,6 +876,7 @@ describe("a number typed for a customer's order", () => {
       customerId: CUSTOMER_1,
       quantity: 2,
       forOrder: true,
+      expected: { recordId: null, quantity: 0 },
     };
 
     for (const lines of [
@@ -893,9 +896,9 @@ describe("a number typed for a customer's order", () => {
     ];
 
     expect(resolveProposal({ lines, picks, orders, records: [] }).allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, forOrder: true },
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true },
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_3, quantity: 1 },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 2, forOrder: true, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_2, quantity: 1, forOrder: true, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_3, quantity: 1, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 });
@@ -1207,8 +1210,8 @@ describe("a proposal while it is being corrected", () => {
     const corrected = typed(offered, "line-b-lemon", CUSTOMER_1, 4);
 
     expect(resolve(corrected).allocations).toEqual([
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 4 },
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 4, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -1226,7 +1229,7 @@ describe("a proposal while it is being corrected", () => {
       ?.growers.find((grower) => grower.growerId === GROWER_B);
     const customer1 = matrix.columns.findIndex((column) => column.customerId === CUSTOMER_1);
 
-    expect(growerB?.cells[customer1]).toMatchObject({ allocated: 4, proposed: 4 });
+    expect(growerB?.cells[customer1]).toMatchObject({ allocated: 4, unsaved: true });
     // Two saved to customer 2 already, four more on preview, out of ten.
     expect(growerB).toMatchObject({ allocated: 6, available: 4 });
   });
@@ -1235,7 +1238,7 @@ describe("a proposal while it is being corrected", () => {
     const corrected = typed(offered, "line-b-lemon", CUSTOMER_1, 0);
 
     expect(resolve(corrected).allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -1243,9 +1246,9 @@ describe("a proposal while it is being corrected", () => {
     const corrected = typed(offered, "line-a-lemon", CUSTOMER_3, 2);
 
     expect(resolve(corrected).allocations).toEqual([
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 1 },
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3 },
-      { pickLineId: "line-a-lemon", customerId: CUSTOMER_3, quantity: 2 },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 1, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } },
+      { pickLineId: "line-a-lemon", customerId: CUSTOMER_3, quantity: 2, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 
@@ -1276,7 +1279,7 @@ describe("a proposal while it is being corrected", () => {
     const afterRead = resolve(corrected, [savedLemons, theirs]);
 
     expect(afterRead.allocations).toEqual([
-      { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 1 },
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_1, quantity: 1, expected: { recordId: null, quantity: 0 } },
     ]);
     expect(afterRead.alreadyArranged).toBe(1);
   });
@@ -1316,7 +1319,7 @@ describe("typeIntoProposal", () => {
     expect(typed).toEqual({ lines: [suggested], saveNow: true });
     // Emptied afterwards, the cell stays empty: nothing comes back into it.
     expect(resolve(typed?.lines ?? [], []).allocations).toEqual([
-      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, forOrder: true },
+      { pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, forOrder: true, expected: { recordId: null, quantity: 0 } },
     ]);
   });
 

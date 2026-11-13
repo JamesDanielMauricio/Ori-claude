@@ -16,8 +16,7 @@ export const CELL_TONE = {
   arranged: { fill: "bg-arranged", ink: "text-arranged-ink", soft: "text-arranged-ink/80" },
 } as const;
 
-// A number that is a proposal's and not saved yet — suggested, or typed while
-// one is open. One look for it wherever it is drawn: in the box it can be
+// A number that is not saved yet — typed, cleared or suggested. One look for it wherever it is drawn: in the box it can be
 // corrected in and in a read-only total, on both presentations of the grid.
 export const UNSAVED_BOX = "border-dashed border-accent bg-accent-soft text-accent";
-export const UNSAVED_TITLE = "הצעה — עדיין לא נשמרה";
+export const UNSAVED_TITLE = "עדיין לא נשמר";
