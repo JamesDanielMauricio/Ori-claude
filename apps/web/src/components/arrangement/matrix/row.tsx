@@ -267,12 +267,14 @@ export function MatrixRowCells({
               ) : (
                 // Read-only: either a multi-grower product row (the sum of
                 // the growers below, which cannot be written as one number),
-                // a day that is closed or being viewed in the past, or a
-                // proposal in the middle of being saved. The dashed edge says
-                // "this is a total", not "this is disabled".
+                // a day that is closed or being viewed in the past, or a grid
+                // held while its changes are being saved or "הצע סידור" works
+                // a suggestion out. The dashed edge says "this is a total",
+                // not "this is disabled".
                 //
-                // A sum with unsaved pallets in it takes the same accent as
-                // the boxes they were typed or suggested into.
+                // A sum with an unsaved change under it — a number typed or
+                // suggested, or a box emptied — takes the same accent as
+                // that box.
                 <span
                   title={cell.unsaved ? UNSAVED_TITLE : undefined}
                   className={`flex h-7 w-full items-center justify-center rounded-sm border text-center text-sm font-semibold ${

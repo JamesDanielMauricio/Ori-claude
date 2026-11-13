@@ -88,10 +88,12 @@ export interface MatrixCell {
    */
   recordId: string | null;
   /**
-   * Carried so a quantity-only write can hand them back untouched.
-   * arrange_to_customer COALESCEs both onto the existing row (migration
-   * 0040), so sending null would be read as "leave them alone" — but we send
-   * what is actually there rather than relying on that.
+   * The price saved on the record behind `allocated`, and its type. Carried
+   * into the cell's write (CellTarget, MatrixWrite), but the grid's save
+   * sends no price: save_arrangement_changes (0103) leaves
+   * arrange_to_customer's price arguments out, so it COALESCEs onto the
+   * existing row (migration 0040) and a changed quantity keeps the record's
+   * own price.
    */
   price: number | null;
   priceType: string | null;
@@ -183,9 +185,9 @@ export type CellTone = "none" | "ordered" | "arranged";
  *   none      nobody asked, nothing given — no tint at all
  *   ordered   the customer ordered the product and nothing is arranged yet:
  *             the cells still waiting for a decision
- *   arranged  the cell holds pallets — saved, or suggested and on preview —
- *             whether or not they were ordered, and whether or not they cover
- *             the whole order
+ *   arranged  the cell holds pallets — saved, or an unsaved change (typed
+ *             or suggested) — whether or not they were ordered, and whether
+ *             or not they cover the whole order
  *
  * "Arranged" wins over "ordered" deliberately. The question a distributor
  * scans the grid with is "what have I not dealt with yet?", and a cell with a
@@ -618,7 +620,12 @@ export interface CellTarget {
   recordId: string | null;
   price: number | null;
   priceType: string | null;
-  /** What the server currently holds, so an unchanged edit can be skipped. */
+  /**
+   * The number the cell shows — what is saved, or its unsaved change — so an
+   * edit that leaves it as it is can be skipped. Not what the save expects
+   * to find there: that is the unsaved line's own `expected`
+   * (arrangement-proposal.ts).
+   */
   current: number;
 }
 

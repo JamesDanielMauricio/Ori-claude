@@ -66,7 +66,10 @@ export function ArrangementMatrix({
   expanded: ReadonlySet<string>;
   onToggle: (varietyId: string) => void;
   editable: boolean;
-  /** Resolves to whether the write landed; a refusal reverts the cell. */
+  /**
+   * Resolves to whether the number was taken among the unsaved changes —
+   * nothing is written to the database; a refusal reverts the cell.
+   */
   onCommit: (write: MatrixWrite) => Promise<boolean>;
   /** What to say when there are no rows — the caller knows why there are none. */
   emptyLabel?: string;

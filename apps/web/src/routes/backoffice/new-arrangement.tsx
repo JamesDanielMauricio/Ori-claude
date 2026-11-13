@@ -66,8 +66,9 @@ const SAVE_CHANGES_KEY = ["new-arrangement", "save-changes"] as const;
 // day is not creating a record, they are working across a customer's whole
 // column or down a product's whole row, and doing that through a form meant
 // re-selecting the variety and the grower for every single pallet decision.
-// The matrix makes the same write — one arrangement record, one grower's lot
-// to one customer — the cost of typing a number.
+// The matrix makes the same decision — one arrangement record, one grower's
+// lot to one customer — the cost of typing a number, and the day's numbers
+// are then saved together (see below).
 //
 // Two row shapes, which is the part worth understanding before reading
 // matrix-data.ts: a product supplied by ONE grower is typed into directly,
@@ -391,8 +392,9 @@ export default function NewArrangementPage() {
    * same pallets twice. Lines that land nowhere — a suggestion whose cells
    * were filled meanwhile, one held to an order since withdrawn — show
    * nothing and save nothing, so they do not hold it back; the suggestion
-   * replaces them. The grid is held while it is worked out (gridEditable),
-   * so nothing can be typed in the meantime for it to replace.
+   * replaces them. The grid is held on this screen while it is worked out
+   * (gridEditable — `proposing` is this screen's own state), so nothing can
+   * be typed on it in the meantime for the suggestion to replace.
    */
   const suggestArrangement = async () => {
     if (!boardDay || !arrangement || savingChanges || proposing) return;
@@ -429,9 +431,9 @@ export default function NewArrangementPage() {
         return;
       }
       // Into the store, under the day it was worked out for, in place of
-      // whatever lines it held: none of them was on the grid (see the guard
-      // above). A leftover refusal message goes too: the suggestion starts
-      // afresh.
+      // whatever lines it held: none of them was on the grid when the
+      // suggestion was asked for (the guard above). A leftover refusal
+      // message goes too: the suggestion starts afresh.
       updateDay(today.id, () => ({ lines, refusal: null }));
     } catch (error) {
       showToast(`חישוב הצעת הסידור נכשל: ${errorMessage(error)}`, "error");

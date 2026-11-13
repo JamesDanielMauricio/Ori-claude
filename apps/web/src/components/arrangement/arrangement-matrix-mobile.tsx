@@ -370,11 +370,12 @@ function MatrixMobileInput({
   onCommit: (write: MatrixWrite) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState(displayValue);
-  // Re-seeds when the server's own value changes under us (another
-  // distributor's write, or a push refetch) — tracked rather than synced in
-  // an effect, so a live update lands in the same render instead of painting
-  // the stale figure first. Same pattern as customer-demand-board.tsx's
-  // ArrangementCell.
+  // Re-seeds when the number the grid shows changes under us — another
+  // distributor's save, a push refetch, or the unsaved changes changing (a
+  // suggestion landing, the changes thrown away, a refusal dropping one) —
+  // tracked rather than synced in an effect, so a live update lands in the
+  // same render instead of painting the stale figure first. Same pattern as
+  // customer-demand-board.tsx's ArrangementCell.
   const [lastSeen, setLastSeen] = useState(displayValue);
   if (lastSeen !== displayValue) {
     setLastSeen(displayValue);

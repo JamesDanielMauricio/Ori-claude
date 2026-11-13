@@ -1071,8 +1071,9 @@ describe("a cell taken under either name its record carries", () => {
   });
 });
 
-// A refused save (save_arrangement_proposal, migration 0068) names the cell
-// it refused in the error's DETAIL — one cell, or every filled cell at once.
+// A refused save (save_arrangement_changes, migration 0103, as
+// save_arrangement_proposal did before it) names the cell it refused in the
+// error's DETAIL — one cell, or every cell that changed since at once.
 describe("refusedCells", () => {
   it("reads the one cell a refusal names", () => {
     const details = JSON.stringify({
