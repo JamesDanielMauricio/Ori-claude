@@ -816,6 +816,19 @@ describe("customer ordering module", () => {
       recipientType: "backoffice",
       tradingDayId: day.id,
     });
+
+    // 0102: the message carries the order and who sent it, and goes out as
+    // Bubble's main alert 6 — the order as it stands when it is sent.
+    const order = await getDailyOrderForCustomer(day.id, customer.companyId);
+    expect(afterCustomerSubmit[0]!.payload).toMatchObject({ dailyOrderId: order!.id, submittedByName: "משתמש בדיקה" });
+    const [office] = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, admin.companyId));
+    const [customerCompany] = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, customer.companyId));
+    const preview = await admin.client.rpc("resolve_outbox_preview", { p_outbox_id: afterCustomerSubmit[0]!.id });
+    expect(preview.error).toBeNull();
+    expect(preview.data).toBe(
+      `שלום ${office!.name}. \n${customerCompany!.name} שלחו הזמנה על ידי משתמש בדיקה.\nלהלן מצב ההזמנה הנוכחי שלהם:\n\n` +
+        `${grower.familyName} ${grower.varietyName}  |  כמות: 3 \n\n\nhttps://ori-claude-web.vercel.app/backoffice/distributor-customer`,
+    );
   }, 30000);
 
   it("submit_order enqueues stock_overbooking_reached exactly when demand crosses from under-supply to at-or-over-supply while overbooking room remains — id 10", async () => {

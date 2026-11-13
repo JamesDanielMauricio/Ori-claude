@@ -583,7 +583,12 @@ transaction has already committed. Three things were the explicit point of this 
   send targets a `notification_outbox` row resolves to (the company's WhatsApp group if
   `whatsapp_group_id` is set, otherwise one target per individual user with a `phone_number` on
   file, 972-prefixed with the leading 0 stripped, per `close-arrangement-phase-4-terminal.md`
-  actions 7/8) and the per-recipient `%TOKEN%` substitution. Both are tested directly against the
+  actions 7/8) and the per-recipient `%TOKEN%` substitution. Since migration 0102 (2026-11-13) the
+  text itself is Bubble's: the eleven templates are Bubble's `main alert` texts word for word, and
+  `compose_outbox_message` fills them the way Bubble's live workflows do — the day as
+  "<first letter of its Hebrew name> dd.mm.yy", Bubble's three order-detail layouts, the sender's
+  name in the office's order message, and a blank line plus a link to the recipient's own screen
+  in Ori. Both are tested directly against the
   real database (`packages/domain/src/notifications/notifications.test.ts`), the same way every
   other function in this project is — not left untested inside a Deno runtime this project has no
   test harness for. `supabase/functions/whatsapp-dispatch/index.ts` (the actual WhatsApp adapter)

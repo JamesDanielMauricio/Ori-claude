@@ -119,6 +119,12 @@ tokens the PRD's `close-arrangement-phase-4-terminal.md` names (`%FIRST_NAME%`, 
 `substitute_template_placeholders` (0031) was extended with `%COMPANY%`/`%PRODUCT_NAME%`/
 `%PRODUCT_OVERBOOKING%` (the three the built triggers actually needed); `%PICKUP_TIME%`/
 `%COMPANY_USER_FULL_NAME%` were never needed since ids 6/8's rebuilt triggers use simplified wording.
+**Superseded by migration 0102 (James, 2026-11-13):** the eleven Ori templates are now Bubble's
+`main alert` texts word for word, every token filled the way Bubble's live workflows fill it
+(`%PICKUP_TIME%` and `%COMPANY_USER_FULL_NAME%` included), with two of Bubble's glitches fixed
+(half pallets are not rounded; "הודעה זו נשלחה גם למוביל" only when the grower has a transporter).
+Who receives each message is unchanged. The "Content (paraphrased)" column below describes the
+triggers, not Ori's wording.
 **All 11 rows have a real, built trigger:**
 
 | id | Content (paraphrased) | Status |
