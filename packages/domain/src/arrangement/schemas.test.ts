@@ -213,7 +213,15 @@ describe("saveArrangementChangesInputSchema", () => {
     expect(parse([change({ quantityPallets: 0.5 })]).success).toBe(true);
     expect(parse([change({ quantityPallets: 0.55 })]).success).toBe(false);
     expect(parse([change({ quantityPallets: -1 })]).success).toBe(false);
-    expect(parse([change({ expected: { recordId: R2, quantityPallets: 0.55 } })]).success).toBe(false);
+  });
+
+  // What the cell held is the saved record's own number, and a record imported
+  // from history may hold two decimals (2.65): it must stay changeable.
+  it("takes what the cell held at any precision, but not below zero", () => {
+    const held = (quantityPallets: number) =>
+      parse([change({ expected: { recordId: R2, quantityPallets } })]).success;
+    expect(held(0.55)).toBe(true);
+    expect(held(-1)).toBe(false);
   });
 
   it("maps to the function's argument names", () => {

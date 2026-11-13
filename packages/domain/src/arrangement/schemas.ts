@@ -159,10 +159,13 @@ const gridChangeSchema = z
     customerCompanyId: z.string().uuid(),
     quantityPallets: gridPalletsSchema,
     // The cell as the screen last saw it: the record's id (null for an empty
-    // cell) and the pallets it held (0 for an empty cell).
+    // cell) and the pallets it held (0 for an empty cell). That number is the
+    // saved record's own, at any precision: a record imported from history
+    // may hold two decimals (2.65), and it must stay changeable. Only the new
+    // number above keeps to tenths.
     expected: z.object({
       recordId: z.string().uuid().nullable(),
-      quantityPallets: z.number().refine(isPalletQuantity, PALLET_QUANTITY_MESSAGE),
+      quantityPallets: z.number().finite().nonnegative(),
     }),
     // Same meaning as on a proposal cell.
     forOrder: z.boolean().optional(),
@@ -197,7 +200,7 @@ export function toSaveArrangementChangesRpcArgs(input: SaveArrangementChangesInp
 // module's own functions (0021's create/update/delete_arrangement_record,
 // 0022's populate_arrangement_prices) actually raise.
 export const ARRANGEMENT_ERROR_CODES = {
-  /** No pick line, order line, arrangement record, or daily_arrangements row matched — or, from save_arrangement_proposal, a pick line that is not on the day being saved — or from save_arrangement_changes (0103): a cell that changed since it was typed over. */
+  /** No pick line, order line, arrangement record, or daily_arrangements row matched — or, from save_arrangement_proposal, a pick line that is not on the day being saved — or, from save_arrangement_changes (0103), an unknown trading day or arrangement, a pick line not on the day, or (via arrange_to_customer) a customer with no order for the day. */
   NOT_FOUND: "P0002",
   /** current_role() <> 'backoffice'. */
   FORBIDDEN: "42501",

@@ -1559,6 +1559,33 @@ describe("arrangement module", () => {
     expect((await recordsOn(line)).map((record) => Number(record.quantity_pallets))).toEqual([2.5]);
   }, 30000);
 
+  it("save_arrangement_changes changes a cell whose saved record holds an old two-decimal quantity", async () => {
+    const { day, pickProductId: line, customer } = await setUpDayWithSupplyAndDemand(5, 3);
+    const r = await arrangeNow(line, customer.id, 2);
+    // Written the way imported history is, by the database owner: the tenths
+    // trigger (0085) lets such a write through.
+    await db
+      .update(arrangementRecords)
+      .set({ quantityPallets: "2.65" })
+      .where(eq(arrangementRecords.id, r.id));
+    expect(byCustomer(await recordsOn(line))).toEqual({ [customer.id]: 2.65 });
+
+    const saved = await saveChanges(day.id, [
+      {
+        dailyPickProductId: line,
+        customerCompanyId: customer.id,
+        quantityPallets: 3,
+        expected: { recordId: r.id, quantityPallets: 2.65 },
+      },
+    ]);
+
+    expect(saved.error).toBeNull();
+    const records = await recordsOn(line);
+    expect(records.map((record) => [record.id, Number(record.quantity_pallets)])).toEqual([
+      [r.id, 3],
+    ]);
+  }, 30000);
+
   it("update_arrangement_record excludes its own prior quantity from the ceiling; delete_arrangement_record frees it back up", async () => {
     const { pickProductId, orderProductId } = await setUpDayWithSupplyAndDemand(5, 5);
 

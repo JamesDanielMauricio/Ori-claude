@@ -52,7 +52,8 @@
 --                                  decimal place (0 clears the cell),
 --               "expected": { "recordId": uuid | null (no record),
 --                             "quantityPallets": a number of zero or more,
---                                                at most one decimal place },
+--                                                at any precision (an older
+--                                                record may hold 2.65) },
 --               "forOrder": true | false (optional, as in 0075) }, ...]
 -- Returns the number of cells written.
 --
@@ -143,7 +144,9 @@ begin
           else true
         end
      -- What the cell held: no record (JSON null) or a record's id, and its
-     -- number, as above.
+     -- number, zero or more at any precision. That is the saved record's own
+     -- number, and a record imported from history may hold two decimals
+     -- (2.65, which 0085 left as it is): it must stay changeable.
      or case
           when jsonb_typeof(e.elem -> 'expected') = 'object'
             then case jsonb_typeof(e.elem -> 'expected' -> 'recordId')
@@ -155,8 +158,6 @@ begin
               or case
                    when jsonb_typeof(e.elem -> 'expected' -> 'quantityPallets') = 'number'
                      then (e.elem -> 'expected' ->> 'quantityPallets')::numeric < 0
-                       or (e.elem -> 'expected' ->> 'quantityPallets')::numeric
-                          <> round((e.elem -> 'expected' ->> 'quantityPallets')::numeric, 1)
                    else true
                  end
           else true
@@ -311,12 +312,20 @@ begin
       else
         -- Price arguments left out: arrange_to_customer COALESCEs, so the record keeps its own.
         select * into v_record from public.arrange_to_customer(v_pick_line_id, v_customer_id, v_quantity);
-        -- arrange_to_customer UPDATES a record it finds. Under the locks above
-        -- none can appear in a cell found empty except through a direct write
-        -- to the table (0010's backoffice write policy); a record this
-        -- transaction did not create is refused rather than overwritten.
+        -- arrange_to_customer UPDATES the record it finds through the
+        -- customer's order line, and creates one when it finds none. Under the
+        -- locks above that is the record the check found, except after a
+        -- direct write to the table (0010's backoffice write policy): a cell
+        -- filled meanwhile, or a record whose own copy of the customer names
+        -- someone other than its order line does. What it wrote is then
+        -- refused rather than kept: a cell found empty must get a record this
+        -- transaction created, and a cell found holding a record must get that
+        -- same record back, not a second one beside it.
         if v_expected_record_id is null and v_record.created_at is distinct from now() then
           raise exception 'CONFLICT: this cell was filled while the changes were being saved' using errcode = 'P0006';
+        end if;
+        if v_expected_record_id is not null and v_record.id is distinct from v_expected_record_id then
+          raise exception 'CONFLICT: this cell no longer holds the record it held when it was changed' using errcode = 'P0006';
         end if;
       end if;
       v_saved := v_saved + 1;
@@ -338,7 +347,7 @@ end;
 $$;
 
 comment on function public.save_arrangement_changes(uuid, jsonb) is
-  'Backoffice-only (migration 0103). Saves the products grid''s changes for one trading day in one transaction, all or nothing: a cell set to a number through arrange_to_customer (the record keeps its own price), a cell cleared (0) through delete_arrangement_record, clears and decreases first. Each change says what its cell held when it was changed (expected: the record id and pallets, or no record). Returns the number of cells written. Raises 42501 for a non-backoffice caller; P0002 for an unknown day or arrangement, or a pick line not on that day (DETAIL pickLineIds); P0007 if the arrangement is closed; P0008 for a malformed change (DETAIL indexes) or a repeated cell (DETAIL cells); P0006 if a cell no longer holds what was expected, or was marked forOrder and its order has gone (DETAIL cells lists every such cell); and whatever arrange_to_customer, delete_arrangement_record or the triggers raise (P0002/P0008/P0009/P0010), or P0006 for a cell filled during the save itself, with its SQLSTATE kept and DETAIL naming the change (index, dailyPickProductId, customerCompanyId, quantityPallets).';
+  'Backoffice-only (migration 0103). Saves the products grid''s changes for one trading day in one transaction, all or nothing: a cell set to a number through arrange_to_customer (the record keeps its own price), a cell cleared (0) through delete_arrangement_record, clears and decreases first. Each change says what its cell held when it was changed (expected: the record id and pallets, or no record). Returns the number of cells written. Raises 42501 for a non-backoffice caller; P0002 for an unknown day or arrangement, or a pick line not on that day (DETAIL pickLineIds); P0007 if the arrangement is closed; P0008 for a malformed change (DETAIL indexes) or a repeated cell (DETAIL cells); P0006 if a cell no longer holds what was expected, or was marked forOrder and its order has gone (DETAIL cells lists every such cell); and whatever arrange_to_customer, delete_arrangement_record or the triggers raise (P0002/P0008/P0009/P0010), or P0006 for a cell filled, or found holding another record, during the save itself, with its SQLSTATE kept and DETAIL naming the change (index, dailyPickProductId, customerCompanyId, quantityPallets).';
 
 -- SECURITY: the revoke. ALLOWS nothing; it takes EXECUTE away from public
 -- (Postgres gives every new function to public, which every role inherits)
