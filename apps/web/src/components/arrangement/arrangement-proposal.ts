@@ -90,6 +90,12 @@ export interface ResolvedProposal {
    */
   unplaceable: number;
   /**
+   * The suggestions among `unplaceable`: what the bar, with
+   * `alreadyArranged`, says was left out of "הצע סידור"'s suggestion. A
+   * number typed that lands nowhere was never a line of the suggestion.
+   */
+  unplaceableSuggestions: number;
+  /**
    * Suggestions dropped or cut so as not to go over what the customer has on
    * order: those for an order that has since been withdrawn, and those cut
    * because less of it is left than they proposed — reduced, arranged
@@ -295,6 +301,7 @@ export function resolveProposal({
 
   let alreadyArranged = 0;
   let unplaceable = 0;
+  let unplaceableSuggestions = 0;
   let heldToOrder = 0;
   let alreadySaved = 0;
 
@@ -315,6 +322,7 @@ export function resolveProposal({
       isPalletQuantity(line.quantity) && (line.quantity > 0 || line.expected !== undefined);
     if (!pickLineId || !tradingCustomers.has(line.customerId) || !placeable) {
       unplaceable += 1;
+      if (line.forOrder === "suggested") unplaceableSuggestions += 1;
       continue;
     }
 
@@ -407,6 +415,7 @@ export function resolveProposal({
     allocations: [...byCell.values()],
     alreadyArranged,
     unplaceable,
+    unplaceableSuggestions,
     heldToOrder,
     alreadySaved,
     suggestedCells: suggestedCells.size,

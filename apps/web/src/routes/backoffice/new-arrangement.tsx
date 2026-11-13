@@ -527,8 +527,9 @@ export default function NewArrangementPage() {
   // Counted on every read of the day, not once when offered: lines drop out
   // as cells are filled and orders change while the suggestion is unsaved.
   // Two counts, because they have different causes: a cell the day has no
-  // room for, against a line held to what the customer has on order.
-  const leftOut = proposal ? proposal.alreadyArranged + proposal.unplaceable : 0;
+  // room for, against a line held to what the customer has on order. Lines
+  // of the suggestion only: a number typed that lands nowhere was never one.
+  const leftOut = proposal ? proposal.alreadyArranged + proposal.unplaceableSuggestions : 0;
   const heldToOrder = proposal?.heldToOrder ?? 0;
   // Why the grid is empty, when the cut-down view is why: its own message
   // assumes a search that matched nothing.

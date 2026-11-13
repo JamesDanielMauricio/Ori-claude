@@ -136,6 +136,7 @@ describe("resolveProposal", () => {
       allocations: [{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } }],
       alreadyArranged: 0,
       unplaceable: 0,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 0,
@@ -177,6 +178,7 @@ describe("resolveProposal", () => {
       ],
       alreadyArranged: 0,
       unplaceable: 0,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 0,
@@ -190,6 +192,7 @@ describe("resolveProposal", () => {
       allocations: [],
       alreadyArranged: 0,
       unplaceable: 1,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 0,
@@ -218,6 +221,7 @@ describe("resolveProposal", () => {
       allocations: [],
       alreadyArranged: 0,
       unplaceable: 1,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 0,
@@ -230,6 +234,7 @@ describe("resolveProposal", () => {
       allocations: [],
       alreadyArranged: 0,
       unplaceable: 1,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 0,
@@ -248,6 +253,7 @@ describe("resolveProposal", () => {
       allocations: [],
       alreadyArranged: 0,
       unplaceable: 3,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 0,
@@ -314,6 +320,7 @@ describe("resolveProposal", () => {
       ],
       alreadyArranged: 0,
       unplaceable: 0,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 0,
@@ -342,11 +349,32 @@ describe("a proposal on a pick closed since it was offered", () => {
       allocations: [],
       alreadyArranged: 0,
       unplaceable: 2,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 0,
       suggestedPallets: 0,
     });
+  });
+
+  it("counts the suggestions among the lines it lands nowhere apart from the numbers typed", () => {
+    // What the bar counts as left out of "הצע סידור"'s suggestion. A number
+    // typed on the closed pick's lots lands nowhere either, but it was never
+    // a line of the suggestion: with none on screen, the bar must not say
+    // that lines of one were left out.
+    const resolved = resolveProposal({
+      lines: [
+        { ...line(GROWER_A, LYCHEE, CUSTOMER_1, 3), forOrder: "suggested" },
+        { ...line(GROWER_A, LEMON, CUSTOMER_2, 1), forOrder: "typed" },
+        line(GROWER_A, LEMON, CUSTOMER_3, 2),
+      ],
+      picks: closing("pick-a"),
+      orders,
+      records: [savedLemons],
+    });
+
+    expect(resolved.unplaceable).toBe(3);
+    expect(resolved.unplaceableSuggestions).toBe(1);
   });
 
   it("still counts what was saved off the closed pick against the customer's order", () => {
@@ -430,6 +458,7 @@ describe("a proposal while its cells are being saved", () => {
       allocations: [{ pickLineId: "line-a-lychee", customerId: CUSTOMER_1, quantity: 3, expected: { recordId: null, quantity: 0 } }],
       alreadyArranged: 0,
       unplaceable: 0,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 1,
       suggestedCells: 0,
@@ -613,6 +642,7 @@ describe("a suggested line whose order has changed since", () => {
       ],
       alreadyArranged: 1,
       unplaceable: 0,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 1,
@@ -795,6 +825,7 @@ describe("a number typed for a customer's order", () => {
       ],
       alreadyArranged: 0,
       unplaceable: 0,
+      unplaceableSuggestions: 0,
       heldToOrder: 0,
       alreadySaved: 0,
       suggestedCells: 1,
