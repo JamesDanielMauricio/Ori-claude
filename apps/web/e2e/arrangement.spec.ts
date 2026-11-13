@@ -206,6 +206,8 @@ test.describe("Backoffice — arrangement workspace", () => {
     });
     const saveButton = page.getByRole("button", { name: "שמור שינויים" });
     const search = page.getByPlaceholder("חיפוש מוצר…");
+    // How a refused save names this cell: "product (grower) ← customer".
+    const cellName = `${grower.varietyName} (${growerName}) ← ${customerCompany.name}`;
     await expect(matrixCell).toHaveValue("");
 
     // 1. Enter only moves on; the number waits, marked unsaved, for שמור
@@ -231,6 +233,8 @@ test.describe("Backoffice — arrangement workspace", () => {
     await matrixCell.press("Enter");
     await saveButton.click();
     await expect(page.getByText(/חורגת ממה שנקטף/).first()).toBeVisible();
+    // Named on the bar, which outlasts the toast.
+    await expect(page.getByRole("status").filter({ hasText: "שלא נשמר" })).toContainText(cellName);
     await expect(matrixCell).toHaveValue("99");
     await page.getByRole("button", { name: "בטל שינויים" }).click();
     await page.locator("dialog[open]").getByRole("button", { name: "בטל שינויים" }).click();
@@ -252,6 +256,9 @@ test.describe("Backoffice — arrangement workspace", () => {
     if (theirs.error) throw theirs.error;
     await saveButton.click();
     await expect(page.getByText(/השתנו בינתיים/).first()).toBeVisible();
+    await expect(
+      page.getByRole("status").filter({ hasText: "השתנו בינתיים" }).first(),
+    ).toContainText(cellName);
     await expect(matrixCell).toHaveValue("2");
     await expect(matrixCell).not.toHaveAttribute("title", "עדיין לא נשמר");
 
