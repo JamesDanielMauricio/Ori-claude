@@ -1007,16 +1007,35 @@ describe("a cell taken under either name its record carries", () => {
     expect(resolved.alreadyArranged).toBe(1);
   });
 
-  it("is what a number typed for either customer is typed over", () => {
+  it("is what a number typed is typed over only in the box the grid shows it in: its order line's customer's", () => {
     const read = { orders, records: [{ ...savedLemons, customer_company_id: CUSTOMER_3 }] };
 
-    for (const customerId of [CUSTOMER_2, CUSTOMER_3]) {
-      expect(savedAllocation(read, "line-b-lemon", customerId)).toEqual({
-        recordId: "record-1",
-        quantity: 2,
-      });
-    }
+    expect(savedAllocation(read, "line-b-lemon", CUSTOMER_2)).toEqual({
+      recordId: "record-1",
+      quantity: 2,
+    });
+    // buildMatrix shows the record under customer 2 only: customer 3's box,
+    // like customer 1's, shows nothing to be typed over.
+    expect(savedAllocation(read, "line-b-lemon", CUSTOMER_3)).toBeNull();
     expect(savedAllocation(read, "line-b-lemon", CUSTOMER_1)).toBeNull();
+  });
+
+  it("treats the box of the customer its own copy names as the empty box the grid shows", () => {
+    // A number typed for customer 3 expects that box empty. The save, which
+    // finds the record under customer 3's name too, refuses it rather than
+    // write over the record. Emptied again, the box has no change left. Were
+    // the record what customer 3's box held, emptying it would remove
+    // customer 2's two pallets.
+    const read = { picks, orders, records: [{ ...savedLemons, customer_company_id: CUSTOMER_3 }] };
+    const typed =
+      typeIntoUnsaved([], read, { pickLineId: "line-b-lemon", customerId: CUSTOMER_3, quantity: 5 }) ?? [];
+
+    expect(resolveProposal({ lines: typed, ...read }).allocations).toEqual([
+      { pickLineId: "line-b-lemon", customerId: CUSTOMER_3, quantity: 5, expected: { recordId: null, quantity: 0 } },
+    ]);
+    expect(
+      typeIntoUnsaved(typed, read, { pickLineId: "line-b-lemon", customerId: CUSTOMER_3, quantity: 0 }),
+    ).toEqual([]);
   });
 });
 

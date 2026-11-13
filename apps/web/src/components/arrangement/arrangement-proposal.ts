@@ -168,15 +168,18 @@ function orderLineOwners(orders: readonly BoardOrder<BoardSubmissionTime>[]): Ma
 }
 
 /**
- * What each cell holds saved, keyed pick line and customer.
+ * What each box holds saved, keyed pick line and customer — as the grid shows
+ * it. A record is read the way buildMatrix reads it, under ONE customer: the
+ * one its order line names, with the record's own copy as the fallback for a
+ * line this read of the orders does not carry.
  *
- * A record's customer is read the way buildMatrix reads it: off the order
- * line, with the record's own copy as the fallback for a line this read of
- * the orders does not carry. And the record holds its cell for the customer
- * its own copy names as well, should the two ever differ: that is how the
- * save finds what a cell holds (save_arrangement_changes, as
- * save_arrangement_proposal before it), and a preview that judged it
- * differently would be refused on every save.
+ * One name, not both, because this is what a number typed into a box is
+ * judged against: what it was typed over, whether the box already holds it,
+ * what it gives back of the order. A record shown in another customer's box
+ * is never what this one held. Should a record's two names ever differ (they
+ * never do in real data), emptying the box that looks empty must not remove
+ * it. A suggestion, though, stays out of a cell under either name (see
+ * resolveProposal).
  */
 function savedCells(
   records: readonly BoardRecord[],
@@ -184,18 +187,16 @@ function savedCells(
 ): Map<string, { recordId: string; quantity: number }> {
   const saved = new Map<string, { recordId: string; quantity: number }>();
   for (const record of records) {
+    const ownerId = orderLineOwner.get(record.daily_order_product_id) ?? record.customer_company_id;
+    const cell = `${record.daily_pick_product_id}${SEP}${ownerId}`;
+    // One record to a box in real data. Should two ever claim one, the first
+    // stands: the save finds one too, and refuses a change typed over a record
+    // that is not the one it finds.
+    if (saved.has(cell)) continue;
     // As stored, to the database's two decimals. Never held to the tenths a
     // new quantity is: older data can hold 2.65, and the save compares what a
-    // cell held exactly.
-    const allocation = { recordId: record.id, quantity: parsePallets(record.quantity_pallets) };
-    const ownerId = orderLineOwner.get(record.daily_order_product_id) ?? record.customer_company_id;
-    for (const customerId of [ownerId, record.customer_company_id]) {
-      const cell = `${record.daily_pick_product_id}${SEP}${customerId}`;
-      // One record to a cell in real data. Should two ever claim one, the
-      // first stands: the save finds one too, and refuses a change typed over
-      // a record that is not the one it finds.
-      if (!saved.has(cell)) saved.set(cell, allocation);
-    }
+    // box held exactly.
+    saved.set(cell, { recordId: record.id, quantity: parsePallets(record.quantity_pallets) });
   }
   return saved;
 }
@@ -257,8 +258,16 @@ export function resolveProposal({
   const tradingCustomers = new Set(orders.map((order) => order.customer_company_id));
 
   const orderLineOwner = orderLineOwners(orders);
-  // What each cell holds now, built once for every line below.
+  // What each box holds now, as the grid shows it: what a number typed is
+  // judged against (see savedCells). Built once for every line below.
   const savedByCell = savedCells(records, orderLineOwner);
+  // Which cells a suggestion stays out of. A record takes its cell for the
+  // customer its order line names AND for the one its own copy names, should
+  // the two ever differ: that is how the save judges a cell filled
+  // (save_arrangement_changes, as save_arrangement_proposal before it), and a
+  // preview that judged it differently would offer, again and again, a
+  // suggestion the save refuses.
+  const arrangedCells = new Set<string>();
 
   // What each customer already has of each product, against which a
   // suggested line is held to their order.
@@ -273,6 +282,8 @@ export function resolveProposal({
   const hasOrder = new Set(owed.keys());
   for (const record of records) {
     const ownerId = orderLineOwner.get(record.daily_order_product_id) ?? record.customer_company_id;
+    arrangedCells.add(`${record.daily_pick_product_id}${SEP}${ownerId}`);
+    arrangedCells.add(`${record.daily_pick_product_id}${SEP}${record.customer_company_id}`);
     const varietyId = varietyOfPickLine.get(record.daily_pick_product_id);
     const pallets = parsePallets(record.quantity_pallets);
     if (varietyId && pallets > 0) {
@@ -309,7 +320,7 @@ export function resolveProposal({
     const cell = `${pickLineId}${SEP}${line.customerId}`;
     const key = `${line.customerId}${SEP}${line.varietyId}`;
     if (line.forOrder === "suggested") {
-      if (savedByCell.has(cell)) {
+      if (arrangedCells.has(cell)) {
         alreadyArranged += 1;
         continue;
       }
@@ -534,10 +545,10 @@ export function typeIntoProposal(
 }
 
 /**
- * The allocation saved in a cell — what a number typed into it is typed over
- * — or null while the cell is empty. Found as resolveProposal finds it: the
- * record on that pick line whose order line is that customer's, or whose own
- * copy of the customer is.
+ * The allocation saved in a box — what a number typed into it is typed over
+ * — or null while the box shows none. Found as the grid shows it (see
+ * savedCells): the record on that pick line under its order line's customer,
+ * or under its own copy of the customer for a line this read does not carry.
  */
 export function savedAllocation(
   day: Pick<DayRows, "orders" | "records">,
