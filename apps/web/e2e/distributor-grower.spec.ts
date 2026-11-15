@@ -249,6 +249,16 @@ test.describe("Backoffice — Grower Inventory Status", () => {
     await expect(sentEdit).toBeVisible();
     await expect(draftEdit).toBeVisible();
 
+    // Phone width: the filter and counter stay on screen (wrapped under the
+    // search box) and the page does not scroll sideways.
+    await page.setViewportSize({ width: 375, height: 800 });
+    await expect(statusFilter).toBeVisible();
+    await expect(page.getByText(`הזינו קטיף: ${expectedDone} מתוך ${expectedTotal}`)).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+    // Screenshots only on request, so CI writes no files.
+    if (process.env.ORI_SHOTS) await page.screenshot({ path: `${process.env.ORI_SHOTS}/grower-375.png` });
+    await page.setViewportSize({ width: 1280, height: 720 });
+
     await pickStatus("נשלח");
     await expect(sentEdit).toBeVisible();
     await expect(draftEdit).toHaveCount(0);
