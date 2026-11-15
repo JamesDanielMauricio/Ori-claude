@@ -19,11 +19,15 @@ export function OrderReminderDialog({
   onClose,
   sending,
   onSend,
+  error,
 }: {
   target: { dailyOrderId: string; customerId: string; customerName: string } | null;
   onClose: () => void;
   sending: boolean;
   onSend: (recipientUserIds: string[]) => void;
+  // A refusal of the last send, already in Hebrew; shown inside the window,
+  // which stays open.
+  error: string | null;
 }) {
   const peopleQuery = useQuery(oversightQueries.customerPeople(target?.customerId ?? null));
   const people = peopleQuery.data ? reminderPeople(peopleQuery.data) : null;
@@ -41,6 +45,7 @@ export function OrderReminderDialog({
           key={people.map((p) => `${p.userId}:${p.canReceive}`).join("|")}
           people={people}
           sending={sending}
+          error={error}
           onClose={onClose}
           onSend={onSend}
         />
@@ -64,11 +69,13 @@ export function OrderReminderDialog({
 function ReminderForm({
   people,
   sending,
+  error,
   onClose,
   onSend,
 }: {
   people: ReminderPerson[];
   sending: boolean;
+  error: string | null;
   onClose: () => void;
   onSend: (recipientUserIds: string[]) => void;
 }) {
@@ -86,7 +93,13 @@ function ReminderForm({
 
   return (
     <div className="space-y-4">
-      {anyoneReachable ? (
+      {!anyoneReachable && (
+        <p className="text-sm text-ink">
+          לאף אחד מאנשי הלקוח אין מספר טלפון שאפשר לשלוח אליו הודעת WhatsApp. אפשר להוסיף מספר
+          במסך המשתמשים.
+        </p>
+      )}
+      {people.length > 0 && (
         <>
           <p className="text-sm font-semibold text-ink">מקבלי ההודעה:</p>
           <ul className="space-y-1">
@@ -117,10 +130,10 @@ function ReminderForm({
             ))}
           </ul>
         </>
-      ) : (
-        <p className="text-sm text-ink">
-          לאף אחד מאנשי הלקוח אין מספר טלפון שאפשר לשלוח אליו הודעת WhatsApp. אפשר להוסיף מספר
-          במסך המשתמשים.
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
         </p>
       )}
       <div className="flex justify-end gap-2">

@@ -2,9 +2,8 @@ import { sendOrderReminderInputSchema, toSendOrderReminderRpcArgs } from "@ori/d
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
 
 import { useToast } from "@/components/ui/toast";
-import { errorMessage } from "@/lib/error-message";
 import { nudgeWhatsAppDispatch } from "@/lib/nudge-whatsapp-dispatch";
-import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
+import { optimisticUpdate } from "@/lib/optimistic-mutation";
 import type { DailyOrderForDay } from "@/lib/queries/oversight";
 import { createClient } from "@/lib/supabase/client";
 
@@ -51,8 +50,8 @@ export function useSendOrderReminder(options?: { ordersForDayQueryKey?: QueryKey
       // nudge-whatsapp-dispatch.ts.
       nudgeWhatsAppDispatch(supabase);
     },
-    onError: mergeOnError(optimistic.onError, (error: { message?: string }) => {
-      showToast(`שליחת התזכורת נכשלה: ${errorMessage(error)}`, "error");
-    }),
+    // Only the rollback: a refusal is shown by the caller inside the reminder
+    // window (OrderReminderDialog's `error`), not as a second message here.
+    onError: optimistic.onError,
   });
 }

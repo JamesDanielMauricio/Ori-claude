@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
+import { errorMessage } from "@/lib/error-message";
 import { groupLinesByFamily } from "@/lib/family-grouping";
 import {
   CUSTOMER_FILTER_OPTIONS,
@@ -183,14 +184,16 @@ export default function DistributorAsCustomerPage() {
         onToggle={() => toggleExpanded(customer.id)}
         onEdit={() => setOrdersDialogCustomer(customer)}
         editLabel={`ערוך את הזמנת ${customer.name}`}
-        onRemind={() =>
-          order &&
+        onRemind={() => {
+          if (!order) return;
+          // A fresh window never starts with the last one's refusal.
+          reminderMutation.reset();
           setReminderTarget({
             dailyOrderId: order.id,
             customerId: customer.id,
             customerName: customer.name,
-          })
-        }
+          });
+        }}
         remindLabel={`שלח תזכורת ל${customer.name}`}
         remindDisabled={
           !dayView.isLive || !order || order.status === "submitted" || reminderMutation.isPending
@@ -302,8 +305,12 @@ export default function DistributorAsCustomerPage() {
 
       <OrderReminderDialog
         target={reminderTarget}
-        onClose={() => setReminderTarget(null)}
+        onClose={() => {
+          reminderMutation.reset();
+          setReminderTarget(null);
+        }}
         sending={reminderMutation.isPending}
+        error={reminderMutation.error ? errorMessage(reminderMutation.error) : null}
         onSend={(recipientUserIds) => {
           if (!reminderTarget) return;
           // Closes only on success; a refusal leaves the window open with

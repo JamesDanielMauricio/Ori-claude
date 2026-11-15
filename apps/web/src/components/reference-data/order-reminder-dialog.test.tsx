@@ -20,12 +20,15 @@ vi.mock("@/components/ui/dialog", () => ({
 
 const TARGET = { dailyOrderId: "o1", customerId: "c1", customerName: "מאפיית כהן" };
 
-function render(rows: Array<{ user_id: string; display_name: string; phone_number: string | null }>) {
+function render(
+  rows: Array<{ user_id: string; display_name: string; phone_number: string | null }>,
+  error: string | null = null,
+) {
   const client = new QueryClient();
   client.setQueryData(oversightQueries.customerPeople("c1").queryKey, rows);
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
-      <OrderReminderDialog target={TARGET} onClose={() => undefined} sending={false} onSend={() => undefined} />
+      <OrderReminderDialog target={TARGET} onClose={() => undefined} sending={false} onSend={() => undefined} error={error} />
     </QueryClientProvider>,
   );
 }
@@ -57,11 +60,35 @@ describe("OrderReminderDialog", () => {
     expect(html).not.toContain("לאף אחד מאנשי הלקוח");
   });
 
-  it("with nobody reachable, says so and disables שלח", () => {
-    const html = render([{ user_id: "u2", display_name: "בני", phone_number: null }]);
-    expect(html).toContain(
-      "לאף אחד מאנשי הלקוח אין מספר טלפון שאפשר לשלוח אליו הודעת WhatsApp. אפשר להוסיף מספר במסך המשתמשים.",
-    );
+  const NOBODY =
+    "לאף אחד מאנשי הלקוח אין מספר טלפון שאפשר לשלוח אליו הודעת WhatsApp. אפשר להוסיף מספר במסך המשתמשים.";
+
+  it("with nobody reachable, still lists the people with their reasons, says so and disables שלח", () => {
+    const html = render([
+      { user_id: "u2", display_name: "בני", phone_number: null },
+      { user_id: "u3", display_name: "גילה", phone_number: "12" },
+    ]);
+    expect(html).toContain(NOBODY);
+    expect(checkboxOf(html, "בני")).toContain('disabled=""');
+    expect(checkboxOf(html, "גילה")).toContain('disabled=""');
+    expect(html).toContain("אין טלפון");
+    expect(html).toContain("מספר לא תקין");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>שלח<\/button>/);
+  });
+
+  it("a customer with no users shows the sentence alone", () => {
+    const html = render([]);
+    expect(html).toContain(NOBODY);
+    expect(html).not.toContain("מקבלי ההודעה:");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>שלח<\/button>/);
+  });
+
+  it("shows a refusal as an alert line inside the window", () => {
+    const refusal = "אחד המקבלים כבר לא משויך ללקוח הזה. סגרו את החלון ופתחו אותו שוב.";
+    const html = render([{ user_id: "u1", display_name: "אבי", phone_number: "0501234567" }], refusal);
+    expect(html).toMatch(new RegExp(`<p role="alert"[^>]*>${refusal}</p>`));
+    expect(render([{ user_id: "u1", display_name: "אבי", phone_number: "0501234567" }])).not.toContain(
+      'role="alert"',
+    );
   });
 });

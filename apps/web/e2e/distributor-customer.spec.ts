@@ -281,9 +281,12 @@ test.describe("Backoffice — Customer Order Status", () => {
     await moveTo(otherCompany.id);
 
     await dialog.getByRole("button", { name: "שלח", exact: true }).click();
-    // The refusal's toast is shown over the still-open window.
+    // The refusal is a line inside the still-open window.
     await expect(
-      page.getByText("אחד המקבלים כבר לא משויך ללקוח הזה. סגרו את החלון ופתחו אותו שוב.").first(),
+      page
+        .locator("dialog[open]")
+        .getByRole("alert")
+        .filter({ hasText: "אחד המקבלים כבר לא משויך ללקוח הזה. סגרו את החלון ופתחו אותו שוב." }),
     ).toBeVisible();
     await expect(page.locator("dialog[open]")).toHaveCount(1);
 
