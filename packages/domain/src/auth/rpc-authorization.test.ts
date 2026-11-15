@@ -319,6 +319,27 @@ describe("privileged functions refuse callers without a profile or a sign-in (00
     );
   }, 60000);
 
+  it("send_order_reminder with a list refuses everyone but backoffice and queues nothing (0104)", async () => {
+    const [order] = await db
+      .select()
+      .from(dailyOrders)
+      .where(inArray(dailyOrders.customerCompanyId, [customer2.companyId]));
+    await expectRefused(
+      "send_order_reminder",
+      (c) =>
+        c.rpc("send_order_reminder", {
+          p_daily_order_id: order!.id,
+          p_recipient_user_ids: [customer1.userId],
+        }),
+      everyoneButStaffAndOwner(),
+    );
+    // expectRefused already proves the day's outbox rows are unchanged; this
+    // says it plainly for the one company a reminder would have gone to.
+    expect(
+      await db.select().from(notificationOutbox).where(eq(notificationOutbox.recipientCompanyId, customer2.companyId)),
+    ).toHaveLength(0);
+  }, 60000);
+
   it("submit_order refuses an order on another company's behalf from anyone but backoffice, and an own-order send from anyone but a customer", async () => {
     const lines = [{ productVarietyId: growerA.varietyId, palletsOrdered: 1 }];
     await expectRefused(

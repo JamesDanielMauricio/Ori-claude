@@ -72,4 +72,9 @@ export const notificationOutbox = pgTable("notification_outbox", {
   skippedAt: timestamp("skipped_at", { withTimezone: true }),
   retryRequestedAt: timestamp("retry_requested_at", { withTimezone: true }),
   retryRequestedBy: uuid("retry_requested_by").references(() => profiles.userId, { onDelete: "set null" }),
+  // Migration 0104 — the users a reminder goes to. NULL = the recipient
+  // company's usual routing (its WhatsApp group, else every user with a
+  // number); a list = exactly these users of recipientCompanyId, privately,
+  // never the group. Written only by send_order_reminder.
+  recipientUserIds: uuid("recipient_user_ids").array(),
 });

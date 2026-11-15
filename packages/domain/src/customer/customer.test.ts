@@ -770,6 +770,104 @@ describe("customer ordering module", () => {
     expect(afterSubmit.error?.code).toBe(CUSTOMER_ERROR_CODES.INVALID_STATE);
   }, 30000);
 
+  // Migration 0104: the office can name which of the customer's people get the
+  // reminder. The list is stored on the queued row; the dispatch reads it.
+  async function customerWithTwoPeople(dayId: string) {
+    const customer = await createTestCustomer(dayId);
+    const a = await createTestProfile({ companyId: customer.companyId, role: "customer" });
+    cleanupFns.push(() => deleteTestUser(a.userId));
+    const b = await createTestProfile({ companyId: customer.companyId, role: "customer" });
+    cleanupFns.push(() => deleteTestUser(b.userId));
+    const order = await getDailyOrderForCustomer(dayId, customer.companyId);
+    return { customer, a, b, orderId: order!.id };
+  }
+
+  it("send_order_reminder with a list stores it on the queued row and queues one row", async () => {
+    const day = await createOpenTestDay(admin.userId);
+    const { customer, b, orderId } = await customerWithTwoPeople(day.id);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    const result = await admin.client.rpc(
+      "send_order_reminder",
+      toSendOrderReminderRpcArgs({ dailyOrderId: orderId, recipientUserIds: [b.userId] }),
+    );
+    expect(result.error).toBeNull();
+    expect(result.data!.reminder_sent_at).not.toBeNull();
+
+    const rows = await db
+      .select()
+      .from(notificationOutbox)
+      .where(eq(notificationOutbox.recipientCompanyId, customer.companyId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ templateKey: "order_reminder", recipientUserIds: [b.userId] });
+  }, 30000);
+
+  it("send_order_reminder refuses an empty list", async () => {
+    const day = await createOpenTestDay(admin.userId);
+    const { customer, orderId } = await customerWithTwoPeople(day.id);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    // Straight to the RPC: the domain schema already refuses an empty list,
+    // so this proves the database refuses it too.
+    const result = await admin.client.rpc("send_order_reminder", {
+      p_daily_order_id: orderId,
+      p_recipient_user_ids: [],
+    });
+    expect(result.error?.code).toBe("P0008");
+    expect(result.error?.message).toMatch(/^INVALID_INPUT: choose at least one recipient/);
+
+    const rows = await db
+      .select()
+      .from(notificationOutbox)
+      .where(eq(notificationOutbox.recipientCompanyId, customer.companyId));
+    expect(rows).toHaveLength(0);
+    const order = await getDailyOrderForCustomer(day.id, customer.companyId);
+    expect(order!.reminderSentAt).toBeNull();
+  }, 30000);
+
+  it("send_order_reminder refuses a recipient who is not a user of this customer", async () => {
+    const day = await createOpenTestDay(admin.userId);
+    const { customer, orderId } = await customerWithTwoPeople(day.id);
+    const otherCompany = await createTestCompany(`לקוח אחר ${randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(otherCompany.id));
+    const stranger = await createTestProfile({ companyId: otherCompany.id, role: "customer" });
+    cleanupFns.push(() => deleteTestUser(stranger.userId));
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    const result = await admin.client.rpc(
+      "send_order_reminder",
+      toSendOrderReminderRpcArgs({ dailyOrderId: orderId, recipientUserIds: [stranger.userId] }),
+    );
+    expect(result.error?.code).toBe("P0008");
+    expect(result.error?.message).toMatch(/^INVALID_INPUT: a recipient is not a user of this customer/);
+
+    const rows = await db
+      .select()
+      .from(notificationOutbox)
+      .where(eq(notificationOutbox.recipientCompanyId, customer.companyId));
+    expect(rows).toHaveLength(0);
+  }, 30000);
+
+  it("send_order_reminder: duplicates in the list are sent once", async () => {
+    const day = await createOpenTestDay(admin.userId);
+    const { customer, a, orderId } = await customerWithTwoPeople(day.id);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    // Straight to the RPC: the domain schema refuses duplicates client-side.
+    const result = await admin.client.rpc("send_order_reminder", {
+      p_daily_order_id: orderId,
+      p_recipient_user_ids: [a.userId, a.userId],
+    });
+    expect(result.error).toBeNull();
+
+    const rows = await db
+      .select()
+      .from(notificationOutbox)
+      .where(eq(notificationOutbox.recipientCompanyId, customer.companyId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.recipientUserIds).toEqual([a.userId]);
+  }, 30000);
+
   it("submit_order enqueues order_submitted to backoffice only on a direct customer submission, not the backoffice-on-behalf-of path — id 6", async () => {
     const grower = await createTestGrowerWithProduct();
     cleanupFns.push(() => deleteTestGrowerWithProduct(grower));

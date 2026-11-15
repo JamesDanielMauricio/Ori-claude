@@ -195,6 +195,61 @@ describe("message content and phone numbers (0077)", () => {
     expect(resolved.data!.map((t) => t.target).sort()).toEqual(["970591234567", "972501234567"]);
   }, 30000);
 
+  // Migration 0104: the office picks which of a customer's people get the
+  // reminder. A list means exactly those people, privately — the group is
+  // never used, even when the company has one.
+  async function customerWithPeople() {
+    const company = await createTestCompany(`לקוח בדיקה ${randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(company.id));
+    await db.update(companies).set({ whatsappGroupId: `grp-${randomUUID()}` }).where(eq(companies.id, company.id));
+    const a = await createTestProfile({ companyId: company.id, role: "customer", displayName: "אילנה כהן", phoneNumber: "050-111 1111" });
+    cleanupFns.push(() => deleteTestUser(a.userId));
+    const b = await createTestProfile({ companyId: company.id, role: "customer", displayName: "בועז לוי", phoneNumber: "052-765 4321" });
+    cleanupFns.push(() => deleteTestUser(b.userId));
+    const c = await createTestProfile({ companyId: company.id, role: "customer", displayName: "גילה דן" });
+    cleanupFns.push(() => deleteTestUser(c.userId));
+    return { company, a, b, c };
+  }
+
+  async function queuedFor(companyId: string, recipientUserIds: string[]) {
+    const row = await createTestOutboxRow({
+      tradingDayId: dayId,
+      recipientType: "customer",
+      recipientCompanyId: companyId,
+      templateKey: "order_reminder",
+      payload: { tradeDate: "2026-11-08", lines: [] },
+      recipientUserIds,
+    });
+    cleanupFns.push(async () => {
+      await db.delete(notificationOutbox).where(eq(notificationOutbox.id, row.id));
+    });
+    return row.id;
+  }
+
+  it("a reminder with a list goes to exactly those people, privately, never the group", async () => {
+    const { company, b, c } = await customerWithPeople();
+    const id = await queuedFor(company.id, [b.userId, c.userId]);
+    const resolved = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: id });
+    expect(resolved.error).toBeNull();
+    // C has no phone number, A is not on the list, the group is not used.
+    expect(resolved.data).toHaveLength(1);
+    expect(resolved.data![0]).toMatchObject({ target: "972527654321", is_group: false });
+    expect(resolved.data![0]!.message.startsWith("שלום בועז.")).toBe(true);
+  }, 30000);
+
+  it("skips a listed user who moved company", async () => {
+    const { company, a } = await customerWithPeople();
+    const other = await createTestCompany(`לקוח אחר ${randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(other.id));
+    const id = await queuedFor(company.id, [a.userId]);
+    await db.update(profiles).set({ companyId: other.id }).where(eq(profiles.userId, a.userId));
+    const resolved = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: id });
+    // Put A back before checking, so the other company can be deleted.
+    await db.update(profiles).set({ companyId: company.id }).where(eq(profiles.userId, a.userId));
+    expect(resolved.error).toBeNull();
+    expect(resolved.data).toHaveLength(0);
+  }, 30000);
+
   // ---------------------------------------------------------------------
   // Migration 0102 (James, 2026-11-13): every WhatsApp message is Bubble's —
   // its `main alert` text word for word, its details filled in the way

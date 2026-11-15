@@ -109,6 +109,9 @@ export interface CreateTestOutboxRowOptions {
   // When the message was queued — set in the past to test the 12-hour
   // automatic-sending window (migration 0078). Defaults to now.
   createdAt?: Date;
+  // Migration 0104: the users a reminder goes to. Left out (NULL), the row
+  // uses the company's usual routing.
+  recipientUserIds?: string[] | null;
 }
 
 export async function createTestOutboxRow(options: CreateTestOutboxRowOptions) {
@@ -121,6 +124,7 @@ export async function createTestOutboxRow(options: CreateTestOutboxRowOptions) {
       templateKey: options.templateKey,
       payload: options.payload,
       ...(options.createdAt ? { createdAt: options.createdAt } : {}),
+      ...(options.recipientUserIds !== undefined ? { recipientUserIds: options.recipientUserIds } : {}),
     })
     .returning();
   if (!row) throw new Error("failed to create test notification_outbox row");

@@ -856,6 +856,7 @@ export type Database = {
           skipped_at: string | null;
           retry_requested_at: string | null;
           retry_requested_by: string | null;
+          recipient_user_ids: string[] | null;
         };
         Insert: {
           id?: string;
@@ -876,6 +877,7 @@ export type Database = {
           skipped_at?: string | null;
           retry_requested_at?: string | null;
           retry_requested_by?: string | null;
+          recipient_user_ids?: string[] | null;
         };
         Update: {
           id?: string;
@@ -896,6 +898,7 @@ export type Database = {
           skipped_at?: string | null;
           retry_requested_at?: string | null;
           retry_requested_by?: string | null;
+          recipient_user_ids?: string[] | null;
         };
         Relationships: [
           {
@@ -1534,6 +1537,7 @@ export type Database = {
       send_order_reminder: {
         Args: {
           p_daily_order_id: string;
+          p_recipient_user_ids?: string[];
         };
         Returns: Database["public"]["Tables"]["daily_orders"]["Row"];
       };
