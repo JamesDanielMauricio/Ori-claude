@@ -35,7 +35,7 @@ drop function if exists public.send_order_reminder(uuid);
 -- check is "is distinct from" (not "<>"): current_role() is NULL for a caller
 -- with no profile, and "<>" is never true for NULL, so it let that caller past
 -- (the trap 0076 closed for the definer functions).
-create function public.send_order_reminder(p_daily_order_id uuid, p_recipient_user_ids uuid[] default null)
+create or replace function public.send_order_reminder(p_daily_order_id uuid, p_recipient_user_ids uuid[] default null)
 returns public.daily_orders
 language plpgsql
 security invoker
