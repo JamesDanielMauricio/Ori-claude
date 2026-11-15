@@ -179,6 +179,31 @@ test.describe("Backoffice — Users", () => {
     await expect(signInTestUser(newEmail, target.password)).resolves.toBeDefined();
   });
 
+  test("a phone change saves while the email list is unavailable", async ({ page }) => {
+    test.setTimeout(60000);
+    const { target } = await openUsersWithTwoAccounts(page);
+    const { data: profile } = await serviceClient()
+      .from("profiles")
+      .select("display_name")
+      .eq("user_id", target.userId)
+      .single();
+    // The emails call fails from here on; reload so the page starts without it.
+    await page.route("**/trpc/auth.listUserEmails*", (route) => route.abort());
+    await page.reload();
+    const row = page.locator("tr").filter({ hasText: profile!.display_name });
+    await row.waitFor({ timeout: 15000 });
+    await row.getByRole("button", { name: "ערוך" }).click();
+
+    // The box is locked, not empty-and-invalid.
+    await expect(editingRow(page).getByLabel("אימייל")).toBeDisabled();
+    await editingRow(page).getByLabel("טלפון").fill("0501234567");
+    await editingRow(page).getByRole("button", { name: "שמור" }).click();
+
+    await expect(page.getByText("הנתונים נשמרו.")).toBeVisible();
+    const { data } = await serviceClient().from("profiles").select("phone_number").eq("user_id", target.userId).single();
+    expect(data?.phone_number).toBe("0501234567");
+  });
+
   test("an address another user has is refused and nothing else is saved", async ({ page }) => {
     test.setTimeout(60000);
     const { target, other } = await openUsersWithTwoAccounts(page);

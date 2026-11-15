@@ -15,7 +15,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth-context";
-import { changedEmail, isEmailShaped } from "@/lib/email-input";
+import { planEmailChange } from "@/lib/email-input";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
@@ -43,8 +43,10 @@ const CREATED_AT_FORMAT = new Intl.DateTimeFormat("he-IL", { dateStyle: "short" 
 interface FormState {
   displayName: string;
   // The login address, as typed. It lives in Auth, not in profiles, so it is
-  // seeded from the emails query and saved through its own API call.
-  email: string;
+  // saved through its own API call. null until the user types in the box —
+  // the box then shows the saved address from the emails query, which may
+  // arrive late or fail, and editing must not depend on it.
+  email: string | null;
   role: UserRole;
   companyId: string;
   phoneNumber: string;
@@ -60,7 +62,7 @@ interface SaveVariables {
   storedPhone: string | null;
 }
 
-function toFormState(row: ProfileRow, blocked: string[], email: string): FormState {
+function toFormState(row: ProfileRow, blocked: string[], email: string | null = null): FormState {
   return {
     displayName: row.display_name,
     email,
@@ -175,8 +177,10 @@ export default function UsersPage() {
     mutationFn: async ({ storedPhone }: SaveVariables): Promise<{ user_id: string }> => {
       if (!editingId || !form) throw new Error("No user selected");
       emailChangedRef.current = false;
-      // Checked before anything is written, like the phone below.
-      if (!isEmailShaped(form.email)) throw new Error("כתובת האימייל אינה תקינה.");
+      // Checked before anything is written, like the phone below — but only
+      // when the user really changed the address (see planEmailChange).
+      const emailPlan = planEmailChange(emailsQuery.data?.[editingId], form.email);
+      if (emailPlan.kind === "invalid") throw new Error("כתובת האימייל אינה תקינה.");
       // One stored form per number — 0501234567, or +12125551234 for a
       // foreign one (migration 0077). Checked before anything is saved, so a
       // refused number leaves the role, company and blocked products
@@ -195,9 +199,8 @@ export default function UsersPage() {
       // The email goes first: it is the write most likely to be refused (an
       // address another user has), and if it is, nothing else has been saved
       // yet, so the whole edit can simply be corrected and retried.
-      const newEmail = changedEmail(emailsQuery.data?.[editingId], form.email);
-      if (newEmail !== null) {
-        await updateEmail.mutateAsync({ targetUserId: editingId, email: newEmail });
+      if (emailPlan.kind === "change") {
+        await updateEmail.mutateAsync({ targetUserId: editingId, email: emailPlan.email });
         emailChangedRef.current = true;
       }
       const { data, error } = await supabase.rpc("save_user", toSaveUserRpcArgs(input));
@@ -283,9 +286,7 @@ export default function UsersPage() {
   // loaded up front for its column, not lazily on click.
   function handleEditRow(row: ProfileRow) {
     setEditingId(row.user_id);
-    setForm(
-      toFormState(row, blockedQuery.data?.get(row.user_id) ?? [], emailsQuery.data?.[row.user_id] ?? ""),
-    );
+    setForm(toFormState(row, blockedQuery.data?.get(row.user_id) ?? []));
   }
 
   function handleCancel() {
@@ -294,13 +295,15 @@ export default function UsersPage() {
   }
 
   const baselineForm = selected
-    ? toFormState(
-        selected,
-        blockedQuery.data?.get(selected.user_id) ?? [],
-        emailsQuery.data?.[selected.user_id] ?? "",
-      )
+    ? // The email is compared separately below, so it is copied from the form here.
+      toFormState(selected, blockedQuery.data?.get(selected.user_id) ?? [], form?.email ?? null)
     : null;
-  const dirty = baselineForm === null || hasChanges(form, baselineForm);
+  // A late-arriving email list cannot flip this: the box only counts as changed
+  // when the user typed an address that differs from a KNOWN saved one.
+  const emailEdited =
+    selected !== null &&
+    planEmailChange(emailsQuery.data?.[selected.user_id], form?.email ?? null).kind !== "none";
+  const dirty = baselineForm === null || emailEdited || hasChanges(form, baselineForm);
 
   function handleSave() {
     setSaving(true);
@@ -352,13 +355,19 @@ export default function UsersPage() {
       render: (row) => emailsQuery.data?.[row.user_id] ?? "—",
       renderEdit: () => {
         if (!form) return null;
+        // Until the saved address is known the box is locked: the rest of the
+        // edit still saves without it. Once it arrives it shows the address
+        // (form.email stays null until the user types, so nothing is overwritten).
+        const saved = editingId ? emailsQuery.data?.[editingId] : undefined;
         return (
           <input
             type="email"
             dir="ltr"
             aria-label="אימייל"
             className={`${inputClassName} w-full min-w-[12rem]`}
-            value={form.email}
+            disabled={saved === undefined}
+            placeholder={saved === undefined ? "טוען…" : undefined}
+            value={form.email ?? saved ?? ""}
             onChange={(event) => setForm((current) => current && { ...current, email: event.target.value })}
           />
         );

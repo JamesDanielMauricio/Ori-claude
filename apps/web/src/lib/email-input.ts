@@ -19,3 +19,17 @@ export function changedEmail(saved: string | undefined, typed: string): string |
   const next = normalizeEmailInput(typed);
   return next === normalizeEmailInput(saved ?? "") ? null : next;
 }
+
+export type EmailPlan = { kind: "none" } | { kind: "invalid" } | { kind: "change"; email: string };
+
+// What a save should do about the email. `typed` is null until the user has
+// typed in the box. Editing a user must never depend on the email list (a slow
+// call that can fail), so with the saved address unknown, the box untouched,
+// or the typed address equal to the saved one, the email is left out of the
+// save entirely and is not even validated.
+export function planEmailChange(saved: string | undefined, typed: string | null): EmailPlan {
+  if (saved === undefined || typed === null) return { kind: "none" };
+  const next = changedEmail(saved, typed);
+  if (next === null) return { kind: "none" };
+  return isEmailShaped(next) ? { kind: "change", email: next } : { kind: "invalid" };
+}
