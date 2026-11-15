@@ -175,6 +175,19 @@ export function productColumnWidth(gridWidth: number): number {
   return Math.min(PRODUCT_COLUMN_MAX, Math.max(PRODUCT_COLUMN_MIN, share));
 }
 
+/**
+ * The pick line the סה״כ במלאי number would open the quick stock edit for, or
+ * null when it stays a plain number: `allowed` is false (the grid is held or
+ * no popup is wired in), the product row sums several growers (there is no
+ * single line to edit), or that line's pick is closed — the server refuses
+ * every change to a closed pick. Shared by both presentations of the grid.
+ */
+export function editableStockLine(row: MatrixRow, allowed: boolean): MatrixGrowerRow | null {
+  if (!allowed) return null;
+  const line = row.kind === "grower" ? row : row.expandable ? undefined : row.growers[0];
+  return line && !line.closed ? line : null;
+}
+
 /** What a customer cell's colour says — see cellTone. */
 export type CellTone = "none" | "ordered" | "arranged";
 

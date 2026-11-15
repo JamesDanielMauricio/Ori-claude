@@ -5,7 +5,13 @@ import { Icon } from "@/components/ui/icon";
 import { limitToOneDecimal } from "@/lib/pallet-input";
 
 import { formatPallets } from "../board-data";
-import { cellTarget, cellTone, type Matrix, type MatrixRow } from "../matrix-data";
+import {
+  cellTarget,
+  cellTone,
+  editableStockLine,
+  type Matrix,
+  type MatrixRow,
+} from "../matrix-data";
 
 import { CELL_TONE, UNSAVED_BOX, UNSAVED_TITLE } from "./cell-look";
 import {
@@ -57,6 +63,7 @@ export function MatrixRowCells({
   onCommit,
   onKeyDown,
   onFocusCell,
+  onEditStock,
 }: {
   row: MatrixRow;
   rowIndex: number;
@@ -72,6 +79,8 @@ export function MatrixRowCells({
   onCommit: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLInputElement>, row: number, col: number) => void;
   onFocusCell: (cell: CellAddress) => void;
+  /** Opens the quick stock edit for a pick line; without it סה״כ במלאי is a plain number. */
+  onEditStock?: (pickLineId: string) => void;
 }) {
   const isProduct = row.kind === "product";
   const compact = productWidth < COMPACT_PRODUCT_BELOW;
@@ -92,6 +101,7 @@ export function MatrixRowCells({
   // carry meaning there (ordered, arranged), and those are what this screen
   // exists to make visible.
   const stickyTint = isActiveRow ? "bg-accent-soft" : rowBase;
+  const stockLine = editableStockLine(row, editable && onEditStock !== undefined);
 
   return (
     <tr style={{ height: ROW_H }}>
@@ -149,6 +159,12 @@ export function MatrixRowCells({
         value={formatPallets(row.inStock)}
         offset={{ right: productWidth }}
         tint={stickyTint}
+        {...(stockLine
+          ? {
+              onEdit: () => onEditStock?.(stockLine.pickLineId),
+              editLabel: `עדכון מלאי — ${stockLine.growerName}`,
+            }
+          : {})}
       />
       <TotalCell
         // A grower row has no demand of its own — the order was placed
@@ -325,18 +341,34 @@ function TotalCell({
   offset,
   tint,
   tone = "normal",
+  onEdit,
+  editLabel,
 }: {
   value: string;
   offset: { right: number } | { left: number };
   tint: string;
   tone?: keyof typeof TONE_CLASS;
+  /** When given, the number is a button that calls it (סה״כ במלאי → the stock popup). */
+  onEdit?: () => void;
+  editLabel?: string;
 }) {
   return (
     <td
       style={offset}
       className={`sticky ${Z_STICKY_COL} ${CELL_BORDER} ${tint} px-2 text-center text-sm font-semibold ${TONE_CLASS[tone]}`}
     >
-      {value}
+      {onEdit ? (
+        <button
+          type="button"
+          onClick={onEdit}
+          aria-label={editLabel}
+          className="rounded-sm underline-offset-4 hover:text-accent hover:underline hover:decoration-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-bright"
+        >
+          {value}
+        </button>
+      ) : (
+        value
+      )}
     </td>
   );
 }

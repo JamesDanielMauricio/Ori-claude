@@ -60,6 +60,7 @@ export function ArrangementMatrix({
   onToggle,
   editable,
   onCommit,
+  onEditStock,
   emptyLabel = NO_ROWS_LABEL,
 }: {
   matrix: Matrix;
@@ -71,6 +72,11 @@ export function ArrangementMatrix({
    * nothing is written to the database; a refusal reverts the cell.
    */
   onCommit: (write: MatrixWrite) => Promise<boolean>;
+  /**
+   * Opens the quick stock edit for a pick line. When given, סה״כ במלאי on a
+   * single-grower line whose pick is not closed becomes a button.
+   */
+  onEditStock?: (pickLineId: string) => void;
   /** What to say when there are no rows — the caller knows why there are none. */
   emptyLabel?: string;
 }) {
@@ -218,6 +224,7 @@ export function ArrangementMatrix({
                   onCommit={() => void commitDraft()}
                   onKeyDown={handleKeyDown}
                   onFocusCell={setActive}
+                  {...(onEditStock ? { onEditStock } : {})}
                 />
               );
             })}

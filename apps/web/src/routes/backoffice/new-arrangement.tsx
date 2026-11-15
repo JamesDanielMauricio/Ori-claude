@@ -7,10 +7,7 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import {
-  ArrangementMatrix,
-  type MatrixWrite,
-} from "@/components/arrangement/arrangement-matrix";
+import { ArrangementMatrix, type MatrixWrite } from "@/components/arrangement/arrangement-matrix";
 import { ArrangementMatrixMobile } from "@/components/arrangement/arrangement-matrix-mobile";
 import { proposeForDay } from "@/components/arrangement/arrangement-engine-input";
 import { readEngineHistory } from "@/components/arrangement/arrangement-history-query";
@@ -30,6 +27,7 @@ import {
   orderedOnly,
   type ProposedAllocation,
 } from "@/components/arrangement/matrix-data";
+import { StockEditDialog } from "@/components/arrangement/stock-edit-dialog";
 import { EMPTY_UNSAVED_DAY, useUnsavedChanges } from "@/components/arrangement/unsaved-changes";
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/card";
@@ -119,6 +117,8 @@ export default function NewArrangementPage() {
   const [proposing, setProposing] = useState(false);
   // "בטל שינויים" is asking before it throws the unsaved changes away.
   const [discarding, setDiscarding] = useState(false);
+  // The pick line whose stock popup ("עדכון מלאי") is open, if any.
+  const [stockLineId, setStockLineId] = useState<string | null>(null);
   // Asked of the mutation cache, not of this component's own state: a save
   // outlives the screen that started it, and a distributor who leaves and
   // comes straight back must find the grid still held, not editable
@@ -708,6 +708,7 @@ export default function NewArrangementPage() {
           }
           editable={gridEditable}
           onCommit={commitCell}
+          {...(gridEditable ? { onEditStock: setStockLineId } : {})}
           {...(emptyLabel ? { emptyLabel } : {})}
         />
       ) : (
@@ -723,9 +724,25 @@ export default function NewArrangementPage() {
           }
           editable={gridEditable}
           onCommit={commitCell}
+          {...(gridEditable ? { onEditStock: setStockLineId } : {})}
           {...(emptyLabel ? { emptyLabel } : {})}
         />
       )}
+
+      {/* The quick stock edit. Saving it re-reads everything that shows a
+          pick line's stock; the grid's unsaved changes are held apart (see
+          useUnsavedChanges) and are laid over each fresh read, so they stay. */}
+      <StockEditDialog
+        pickLineId={stockLineId}
+        onClose={() => setStockLineId(null)}
+        onSaved={() => {
+          void queryClient.invalidateQueries({ queryKey: newArrangementKeys.matrix(boardDay.id) });
+          void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
+          void queryClient.invalidateQueries({ queryKey: ["picked-products"] });
+          void queryClient.invalidateQueries({ queryKey: ["grower-oversight", "picks-for-day"] });
+          setStockLineId(null);
+        }}
+      />
 
       {/* Asked first: one slip onto "בטל שינויים" would otherwise throw away
           everything typed since the last save, with no way back. */}

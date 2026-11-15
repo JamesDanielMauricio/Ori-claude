@@ -16,6 +16,7 @@ import {
 import {
   cellTone,
   cellTarget,
+  editableStockLine,
   parseMatrixQuantity,
   type CellTarget,
   type Matrix,
@@ -50,6 +51,7 @@ export function ArrangementMatrixMobile({
   onToggle,
   editable,
   onCommit,
+  onEditStock,
   emptyLabel = NO_ROWS_LABEL,
 }: {
   matrix: Matrix;
@@ -63,6 +65,11 @@ export function ArrangementMatrixMobile({
   onToggle: (varietyId: string) => void;
   editable: boolean;
   onCommit: (write: MatrixWrite) => Promise<boolean>;
+  /**
+   * Opens the quick stock edit for a pick line. When given, "במלאי" on a
+   * single-grower line whose pick is not closed becomes a button.
+   */
+  onEditStock?: (pickLineId: string) => void;
   /** What to say when there are no rows — the caller knows why there are none. */
   emptyLabel?: string;
 }) {
@@ -122,6 +129,7 @@ export function ArrangementMatrixMobile({
               onToggle={() => onToggle(row.varietyId)}
               editable={editable}
               onCommit={onCommit}
+              onEditStock={onEditStock}
             />
           ))}
         </ul>
@@ -140,6 +148,7 @@ function ProductCard({
   onToggle,
   editable,
   onCommit,
+  onEditStock,
 }: {
   row: MatrixProductRow;
   entries: ColumnEntry[];
@@ -148,11 +157,16 @@ function ProductCard({
   onToggle: () => void;
   editable: boolean;
   onCommit: (write: MatrixWrite) => Promise<boolean>;
+  onEditStock: ((pickLineId: string) => void) | undefined;
 }) {
   // Same signal as the desktop grid's marked cells, one level up: this
   // product has demand somewhere, so it's worth opening even before you know
   // from which customer.
   const hasDemand = row.ordered > 0;
+  // A single-grower product's "במלאי" is that one line's stock, so it can open
+  // the stock popup. It sits OUTSIDE the toggle button below — a button inside
+  // a button is invalid, and a tap on it would also toggle the card.
+  const stockLine = editableStockLine(row, editable && onEditStock !== undefined);
 
   return (
     <li
@@ -160,32 +174,50 @@ function ProductCard({
         hasDemand ? "ring-marked-edge/60" : "ring-border/70"
       }`}
     >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3.5 text-start"
-      >
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold text-ink">{row.varietyName}</span>
-          {row.familyName && (
-            <span className="mt-0.5 block truncate text-xs text-ink-subtle">{row.familyName}</span>
-          )}
-        </span>
+      <div className="flex items-center">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3.5 text-start"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-ink">{row.varietyName}</span>
+            {row.familyName && (
+              <span className="mt-0.5 block truncate text-xs text-ink-subtle">
+                {row.familyName}
+              </span>
+            )}
+          </span>
 
-        <span className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
-          <Stat label="במלאי" value={row.inStock} />
-          <Stat label="זמין" value={row.available} tone={row.available < 0 ? "danger" : "normal"} />
-          {hasDemand && <StatusPill tone="marked">הוזמן {formatPallets(row.ordered)}</StatusPill>}
-        </span>
+          <span className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
+            {!stockLine && <Stat label="במלאי" value={row.inStock} />}
+            <Stat
+              label="זמין"
+              value={row.available}
+              tone={row.available < 0 ? "danger" : "normal"}
+            />
+            {hasDemand && <StatusPill tone="marked">הוזמן {formatPallets(row.ordered)}</StatusPill>}
+          </span>
 
-        <Icon
-          name="chevronDown"
-          className={`h-4 w-4 shrink-0 text-ink-subtle transition-transform duration-200 ${
-            open ? "rotate-180" : ""
-          }`}
-        />
-      </button>
+          <Icon
+            name="chevronDown"
+            className={`h-4 w-4 shrink-0 text-ink-subtle transition-transform duration-200 ${
+              open ? "rotate-180" : ""
+            }`}
+          />
+        </button>
+        {stockLine && (
+          <span className="shrink-0 pe-4">
+            <Stat
+              label="במלאי"
+              value={row.inStock}
+              onEdit={() => onEditStock?.(stockLine.pickLineId)}
+              editLabel={`עדכון מלאי — ${stockLine.growerName}`}
+            />
+          </span>
+        )}
+      </div>
 
       {open && (
         <div className="border-t border-border/70 bg-surface-muted/40 px-3 py-3">
@@ -202,6 +234,7 @@ function ProductCard({
                   fullColumns={fullColumns}
                   editable={editable}
                   onCommit={onCommit}
+                  onEditStock={onEditStock}
                 />
               ))}
             </div>
@@ -226,13 +259,16 @@ function GrowerBlock({
   fullColumns,
   editable,
   onCommit,
+  onEditStock,
 }: {
   grower: MatrixGrowerRow;
   entries: ColumnEntry[];
   fullColumns: MatrixColumn[];
   editable: boolean;
   onCommit: (write: MatrixWrite) => Promise<boolean>;
+  onEditStock: ((pickLineId: string) => void) | undefined;
 }) {
+  const stockLine = editableStockLine(grower, editable && onEditStock !== undefined);
   return (
     <div className="overflow-hidden rounded-lg bg-surface shadow-card ring-1 ring-inset ring-border/70">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 bg-surface-muted/60 px-3 py-2">
@@ -240,7 +276,16 @@ function GrowerBlock({
           {grower.growerName}
         </p>
         <span className="flex shrink-0 gap-3">
-          <Stat label="במלאי" value={grower.inStock} />
+          <Stat
+            label="במלאי"
+            value={grower.inStock}
+            {...(stockLine
+              ? {
+                  onEdit: () => onEditStock?.(stockLine.pickLineId),
+                  editLabel: `עדכון מלאי — ${stockLine.growerName}`,
+                }
+              : {})}
+          />
           <Stat
             label="זמין"
             value={grower.available}
@@ -436,13 +481,18 @@ function Stat({
   label,
   value,
   tone = "normal",
+  onEdit,
+  editLabel,
 }: {
   label: string;
   value: number;
   tone?: "danger" | "normal";
+  /** When given, the stat is a button that calls it (במלאי → the stock popup). */
+  onEdit?: () => void;
+  editLabel?: string;
 }) {
-  return (
-    <span className="whitespace-nowrap text-xs">
+  const content = (
+    <>
       <span className="text-ink-subtle">{label} </span>
       <span
         className={`font-semibold tabular-nums ${tone === "danger" ? "text-danger" : "text-ink-muted"}`}
@@ -450,6 +500,19 @@ function Stat({
       >
         {formatPallets(value)}
       </span>
-    </span>
+    </>
+  );
+  if (!onEdit) return <span className="whitespace-nowrap text-xs">{content}</span>;
+  return (
+    // Padded to a larger tap target than the text, and underlined on hover
+    // like the desktop grid's number.
+    <button
+      type="button"
+      onClick={onEdit}
+      aria-label={editLabel}
+      className="-m-2 whitespace-nowrap rounded-sm p-2 text-xs underline-offset-4 hover:underline hover:decoration-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-bright"
+    >
+      {content}
+    </button>
   );
 }

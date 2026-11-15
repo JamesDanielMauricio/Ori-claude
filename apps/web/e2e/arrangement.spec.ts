@@ -571,4 +571,212 @@ test.describe("Backoffice — arrangement workspace", () => {
       page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` }),
     ).toBeDisabled();
   });
+
+  // --- The quick stock edit on סידור לפי מוצרים ---
+  // A day with one single-grower product (`grower`, 10 pallets picked), a
+  // customer column, and — when asked — a second grower's product, so a test
+  // can hold an unsaved number on a product other than the one being edited.
+  async function startStockDay(page: Page, options: { withOther?: boolean; picked?: number } = {}) {
+    const adminCompany = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(adminCompany.id));
+    const admin = await createTestProfile({ companyId: adminCompany.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const adminClient = await signInTestUser(admin.email, admin.password);
+
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const other = options.withOther ? await createTestGrowerWithProduct() : null;
+    if (other) cleanupFns.push(() => deleteTestGrowerWithProduct(other));
+    // Created before open_shop, so it is a column of the grid.
+    const customerCompany = await createTestCompany("לקוח מלאי", "customer");
+    cleanupFns.push(() => deleteTestCompany(customerCompany.id));
+
+    const initiate = await adminClient.rpc(
+      "initiate_business_day",
+      toInitiateBusinessDayRpcArgs(
+        initiateBusinessDayInputSchema.parse({ tradeDate: new Date().toISOString().slice(0, 10) }),
+      ),
+    );
+    if (initiate.error) throw initiate.error;
+    const dayId = initiate.data!.id;
+    cleanupFns.push(() => deleteTestTradingDay(dayId));
+    const openShop = await adminClient.rpc(
+      "open_shop",
+      toOpenShopRpcArgs(openShopInputSchema.parse({ canSeePrices: true })),
+    );
+    if (openShop.error) throw openShop.error;
+
+    async function pick(fixture: { companyId: string; varietyId: string }, pallets: number) {
+      const dailyPick = await getDailyPickForGrower(dayId, fixture.companyId);
+      const line = await getPickProductLine(dailyPick!.id, fixture.varietyId);
+      const update = await adminClient.rpc(
+        "update_pick_product_pallets",
+        toUpdatePickProductPalletsRpcArgs(
+          updatePickProductPalletsInputSchema.parse({
+            dailyPickProductId: line!.id,
+            palletsPicked: pallets,
+          }),
+        ),
+      );
+      if (update.error) throw update.error;
+      return line!;
+    }
+    const pickLine = await pick(grower, options.picked ?? 10);
+    const otherLine = other ? await pick(other, 5) : null;
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+    await page.goto("/backoffice/new-arrangement");
+
+    return { adminClient, grower, other, otherLine, customerCompany, pickLine };
+  }
+
+  test("סה״כ במלאי opens the stock popup and the new stock shows in the grid", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const { adminClient, grower, other, customerCompany, pickLine } = await startStockDay(page, {
+      withOther: true,
+    });
+    const search = page.getByPlaceholder("חיפוש מוצר…");
+    const saveBar = page.getByRole("status").filter({ hasText: "שלא נשמר" });
+
+    // An unsaved number on ANOTHER product, which the popup must not touch.
+    await search.fill(other!.varietyName);
+    const otherCell = page.getByLabel(`${other!.varietyName} — ${customerCompany.name}`, {
+      exact: true,
+    });
+    await otherCell.fill("1");
+    await otherCell.press("Enter");
+    await expect(otherCell).toHaveAttribute("title", "עדיין לא נשמר");
+    await expect(page.getByText("שינוי אחד שלא נשמר.")).toBeVisible();
+
+    await search.fill(grower.varietyName);
+    const row = page.locator("tr").filter({ hasText: grower.varietyName });
+    const stockButton = row.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` });
+    await expect(stockButton).toHaveText("10");
+    // The trailing pane: זמין, then סה״כ חולק.
+    const available = async () => {
+      const cells = await row.locator("td").allTextContents();
+      return cells[cells.length - 2];
+    };
+    await expect.poll(available).toBe("10");
+
+    await stockButton.click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText(
+      `עדכון מלאי — ${grower.companyName} · ${grower.varietyName}`,
+    );
+    await expect(dialog.getByLabel("משטחים מהיום:")).toHaveValue("10");
+    await expect(dialog.getByLabel("מלאי קודם:")).toHaveValue("0");
+    await expect(dialog).toContainText("כבר סודרו: 0");
+
+    await dialog.getByLabel("משטחים מהיום:").fill("12");
+    await dialog.getByLabel("מלאי קודם:").fill("3");
+    await dialog.getByRole("button", { name: "אישור" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+
+    await expect(stockButton).toHaveText("12");
+    await expect.poll(available).toBe("15");
+    const saved = await adminClient
+      .from("daily_pick_products")
+      .select("pallets_picked, leftover_pallets")
+      .eq("id", pickLine.id)
+      .single();
+    expect(Number(saved.data!.pallets_picked)).toBe(12);
+    expect(Number(saved.data!.leftover_pallets)).toBe(3);
+
+    // The other product's unsaved number is still there, still unsaved, and
+    // the bar still counts one change.
+    await expect(page.getByText("שינוי אחד שלא נשמר.")).toBeVisible();
+    await expect(saveBar).toBeVisible();
+    await search.fill(other!.varietyName);
+    await expect(otherCell).toHaveValue("1");
+    await expect(otherCell).toHaveAttribute("title", "עדיין לא נשמר");
+  });
+
+  test("a total below what is arranged is refused and the popup stays open", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // 12 picked, 9 arranged.
+    const { adminClient, grower, customerCompany, pickLine } = await startStockDay(page, {
+      picked: 12,
+    });
+    const arrange = (quantity: number) =>
+      adminClient.rpc("arrange_to_customer", {
+        p_daily_pick_product_id: pickLine.id,
+        p_customer_company_id: customerCompany.id,
+        p_quantity_pallets: quantity,
+      });
+    const first = await arrange(9);
+    if (first.error) throw first.error;
+    // Arranged after the grid first loaded, so read it again.
+    await page.reload();
+
+    await page.getByPlaceholder("חיפוש מוצר…").fill(grower.varietyName);
+    const row = page.locator("tr").filter({ hasText: grower.varietyName });
+    await row.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` }).click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText("כבר סודרו: 9");
+
+    // Below the 9 arranged: אישור is off.
+    const confirm = dialog.getByRole("button", { name: "אישור" });
+    await dialog.getByLabel("משטחים מהיום:").fill("8");
+    await dialog.getByLabel("מלאי קודם:").fill("0");
+    await expect(confirm).toBeDisabled();
+    // An empty box is as good as missing.
+    await dialog.getByLabel("מלאי קודם:").fill("");
+    await expect(confirm).toBeDisabled();
+
+    // Someone else arranges two more pallets while the popup is open. The
+    // popup still believes 9, so 10 + 0 passes its own check — the server is
+    // the one to refuse it, with the real floor (11).
+    const second = await arrange(11);
+    if (second.error) throw second.error;
+    await dialog.getByLabel("משטחים מהיום:").fill("10");
+    await dialog.getByLabel("מלאי קודם:").fill("0");
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+    await expect(dialog.getByRole("alert")).toContainText("כבר סודרו 11 משטחים");
+    await expect(dialog).toBeVisible();
+
+    // Nothing was written, and reopening shows what is true now.
+    const stored = await adminClient
+      .from("daily_pick_products")
+      .select("pallets_picked")
+      .eq("id", pickLine.id)
+      .single();
+    expect(Number(stored.data!.pallets_picked)).toBe(12);
+    await dialog.getByRole("button", { name: "ביטול" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await row.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` }).click();
+    await expect(page.locator("dialog[open]")).toContainText("כבר סודרו: 11");
+    await expect(page.locator("dialog[open]").getByLabel("משטחים מהיום:")).toHaveValue("12");
+  });
+
+  test("the phone layout offers the same popup", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    const { adminClient, grower, pickLine } = await startStockDay(page);
+
+    await page.getByPlaceholder("חיפוש מוצר…").fill(grower.varietyName);
+    const stockButton = page.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` });
+    await expect(stockButton).toContainText("10");
+    await stockButton.click();
+
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText(`עדכון מלאי — ${grower.companyName}`);
+    await dialog.getByLabel("משטחים מהיום:").fill("7");
+    await dialog.getByLabel("מלאי קודם:").fill("2");
+    await dialog.getByRole("button", { name: "אישור" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(stockButton).toContainText("7");
+
+    const saved = await adminClient
+      .from("daily_pick_products")
+      .select("pallets_picked, leftover_pallets")
+      .eq("id", pickLine.id)
+      .single();
+    expect(Number(saved.data!.pallets_picked)).toBe(7);
+    expect(Number(saved.data!.leftover_pallets)).toBe(2);
+  });
 });
