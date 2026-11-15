@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
 import {
   parsePallets,
@@ -35,6 +35,17 @@ export const newArrangementKeys = {
   matrixAll: ["new-arrangement", "matrix"] as const,
   matrix: (dayId: string | null) => ["new-arrangement", "matrix", dayId] as const,
 };
+
+// After a pick line's stock is saved (the quick stock popup), re-read every
+// screen that shows it: the grid, both boards, מוצרים שנקטפו, and the grower
+// oversight list. invalidateQueries matches by key prefix, so
+// ["picked-products"] reaches ["picked-products", "varieties", dayId].
+export function invalidateStockReads(queryClient: QueryClient, dayId: string): void {
+  void queryClient.invalidateQueries({ queryKey: newArrangementKeys.matrix(dayId) });
+  void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
+  void queryClient.invalidateQueries({ queryKey: ["picked-products"] });
+  void queryClient.invalidateQueries({ queryKey: ["grower-oversight", "picks-for-day"] });
+}
 
 // One trading day with everything both arrangement screens draw from it, as
 // ONE nested row — see boardData() below for why this is a single shape

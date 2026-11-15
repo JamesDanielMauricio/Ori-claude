@@ -68,6 +68,8 @@ export function ProductCatalogScreen({
   extraLoading = false,
   emptyLabel = "אין מוצרים עדיין.",
   stockByVariety,
+  singleLineByVariety,
+  onEditStock,
 }: {
   title: string;
   subtitle: string;
@@ -88,6 +90,11 @@ export function ProductCatalogScreen({
   // the day, shown as Bubble's "משטחים במלאי" column. Omitted on the full
   // catalog, which isn't tied to a day.
   stockByVariety?: ReadonlyMap<string, number>;
+  // The quick stock popup: which varieties have exactly one open supplying
+  // line, and what to do when its number is pressed. The caller passes
+  // onEditStock only when editing is allowed (the live day).
+  singleLineByVariety?: ReadonlyMap<string, string>;
+  onEditStock?: (pickLineId: string) => void;
 }) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
@@ -288,6 +295,8 @@ export function ProductCatalogScreen({
     photo: varietyPhoto,
     saving,
     stockByVariety,
+    singleLineByVariety,
+    onEditStock,
   });
 
   // Creating a record is offered on the unfiltered catalog only. A brand-new

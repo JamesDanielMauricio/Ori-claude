@@ -42,6 +42,7 @@ import { errorMessage } from "@/lib/error-message";
 import {
   arrangementKeys,
   arrangementQueries,
+  invalidateStockReads,
   newArrangementKeys,
   type MatrixDay,
 } from "@/lib/queries/arrangement";
@@ -736,10 +737,7 @@ export default function NewArrangementPage() {
         pickLineId={stockLineId}
         onClose={() => setStockLineId(null)}
         onSaved={() => {
-          void queryClient.invalidateQueries({ queryKey: newArrangementKeys.matrix(boardDay.id) });
-          void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
-          void queryClient.invalidateQueries({ queryKey: ["picked-products"] });
-          void queryClient.invalidateQueries({ queryKey: ["grower-oversight", "picks-for-day"] });
+          invalidateStockReads(queryClient, boardDay.id);
           setStockLineId(null);
         }}
       />
