@@ -16,3 +16,4 @@ export {
 export { createWhatsAppRecoveryDelivery } from "./whatsapp-recovery-delivery";
 export { deleteUser, type DeleteUserInput } from "./delete-user";
 export { listUserEmails } from "./list-user-emails";
+export { updateUserEmail, type UpdateUserEmailInput } from "./update-user-email";
