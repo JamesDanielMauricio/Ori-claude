@@ -473,4 +473,102 @@ test.describe("Backoffice — arrangement workspace", () => {
     // success toast above.
     await expect(page.getByRole("heading", { name: "אין יום מסחר פתוח" })).toBeVisible();
   });
+
+  test("a customer card's bell sends a reminder to the ticked people", async ({ page }) => {
+    const adminCompany = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(adminCompany.id));
+    const admin = await createTestProfile({ companyId: adminCompany.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const adminClient = await signInTestUser(admin.email, admin.password);
+
+    // A grower's product must be selected for the board to list customers who
+    // ordered nothing (they are held back until there is a product to offer).
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+
+    // Created before open_shop, which gives every active customer an order
+    // header (open, un-submitted) — the state the bell is for.
+    const customerCompany = await createTestCompany(
+      `לקוח תזכורת ${crypto.randomUUID()}`,
+      "customer",
+    );
+    cleanupFns.push(() => deleteTestCompany(customerCompany.id));
+    const withPhone = await createTestProfile({
+      companyId: customerCompany.id,
+      role: "customer",
+      displayName: "אבי עם טלפון",
+      phoneNumber: "0501234567",
+    });
+    cleanupFns.push(() => deleteTestUser(withPhone.userId));
+
+    const tradeDate = new Date().toISOString().slice(0, 10);
+    const initiate = await adminClient.rpc(
+      "initiate_business_day",
+      toInitiateBusinessDayRpcArgs(initiateBusinessDayInputSchema.parse({ tradeDate })),
+    );
+    if (initiate.error) throw initiate.error;
+    const dayId = initiate.data!.id;
+    cleanupFns.push(() => deleteTestTradingDay(dayId));
+    const openShop = await adminClient.rpc(
+      "open_shop",
+      toOpenShopRpcArgs(openShopInputSchema.parse({ canSeePrices: true })),
+    );
+    if (openShop.error) throw openShop.error;
+
+    // Only a line with supply is listed on the grower's card.
+    const pick = await getDailyPickForGrower(dayId, grower.companyId);
+    const pickLine = await getPickProductLine(pick!.id, grower.varietyId);
+    const pickUpdate = await adminClient.rpc(
+      "update_pick_product_pallets",
+      toUpdatePickProductPalletsRpcArgs(
+        updatePickProductPalletsInputSchema.parse({
+          dailyPickProductId: pickLine!.id,
+          palletsPicked: 10,
+        }),
+      ),
+    );
+    if (pickUpdate.error) throw pickUpdate.error;
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+
+    await page.goto("/backoffice/arrangement");
+    await selectGrowerProduct(page, grower.companyName);
+    const bell = page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` });
+    await expect(bell).toBeEnabled();
+    await bell.click();
+
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText(`שליחת תזכורת — ${customerCompany.name}`);
+    await expect(dialog.getByRole("checkbox", { name: /אבי עם טלפון/ })).toBeChecked();
+    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
+    await expect(page.getByText("התזכורת נשלחה.")).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+
+    // The outbox row, read from the database: addressed to the ticked user.
+    const outbox = await adminClient
+      .from("notification_outbox")
+      .select("recipient_company_id, recipient_user_ids")
+      .eq("recipient_company_id", customerCompany.id)
+      .eq("template_key", "order_reminder");
+    if (outbox.error) throw outbox.error;
+    expect(outbox.data).toHaveLength(1);
+    expect(outbox.data[0]!.recipient_user_ids).toEqual([withPhone.userId]);
+
+    // Once the order is submitted there is nothing to remind about.
+    const markSent = await adminClient
+      .from("daily_orders")
+      .update({ status: "submitted", submitted_at: new Date().toISOString() })
+      .eq("trading_day_id", dayId)
+      .eq("customer_company_id", customerCompany.id);
+    if (markSent.error) throw markSent.error;
+    await page.reload();
+    await selectGrowerProduct(page, grower.companyName);
+    await expect(
+      page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` }),
+    ).toBeDisabled();
+  });
 });

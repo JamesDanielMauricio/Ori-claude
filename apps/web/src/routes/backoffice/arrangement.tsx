@@ -36,6 +36,7 @@ import { GrowerSupplyColumn } from "@/components/arrangement/grower-supply-colum
 import { PriceEditDialog } from "@/components/arrangement/price-edit-dialog";
 import { ProductStrip } from "@/components/arrangement/product-strip";
 import { ArrangementRecordsSection } from "@/components/arrangement/records-table";
+import { OrderReminderDialog } from "@/components/reference-data/order-reminder-dialog";
 import { StatusPill } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
@@ -51,6 +52,7 @@ import {
 } from "@/lib/queries/arrangement";
 import { createClient } from "@/lib/supabase/client";
 import { useTradingDayView } from "@/lib/trading-day-view";
+import { useSendOrderReminder } from "@/lib/use-send-order-reminder";
 
 // The distributor's matchmaking workspace (PRD: arrangement-view.md), laid
 // out the way the source app's own arrangement screen was.
@@ -89,6 +91,16 @@ export default function ArrangementPage() {
   const supabase = createClient();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+
+  // The bell on a customer card opens the reminder window (who gets it); "שלח"
+  // there runs this mutation with the ticked people. No cache key: the board
+  // does not display reminder state, so there is nothing to patch.
+  const [reminderTarget, setReminderTarget] = useState<{
+    dailyOrderId: string;
+    customerId: string;
+    customerName: string;
+  } | null>(null);
+  const reminderMutation = useSendOrderReminder();
 
   // The grower pick line being allocated from. Everything the customer list
   // does — which half of the dashed rule a card falls on, which row gets a
@@ -640,6 +652,21 @@ export default function ArrangementPage() {
           }
           onPromote={(customerId) => setPromoted((current) => new Set(current).add(customerId))}
           onEditOrders={setOrdersCustomerId}
+          onRemind={(customerId) => {
+            const customer = view.customers.find((c) => c.customerId === customerId);
+            if (!customer) return;
+            // A fresh window never starts with the last one's refusal.
+            reminderMutation.reset();
+            setReminderTarget({
+              dailyOrderId: customer.dailyOrderId,
+              customerId: customer.customerId,
+              customerName: customer.customerName,
+            });
+          }}
+          remindDisabled={(customer) =>
+            !dayView.isLive || customer.status === "submitted" || reminderMutation.isPending
+          }
+          remindingId={reminderMutation.isPending ? (reminderTarget?.customerId ?? null) : null}
           onArrange={arrange}
           onSave={saveAllocation}
           onDelete={(recordId) => deleteMutation.mutate(recordId)}
@@ -671,6 +698,24 @@ export default function ArrangementPage() {
         // See PickLinesEditor's own `readOnly` comment for why this can't be
         // left to pickStatus alone.
         readOnly={!dayView.isLive}
+      />
+
+      <OrderReminderDialog
+        target={reminderTarget}
+        onClose={() => {
+          reminderMutation.reset();
+          setReminderTarget(null);
+        }}
+        sending={reminderMutation.isPending}
+        error={reminderMutation.error ? errorMessage(reminderMutation.error) : null}
+        onSend={(recipientUserIds) => {
+          if (!reminderTarget) return;
+          // Closes only on success; a refusal stays inside the window.
+          reminderMutation.mutate(
+            { dailyOrderId: reminderTarget.dailyOrderId, recipientUserIds },
+            { onSuccess: () => setReminderTarget(null) },
+          );
+        }}
       />
 
       <CustomerOrdersDialog

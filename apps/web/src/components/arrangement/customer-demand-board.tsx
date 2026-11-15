@@ -68,6 +68,9 @@ export function CustomerDemandBoard({
   onFilterVariety,
   onPromote,
   onEditOrders,
+  onRemind,
+  remindDisabled,
+  remindingId,
   onArrange,
   onSave,
   onDelete,
@@ -85,6 +88,12 @@ export function CustomerDemandBoard({
   onFilterVariety: (varietyId: string) => void;
   onPromote: (customerId: string) => void;
   onEditOrders: (customerId: string) => void;
+  /** Opens the reminder window for this customer's order. */
+  onRemind: (customerId: string) => void;
+  /** Whether this card's bell is off (past day, order already submitted, or a send under way). */
+  remindDisabled: (customer: CustomerDemand) => boolean;
+  /** The customer whose reminder is being sent right now, for the bell's spinner. */
+  remindingId: string | null;
   onArrange: (request: ArrangeRequest) => Promise<boolean>;
   onSave: (patch: AllocationPatch) => Promise<boolean>;
   onDelete: (recordId: string) => void;
@@ -103,6 +112,9 @@ export function CustomerDemandBoard({
     filterVarietyId,
     onFilterVariety,
     onEditOrders,
+    onRemind,
+    remindDisabled,
+    remindingId,
     onArrange,
     onSave,
     onDelete,
@@ -202,6 +214,9 @@ interface CardProps {
   onFilterVariety: (varietyId: string) => void;
   onPromote: (customerId: string) => void;
   onEditOrders: (customerId: string) => void;
+  onRemind: (customerId: string) => void;
+  remindDisabled: (customer: CustomerDemand) => boolean;
+  remindingId: string | null;
   onArrange: (request: ArrangeRequest) => Promise<boolean>;
   onSave: (patch: AllocationPatch) => Promise<boolean>;
   onDelete: (recordId: string) => void;
@@ -220,6 +235,9 @@ function CustomerCard({
   onFilterVariety,
   onPromote,
   onEditOrders,
+  onRemind,
+  remindDisabled,
+  remindingId,
   onArrange,
   onSave,
   onDelete,
@@ -351,6 +369,29 @@ function CustomerCard({
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-ink-subtle transition-colors duration-200 hover:bg-accent-soft hover:text-accent"
           >
             <Icon name="pencil" className="h-3.5 w-3.5" />
+          </button>
+
+          {/* Reminder bell: opens the window that asks who should get the
+              nudge to submit this order. Same look as the bell on בשם לקוח.
+              Off once the order is submitted (nothing left to remind), on a
+              past day, or while a send is under way. Kept at h-9 w-9 like its
+              neighbours so the header's buttons don't squeeze the name. */}
+          <button
+            type="button"
+            onClick={() => onRemind(customer.customerId)}
+            disabled={remindDisabled(customer)}
+            aria-label={`שלח תזכורת ל${customer.customerName}`}
+            title={`שלח תזכורת ל${customer.customerName}`}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent ring-1 ring-inset ring-accent/25 transition-colors duration-150 enabled:hover:bg-accent enabled:hover:text-accent-ink disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {remindingId === customer.customerId ? (
+              <span
+                aria-hidden
+                className="animate-spin-loop h-3 w-3 rounded-full border-2 border-current border-t-transparent"
+              />
+            ) : (
+              <Icon name="bell" className="h-3.5 w-3.5" />
+            )}
           </button>
         </div>
       </header>
