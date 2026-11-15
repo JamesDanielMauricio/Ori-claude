@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { PickLinesEditor } from "@/components/grower/pick-lines-editor";
+import { PickupTimeDialog } from "@/components/grower/pickup-time-dialog";
 import { StatusPill, type StatusTone } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
@@ -250,11 +251,19 @@ function PickDetail({
   tradeDateLabel: string;
   onSaved: () => void;
 }) {
-  // שעת איסוף, as Bubble's pick header shows it: the pick's own time once it
-  // is sent, the company's current default before that (lib/pickup-time).
-  const pickupTime = formatPickupTime(
-    effectivePickupTime(pick.pickup_time, pick.companies?.default_pickup_time ?? null),
-  );
+  // שעת איסוף, as Bubble's pick header shows it: the pick's own time once the
+  // grower has chosen one (or it was sent), the company's current default
+  // before that (lib/pickup-time).
+  const effectiveTime = effectivePickupTime(pick.pickup_time, pick.companies?.default_pickup_time ?? null);
+  const pickupTime = formatPickupTime(effectiveTime);
+  const [pickupDialogOpen, setPickupDialogOpen] = useState(false);
+  // Closing the dialog, however it ends (saved, cancelled, refused), re-reads
+  // the pick: a refusal usually means the pick changed under the grower, and
+  // the strip should show the truth, e.g. that it is now closed.
+  const closePickupDialog = () => {
+    setPickupDialogOpen(false);
+    onSaved();
+  };
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
@@ -270,11 +279,26 @@ function PickDetail({
         <div className="flex items-center gap-2.5 text-sm text-ink-muted">
           <Icon name="calendar" className="h-4 w-4 shrink-0 text-ink-subtle" />
           <span>{tradeDateLabel}</span>
-          {pickupTime && (
-            <>
-              <Icon name="clock" className="ms-2 h-4 w-4 shrink-0 text-ink-subtle" />
-              <span>שעת איסוף {pickupTime}</span>
-            </>
+          {pick.status !== "closed" ? (
+            // The grower can change the time until the office closes the pick.
+            // It is a flex item of the strip, which wraps, so on a phone the
+            // whole button moves to the next line rather than overflowing.
+            <button
+              type="button"
+              onClick={() => setPickupDialogOpen(true)}
+              className="ms-2 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-ink transition-colors hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <Icon name="clock" className="h-4 w-4 shrink-0 text-ink-subtle" />
+              <span>{pickupTime ? `שעת איסוף ${pickupTime}` : "שעת איסוף: לא נקבעה"}</span>
+              <Icon name="pencil" className="h-3.5 w-3.5 shrink-0 text-ink-subtle" />
+            </button>
+          ) : (
+            pickupTime && (
+              <>
+                <Icon name="clock" className="ms-2 h-4 w-4 shrink-0 text-ink-subtle" />
+                <span>שעת איסוף {pickupTime}</span>
+              </>
+            )
           )}
         </div>
         <div className="flex items-center gap-3">
@@ -299,6 +323,17 @@ function PickDetail({
         sticky
         submitOnSave
         onSaved={onSaved}
+      />
+
+      {/* Outside the closed check on purpose: the office can close the pick
+          while the dialog is open (live updates re-read it), and the dialog
+          must stay up with the server's refusal on it rather than vanish. */}
+      <PickupTimeDialog
+        pickId={pick.id}
+        current={effectiveTime}
+        open={pickupDialogOpen}
+        onClose={closePickupDialog}
+        onSaved={closePickupDialog}
       />
     </div>
   );

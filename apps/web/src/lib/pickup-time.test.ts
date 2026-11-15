@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { effectivePickupTime, formatPickupTime } from "./pickup-time";
+import { effectivePickupTime, formatPickupTime, toTimeInputValue } from "./pickup-time";
 
 // One rule for "when is this grower collected today", shared by the
 // arrangement board and the grower's own picking screen.
@@ -29,5 +29,20 @@ describe("formatPickupTime", () => {
 
   it("is nothing for no time", () => {
     expect(formatPickupTime(null)).toBeNull();
+  });
+});
+
+// What a <input type="time"> is given: "HH:MM", or empty for no time.
+describe("toTimeInputValue", () => {
+  it("drops the seconds Postgres sends", () => {
+    expect(toTimeInputValue("14:00:00")).toBe("14:00");
+  });
+
+  it("keeps a time that has none", () => {
+    expect(toTimeInputValue("06:05")).toBe("06:05");
+  });
+
+  it("is an empty box for no time", () => {
+    expect(toTimeInputValue(null)).toBe("");
   });
 });
