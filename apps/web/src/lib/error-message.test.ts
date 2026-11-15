@@ -150,4 +150,18 @@ describe("errorMessage", () => {
     const insert = 'insert or update on table "daily_orders" violates foreign key constraint "daily_orders_customer_company_id_fkey"';
     expect(errorMessage({ code: "23503", message: insert })).toBe(insert);
   });
+
+  it("maps the recipient refusals", () => {
+    expect(
+      errorMessage({ code: "P0008", message: "INVALID_INPUT: choose at least one recipient" }),
+    ).toBe("יש לבחור לפחות אדם אחד.");
+    expect(
+      errorMessage({
+        code: "P0008",
+        message: "INVALID_INPUT: a recipient is not a user of this customer",
+      }),
+    ).toBe("אחד המקבלים כבר לא משויך ללקוח הזה. סגרו את החלון ופתחו אותו שוב.");
+    const other = "INVALID_INPUT: something else";
+    expect(errorMessage({ code: "P0008", message: other })).toBe(other);
+  });
 });

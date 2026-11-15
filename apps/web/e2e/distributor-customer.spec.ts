@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { createClient } from "@supabase/supabase-js";
 
 import {
   createTestCompany,
@@ -144,9 +145,10 @@ test.describe("Backoffice — Customer Order Status", () => {
     ).toHaveValue("4");
   });
 
-  test("sending a reminder on an un-submitted order dispatches to the outbox and stamps reminder_sent_at", async ({
-    page,
-  }) => {
+  // One backoffice user, one customer with two people (one with a phone, one
+  // without) and an open shop, signed in on the screen, with the bell's window
+  // open. Shared by the three reminder-window tests below.
+  async function reminderWorld(page: import("@playwright/test").Page) {
     const grower = await createTestGrowerWithProduct();
     cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
 
@@ -161,6 +163,19 @@ test.describe("Backoffice — Customer Order Status", () => {
       "customer",
     );
     cleanupFns.push(() => deleteTestCompany(customerCompany.id));
+    const withPhone = await createTestProfile({
+      companyId: customerCompany.id,
+      role: "customer",
+      displayName: "אבי עם טלפון",
+      phoneNumber: "0501234567",
+    });
+    cleanupFns.push(() => deleteTestUser(withPhone.userId));
+    const withoutPhone = await createTestProfile({
+      companyId: customerCompany.id,
+      role: "customer",
+      displayName: "בני בלי טלפון",
+    });
+    cleanupFns.push(() => deleteTestUser(withoutPhone.userId));
 
     const tradeDate = new Date().toISOString().slice(0, 10);
     const initiate = await adminClient.rpc("initiate_business_day", { p_trade_date: tradeDate });
@@ -178,7 +193,41 @@ test.describe("Backoffice — Customer Order Status", () => {
 
     await page.goto("/backoffice/distributor-customer");
     await page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` }).click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText(`שליחת תזכורת — ${customerCompany.name}`);
+    return { adminClient, customerCompany, dayId, dialog, withPhone, withoutPhone };
+  }
+
+  async function reminderRows(
+    adminClient: Awaited<ReturnType<typeof signInTestUser>>,
+    customerId: string,
+  ) {
+    // Scoped to reminder rows — open_shop's own bootstrap separately enqueues
+    // a shop_open row to the same customer.
+    const outbox = await adminClient
+      .from("notification_outbox")
+      .select("template_key, recipient_company_id, recipient_user_ids")
+      .eq("recipient_company_id", customerId)
+      .eq("template_key", "order_reminder");
+    if (outbox.error) throw outbox.error;
+    return outbox.data;
+  }
+
+  test("sending a reminder on an un-submitted order dispatches to the outbox and stamps reminder_sent_at", async ({
+    page,
+  }) => {
+    const { adminClient, customerCompany, dayId, dialog, withPhone } = await reminderWorld(page);
+
+    // The person without a phone is listed, but unticked and disabled.
+    const noPhoneBox = dialog.getByRole("checkbox", { name: /בני בלי טלפון/ });
+    await expect(noPhoneBox).toBeDisabled();
+    await expect(noPhoneBox).not.toBeChecked();
+    await expect(dialog).toContainText("אין טלפון");
+    await expect(dialog.getByRole("checkbox", { name: /אבי עם טלפון/ })).toBeChecked();
+
+    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
     await expect(page.getByText("התזכורת נשלחה.")).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
 
     const order = await adminClient
       .from("daily_orders")
@@ -188,17 +237,57 @@ test.describe("Backoffice — Customer Order Status", () => {
       .single();
     expect(order.data!.reminder_sent_at).not.toBeNull();
 
-    // Scoped to reminder-specific rows — open_shop's own bootstrap
-    // (id 4, a later prompt) already, separately enqueues a shop_open
-    // row to this same customer, which isn't what this test is about.
-    const outbox = await adminClient
-      .from("notification_outbox")
-      .select("template_key, recipient_company_id")
-      .eq("recipient_company_id", customerCompany.id)
-      .eq("template_key", "order_reminder");
-    expect(outbox.data).toMatchObject([
+    const rows = await reminderRows(adminClient, customerCompany.id);
+    expect(rows).toMatchObject([
       { template_key: "order_reminder", recipient_company_id: customerCompany.id },
     ]);
+    expect(rows[0]!.recipient_user_ids).toEqual([withPhone.userId]);
+  });
+
+  test("the reminder window can untick everyone, and then cannot send", async ({ page }) => {
+    const { adminClient, customerCompany, dialog } = await reminderWorld(page);
+
+    const send = dialog.getByRole("button", { name: "שלח", exact: true });
+    await expect(send).toBeEnabled();
+    await dialog.getByRole("checkbox", { name: /אבי עם טלפון/ }).uncheck();
+    await expect(send).toBeDisabled();
+
+    expect(await reminderRows(adminClient, customerCompany.id)).toHaveLength(0);
+  });
+
+  test("a person moved to another company meanwhile is refused and the window stays open", async ({
+    page,
+  }) => {
+    const { adminClient, customerCompany, dialog, withPhone } = await reminderWorld(page);
+
+    const otherCompany = await createTestCompany(`לקוח אחר ${crypto.randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(otherCompany.id));
+    // Cleanup runs last-in first-out: put the person back before the other
+    // company is deleted (a company with a person cannot be).
+    // The service-role client the other e2e helpers use (bypasses RLS).
+    const service = createClient(
+      process.env.SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } },
+    );
+    const moveTo = async (companyId: string) => {
+      const { error } = await service
+        .from("profiles")
+        .update({ company_id: companyId })
+        .eq("user_id", withPhone.userId);
+      if (error) throw error;
+    };
+    cleanupFns.push(() => moveTo(customerCompany.id));
+    await moveTo(otherCompany.id);
+
+    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
+    // The refusal's toast is shown over the still-open window.
+    await expect(
+      page.getByText("אחד המקבלים כבר לא משויך ללקוח הזה. סגרו את החלון ופתחו אותו שוב.").first(),
+    ).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(1);
+
+    expect(await reminderRows(adminClient, customerCompany.id)).toHaveLength(0);
   });
 
   test("filters customers by order status and counts orders sent", async ({ page }) => {
