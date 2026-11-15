@@ -6,9 +6,11 @@ import {
   deleteTestCompany,
   deleteTestUser,
   runCleanup,
+  signInTestUser,
 } from "@ori/domain/auth/testing";
 import { createTestGrowerCompany, deleteTestCompany as deleteTestCompanyById } from "@ori/domain/reference-data/testing";
 import { expect, test, type Page } from "@playwright/test";
+import { createClient } from "@supabase/supabase-js";
 
 import { chooseOption } from "./choose-option";
 
@@ -121,5 +123,75 @@ test.describe("Backoffice — Users", () => {
     await page.getByRole("dialog").getByRole("button", { name: "מחק" }).click();
 
     await expect(page.locator("tr").filter({ hasText: newUserDisplayName })).toHaveCount(0);
+  });
+
+  // Signs an office user in and opens the Users screen, with two other
+  // accounts to work on (the second is there for its email to be taken).
+  async function openUsersWithTwoAccounts(page: Page) {
+    const company = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(company.id));
+    const admin = await createTestProfile({ companyId: company.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const target = await createTestProfile({
+      companyId: company.id,
+      role: "backoffice",
+      displayName: `יעד E2E ${randomUUID()}`,
+    });
+    cleanupFns.push(() => deleteTestUser(target.userId));
+    const other = await createTestProfile({ companyId: company.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(other.userId));
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+    await page.goto("/backoffice/users");
+    return { target, other };
+  }
+
+  // The service-role client the other e2e specs use (bypasses RLS).
+  function serviceClient() {
+    return createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+  }
+
+  async function startEditing(page: Page, userId: string, email: string) {
+    const { data } = await serviceClient().from("profiles").select("display_name").eq("user_id", userId).single();
+    const row = page.locator("tr").filter({ hasText: email });
+    await row.waitFor({ timeout: 15000 });
+    await row.getByRole("button", { name: "ערוך" }).click();
+    return data!.display_name as string;
+  }
+
+  test("changes a user's email; they sign in with the new one", async ({ page }) => {
+    test.setTimeout(60000);
+    const { target } = await openUsersWithTwoAccounts(page);
+    await startEditing(page, target.userId, target.email);
+
+    const newEmail = `changed-${randomUUID()}@example.test`;
+    await editingRow(page).getByLabel("אימייל").fill(newEmail);
+    await editingRow(page).getByRole("button", { name: "שמור" }).click();
+
+    await expect(page.locator("tr").filter({ hasText: newEmail })).toBeVisible();
+    // The new address really logs in, with the same password.
+    await expect(signInTestUser(newEmail, target.password)).resolves.toBeDefined();
+  });
+
+  test("an address another user has is refused and nothing else is saved", async ({ page }) => {
+    test.setTimeout(60000);
+    const { target, other } = await openUsersWithTwoAccounts(page);
+    const originalName = await startEditing(page, target.userId, target.email);
+
+    await editingRow(page).getByLabel("שם תצוגה").fill(`${originalName} (changed)`);
+    await editingRow(page).getByLabel("אימייל").fill(other.email);
+    await editingRow(page).getByRole("button", { name: "שמור" }).click();
+
+    await expect(page.getByText("כתובת האימייל כבר רשומה למשתמש אחר.")).toBeVisible();
+    // Still in edit mode, so the office can correct it.
+    await expect(editingRow(page).getByLabel("אימייל")).toBeVisible();
+    const { data } = await serviceClient().from("profiles").select("display_name").eq("user_id", target.userId).single();
+    expect(data?.display_name).toBe(originalName);
   });
 });
