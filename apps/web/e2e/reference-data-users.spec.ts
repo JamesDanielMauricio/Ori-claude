@@ -204,6 +204,40 @@ test.describe("Backoffice — Users", () => {
     expect(data?.phone_number).toBe("0501234567");
   });
 
+  test("the email changes but a later write fails: the message says so and the screen re-reads", async ({ page }) => {
+    test.setTimeout(60000);
+    const { target } = await openUsersWithTwoAccounts(page);
+    const originalName = await startEditing(page, target.userId, target.email);
+
+    // The email change goes first and succeeds; save_user then fails.
+    await page.route("**/rpc/save_user*", (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "forced failure", code: "XX000" }),
+      }),
+    );
+    const newEmail = `partial-${randomUUID()}@example.test`;
+    await editingRow(page).getByLabel("שם תצוגה").fill(`${originalName} (changed)`);
+    await editingRow(page).getByLabel("אימייל").fill(newEmail);
+    await editingRow(page).getByRole("button", { name: "שמור" }).click();
+
+    await expect(page.getByText(/^האימייל עודכן, אבל שאר השינויים לא נשמרו:/)).toBeVisible();
+    await page.unroute("**/rpc/save_user*");
+
+    // The login email really changed; the name did not.
+    const service = serviceClient();
+    const { data: authUser } = await service.auth.admin.getUserById(target.userId);
+    expect(authUser.user?.email).toBe(newEmail);
+    const { data } = await service.from("profiles").select("display_name").eq("user_id", target.userId).single();
+    expect(data?.display_name).toBe(originalName);
+    // The row stays in edit mode (its box holds what was typed, which is not
+    // evidence), so leave it and read the plain cell: the list was re-read,
+    // so the email column shows the new address.
+    await editingRow(page).getByRole("button", { name: "ביטול" }).click();
+    await expect(page.locator("tr").filter({ hasText: newEmail })).toBeVisible();
+  });
+
   test("an address another user has is refused and nothing else is saved", async ({ page }) => {
     test.setTimeout(60000);
     const { target, other } = await openUsersWithTwoAccounts(page);
