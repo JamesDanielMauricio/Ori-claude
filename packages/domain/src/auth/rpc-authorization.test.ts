@@ -23,7 +23,11 @@ import {
 } from "@ori/domain/auth/testing";
 import { toOrderableCatalogRpcArgs, toSubmitOrderRpcArgs } from "@ori/domain/customer";
 import { createTestDailyOrder, createTestDailyShop } from "@ori/domain/customer/testing";
-import { toSavePickLinesRpcArgs, toUpdatePickProductDetailsRpcArgs } from "@ori/domain/grower";
+import {
+  toSavePickLinesRpcArgs,
+  toSetPickPickupTimeRpcArgs,
+  toUpdatePickProductDetailsRpcArgs,
+} from "@ori/domain/grower";
 import {
   toRevertPickToDraftRpcArgs,
   toSubmitPickRpcArgs,
@@ -289,6 +293,15 @@ describe("privileged functions refuse callers without a profile or a sign-in (00
       (c) => c.rpc("submit_pick", toSubmitPickRpcArgs({ dailyPickId: pickA.id })),
       everyoneButStaffAndOwner(),
     );
+    await expectRefused(
+      "set_pick_pickup_time",
+      (c) =>
+        c.rpc(
+          "set_pick_pickup_time",
+          toSetPickPickupTimeRpcArgs({ dailyPickId: pickA.id, pickupTime: "06:30" }),
+        ),
+      everyoneButStaffAndOwner(),
+    );
   }, 60000);
 
   it("revert_pick_to_draft, create_alert and build_arrangement_alerts refuse everyone but backoffice", async () => {
@@ -435,6 +448,14 @@ describe("privileged functions refuse callers without a profile or a sign-in (00
     );
     expect(sent.error).toBeNull();
     expect((await pick()).status).toBe("submitted");
+
+    // The owning grower can set the day's pickup time (0105), even after sending.
+    const timed = await growerA.client.rpc(
+      "set_pick_pickup_time",
+      toSetPickPickupTimeRpcArgs({ dailyPickId: pickA.id, pickupTime: "06:30" }),
+    );
+    expect(timed.error).toBeNull();
+    expect((await pick()).pickupTime).toBe("06:30:00");
 
     const reopened = await admin.client.rpc(
       "revert_pick_to_draft",

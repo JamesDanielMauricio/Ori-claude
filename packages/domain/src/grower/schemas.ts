@@ -92,6 +92,20 @@ export function toSendPickReminderRpcArgs(input: SendPickReminderInput) {
   return { p_daily_pick_id: input.dailyPickId };
 }
 
+// The grower's own pickup time for the day (migration 0105). "HH:MM", 24 hours
+// — the shape a browser's <input type="time"> gives; the database turns it
+// into a `time`. Seconds are refused so a stray "14:00:00" is not mistaken for
+// the same thing.
+export const setPickPickupTimeInputSchema = z.object({
+  dailyPickId: z.string().uuid(),
+  pickupTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+});
+export type SetPickPickupTimeInput = z.infer<typeof setPickPickupTimeInputSchema>;
+
+export function toSetPickPickupTimeRpcArgs(input: SetPickPickupTimeInput) {
+  return { p_daily_pick_id: input.dailyPickId, p_pickup_time: input.pickupTime };
+}
+
 // See packages/domain/src/lifecycle-engine/schemas.ts's LIFECYCLE_ERROR_CODES
 // for the full convention this mirrors — these are just the subset this
 // module's own functions (0015) actually raise.

@@ -1406,6 +1406,13 @@ export type Database = {
         };
         Returns: Database["public"]["Tables"]["daily_pick_products"]["Row"][];
       };
+      set_pick_pickup_time: {
+        Args: {
+          p_daily_pick_id: string;
+          p_pickup_time: string;
+        };
+        Returns: Database["public"]["Tables"]["daily_picks"]["Row"];
+      };
       send_pick_reminder: {
         Args: {
           p_daily_pick_id: string;

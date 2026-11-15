@@ -4,8 +4,11 @@ import { readFileSync } from "node:fs";
 import { db } from "@ori/db";
 import {
   companies,
+  dailyArrangements,
   dailyOrderProducts,
   dailyOrders,
+  dailyPickProducts,
+  dailyPicks,
   notificationOutbox,
   notificationTemplates,
   productFamilies,
@@ -21,7 +24,15 @@ import {
   runCleanup,
   signInTestUser,
 } from "@ori/domain/auth/testing";
-import { createTestTradingDay, deleteTestTradingDay } from "@ori/domain/lifecycle-engine/testing";
+import { toSetPickPickupTimeRpcArgs } from "@ori/domain/grower";
+import {
+  createTestArrangementRecord,
+  createTestGrowerWithProduct,
+  createTestOrderProductLine,
+  createTestTradingDay,
+  deleteTestGrowerWithProduct,
+  deleteTestTradingDay,
+} from "@ori/domain/lifecycle-engine/testing";
 import { normalizePhoneNumber } from "@ori/shared/phone";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { eq, inArray, sql } from "drizzle-orm";
@@ -437,4 +448,67 @@ describe("message content and phone numbers (0077)", () => {
         `\n\n${ORI}/customer/history`,
     );
   }, 30000);
+
+  // Migration 0105: a time the grower chose on their picking screen is the one
+  // the transporter is told when the truck closes the pick.
+  it("the transporter's message names the time the grower chose", async () => {
+    const office = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(office.id));
+    const bo = await createTestProfile({ companyId: office.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(bo.userId));
+    const backoffice = await signInTestUser(bo.email, bo.password);
+
+    const grower = await createTestGrowerWithProduct({ defaultPickupTime: "07:00" });
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const transporter = await createTestCompany(`מוביל בדיקה ${randomUUID()}`, "transporter");
+    cleanupFns.push(() => deleteTestCompany(transporter.id));
+    await db.update(companies).set({ transporterCompanyId: transporter.id }).where(eq(companies.id, grower.companyId));
+    // Runs before the transporter is deleted (cleanups run last-in first-out).
+    cleanupFns.push(async () => {
+      await db.update(companies).set({ transporterCompanyId: null }).where(eq(companies.id, grower.companyId));
+    });
+    const customer = await createTestCompany(`לקוח בדיקה ${randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(customer.id));
+
+    // An open day (the file's own day is already closed, which set_pick_closed refuses).
+    const day = await createTestTradingDay({ initiatedByUserId: bo.userId, phase: "shop_closed" });
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+    const [arrangement] = await db.insert(dailyArrangements).values({ tradingDayId: day.id, status: "open" }).returning();
+    const [pick] = await db
+      .insert(dailyPicks)
+      .values({ tradingDayId: day.id, growerCompanyId: grower.companyId, status: "submitted", submittedAt: new Date() })
+      .returning();
+    const [line] = await db
+      .insert(dailyPickProducts)
+      .values({ dailyPickId: pick!.id, productVarietyId: grower.varietyId, palletsPicked: "5" })
+      .returning();
+    const orderLine = await createTestOrderProductLine(day.id, customer.id, grower.varietyId, 2);
+    await createTestArrangementRecord({
+      dailyArrangementId: arrangement!.id,
+      dailyPickProductId: line!.id,
+      dailyOrderProductId: orderLine.id,
+      customerCompanyId: customer.id,
+      quantityPallets: 2,
+    });
+
+    const growerProfile = await createTestProfile({ companyId: grower.companyId, role: "grower" });
+    cleanupFns.push(() => deleteTestUser(growerProfile.userId));
+    const growerClient = await signInTestUser(growerProfile.email, growerProfile.password);
+    const chosen = await growerClient.rpc(
+      "set_pick_pickup_time",
+      toSetPickPickupTimeRpcArgs({ dailyPickId: pick!.id, pickupTime: "05:45" }),
+    );
+    expect(chosen.error).toBeNull();
+
+    const closed = await backoffice.rpc("set_pick_closed", { p_daily_pick_id: pick!.id, p_closed: true });
+    expect(closed.error).toBeNull();
+
+    const rows = await db
+      .select()
+      .from(notificationOutbox)
+      .where(eq(notificationOutbox.tradingDayId, day.id));
+    const forTransporter = rows.filter((r) => r.templateKey === "close_arrangement_grower_transporter");
+    expect(forTransporter).toHaveLength(1);
+    expect((forTransporter[0]!.payload as { pickupTime?: string }).pickupTime).toBe("05:45");
+  }, 60000);
 });
