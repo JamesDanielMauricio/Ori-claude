@@ -11,13 +11,13 @@ import {
   FamilyGroupedLines,
   type FamilyGroupedRow,
 } from "@/components/reference-data/family-grouped-lines";
+import { OversightToolbar } from "@/components/reference-data/oversight-toolbar";
 import { ProductFamilyPicker } from "@/components/reference-data/product-family-picker";
 import { TwoColumnRowList } from "@/components/reference-data/two-column-row-list";
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Icon } from "@/components/ui/icon";
 import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +27,14 @@ import { groupLinesByFamily } from "@/lib/family-grouping";
 import { growerProductsSaveInput } from "@/lib/grower-products-save-input";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
 import { nudgeWhatsAppDispatch } from "@/lib/nudge-whatsapp-dispatch";
+import {
+  GROWER_FILTER_OPTIONS,
+  growerPickState,
+  matchesFilter,
+  progressCount,
+  type GrowerPickState,
+  type StatusFilter,
+} from "@/lib/oversight-status";
 import {
   growerOversightKeys,
   oversightQueries,
@@ -79,6 +87,8 @@ export default function DistributorAsGrowerPage() {
   const { showToast } = useToast();
 
   const [search, setSearch] = useState("");
+  // Not remembered: every visit starts on "all".
+  const [filter, setFilter] = useState<StatusFilter<GrowerPickState>>("all");
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [pickDialogGrower, setPickDialogGrower] = useState<{
     pickId: string;
@@ -191,11 +201,28 @@ export default function DistributorAsGrowerPage() {
   const sortedGrowers = useMemo(() => {
     const rows = growersQuery.data ?? [];
     const needle = search.trim().toLocaleLowerCase("he");
-    const filtered = needle
-      ? rows.filter((row) => row.name.toLocaleLowerCase("he").includes(needle))
-      : rows;
+    // Search AND status filter: a row must pass both.
+    const filtered = rows.filter(
+      (row) =>
+        (!needle || row.name.toLocaleLowerCase("he").includes(needle)) &&
+        matchesFilter(growerPickState(pickByGrowerId.get(row.id) ?? null), filter),
+    );
     return [...filtered].sort((a, b) => a.name.localeCompare(b.name, "he"));
-  }, [growersQuery.data, search]);
+  }, [growersQuery.data, search, filter, pickByGrowerId]);
+
+  // "X מתוך Y" over EVERY active grower, ignoring the search and the filter,
+  // so it stays the day's real progress while the list is narrowed. Hidden
+  // with no day, or when no grower has a pick.
+  const counter = useMemo(() => {
+    if (!dayId) return null;
+    const { done, total } = progressCount(
+      (growersQuery.data ?? []).map((row) =>
+        growerPickState(pickByGrowerId.get(row.id) ?? null),
+      ),
+      ["submitted", "closed"],
+    );
+    return total === 0 ? null : { label: "הזינו קטיף", done, total };
+  }, [dayId, growersQuery.data, pickByGrowerId]);
 
   const saveProductsMutation = useMutation({
     mutationFn: async () => {
@@ -410,22 +437,16 @@ export default function DistributorAsGrowerPage() {
         }
       />
 
-      <label className="relative mb-4 block max-w-xs">
-        <span className="sr-only">חיפוש מגדל</span>
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 start-3 flex items-center text-ink-subtle"
-        >
-          <Icon name="search" className="h-4 w-4" />
-        </span>
-        <input
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="חיפוש מגדל…"
-          className="h-10 w-full rounded-md bg-surface ps-9 pe-3 text-sm text-ink shadow-card ring-1 ring-inset ring-border-strong outline-none transition-colors duration-150 placeholder:text-ink-subtle focus:ring-2 focus:ring-accent/40"
-        />
-      </label>
+      <OversightToolbar
+        search={search}
+        onSearchChange={setSearch}
+        searchLabel="חיפוש מגדל"
+        searchPlaceholder="חיפוש מגדל…"
+        filter={filter}
+        onFilterChange={setFilter}
+        filterOptions={GROWER_FILTER_OPTIONS}
+        counter={counter}
+      />
 
       {isLoading ? (
         <div className="space-y-2">
@@ -453,11 +474,19 @@ export default function DistributorAsGrowerPage() {
           }
         />
       ) : rows.length === 0 ? (
-        <EmptyState
-          icon="sprout"
-          title="אין מגדלים להצגה"
-          hint={search ? "נסה מונח חיפוש אחר." : "אין מגדלים פעילים במערכת."}
-        />
+        filter !== "all" ? (
+          <EmptyState
+            icon="sprout"
+            title="אין מגדלים בסטטוס הזה"
+            hint={search ? "נסה מונח חיפוש או סטטוס אחר." : "בחר סטטוס אחר."}
+          />
+        ) : (
+          <EmptyState
+            icon="sprout"
+            title="אין מגדלים להצגה"
+            hint={search ? "נסה מונח חיפוש אחר." : "אין מגדלים פעילים במערכת."}
+          />
+        )
       ) : (
         <TwoColumnRowList rows={rows} />
       )}

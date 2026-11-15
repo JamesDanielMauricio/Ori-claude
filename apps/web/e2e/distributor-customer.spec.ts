@@ -201,6 +201,96 @@ test.describe("Backoffice — Customer Order Status", () => {
     ]);
   });
 
+  test("filters customers by order status and counts orders sent", async ({ page }) => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+
+    const adminCompany = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(adminCompany.id));
+    const admin = await createTestProfile({ companyId: adminCompany.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const adminClient = await signInTestUser(admin.email, admin.password);
+
+    const sentCustomer = await createTestCompany(`לקוח בדיקה נשלח ${crypto.randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(sentCustomer.id));
+    const openCustomer = await createTestCompany(`לקוח בדיקה פתוח ${crypto.randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(openCustomer.id));
+
+    const tradeDate = new Date().toISOString().slice(0, 10);
+    const initiate = await adminClient.rpc("initiate_business_day", { p_trade_date: tradeDate });
+    if (initiate.error) throw initiate.error;
+    const dayId = initiate.data!.id;
+    cleanupFns.push(() => deleteTestTradingDay(dayId));
+    const openShop = await adminClient.rpc("open_shop", { p_can_see_prices: true });
+    if (openShop.error) throw openShop.error;
+
+    // Send one customer's order (an empty one, as the office may); the other
+    // stays open. submit_order records the order for the customer named.
+    const orderRow = await adminClient
+      .from("daily_orders")
+      .select("id")
+      .eq("trading_day_id", dayId)
+      .eq("customer_company_id", sentCustomer.id)
+      .single();
+    if (orderRow.error) throw orderRow.error;
+    const markSent = await adminClient
+      .from("daily_orders")
+      .update({ status: "submitted", submitted_at: new Date().toISOString() })
+      .eq("id", orderRow.data.id);
+    if (markSent.error) throw markSent.error;
+
+    // The counter's two numbers from the database, not hard-coded: X =
+    // submitted orders, Y = orders, both of active customers only.
+    const activeCustomers = await adminClient
+      .from("companies")
+      .select("id")
+      .eq("type", "customer")
+      .eq("status", "active");
+    if (activeCustomers.error) throw activeCustomers.error;
+    const activeIds = new Set(activeCustomers.data.map((row) => row.id));
+    const orders = await adminClient
+      .from("daily_orders")
+      .select("customer_company_id, status")
+      .eq("trading_day_id", dayId);
+    if (orders.error) throw orders.error;
+    const ofActive = orders.data.filter((order) => activeIds.has(order.customer_company_id));
+    const expectedDone = ofActive.filter((order) => order.status === "submitted").length;
+    const expectedTotal = ofActive.length;
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+    await page.goto("/backoffice/distributor-customer");
+
+    const sentEdit = page.getByRole("button", { name: `ערוך את הזמנת ${sentCustomer.name}` });
+    const openEdit = page.getByRole("button", { name: `ערוך את הזמנת ${openCustomer.name}` });
+    const statusFilter = page.getByRole("combobox", { name: "סינון לפי סטטוס" });
+    const pickStatus = async (label: string) => {
+      await statusFilter.click();
+      await page.getByRole("option", { name: label, exact: true }).click();
+    };
+
+    await expect(page.getByText(`הזמנות הוזנו: ${expectedDone} מתוך ${expectedTotal}`)).toBeVisible();
+    await expect(sentEdit).toBeVisible();
+    await expect(openEdit).toBeVisible();
+
+    await pickStatus("נשלחה");
+    await expect(sentEdit).toBeVisible();
+    await expect(openEdit).toHaveCount(0);
+    await expect(page.getByText(`הזמנות הוזנו: ${expectedDone} מתוך ${expectedTotal}`)).toBeVisible();
+
+    await pickStatus("פתוחה");
+    await expect(openEdit).toBeVisible();
+    await expect(sentEdit).toHaveCount(0);
+
+    // An impossible combination: the sent customer, filtered to open orders.
+    await page.getByRole("searchbox").fill(sentCustomer.name);
+    await expect(page.getByText("אין לקוחות בסטטוס הזה")).toBeVisible();
+    await expect(page.getByText("נסה מונח חיפוש או סטטוס אחר.")).toBeVisible();
+  });
+
   test("reopening a previously-viewed customer's dialog fires no new catalog query", async ({
     page,
   }) => {

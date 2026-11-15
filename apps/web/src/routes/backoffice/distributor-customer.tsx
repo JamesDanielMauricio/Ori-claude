@@ -8,10 +8,10 @@ import {
   FamilyGroupedLines,
   type FamilyGroupedRow,
 } from "@/components/reference-data/family-grouped-lines";
+import { OversightToolbar } from "@/components/reference-data/oversight-toolbar";
 import { TwoColumnRowList } from "@/components/reference-data/two-column-row-list";
 import { StatusPill } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Icon } from "@/components/ui/icon";
 import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,6 +20,14 @@ import { errorMessage } from "@/lib/error-message";
 import { groupLinesByFamily } from "@/lib/family-grouping";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
 import { nudgeWhatsAppDispatch } from "@/lib/nudge-whatsapp-dispatch";
+import {
+  CUSTOMER_FILTER_OPTIONS,
+  customerOrderState,
+  matchesFilter,
+  progressCount,
+  type CustomerOrderState,
+  type StatusFilter,
+} from "@/lib/oversight-status";
 import {
   oversightQueries,
   type DailyOrderForDay,
@@ -60,6 +68,8 @@ export default function DistributorAsCustomerPage() {
   const { showToast } = useToast();
 
   const [search, setSearch] = useState("");
+  // Not remembered: every visit starts on "all".
+  const [filter, setFilter] = useState<StatusFilter<CustomerOrderState>>("all");
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [ordersDialogCustomer, setOrdersDialogCustomer] = useState<OversightCustomer | null>(null);
 
@@ -101,11 +111,28 @@ export default function DistributorAsCustomerPage() {
   const sortedCustomers = useMemo(() => {
     const rows = customersQuery.data ?? [];
     const needle = search.trim().toLocaleLowerCase("he");
-    const filtered = needle
-      ? rows.filter((row) => row.name.toLocaleLowerCase("he").includes(needle))
-      : rows;
+    // Search AND status filter: a row must pass both.
+    const filtered = rows.filter(
+      (row) =>
+        (!needle || row.name.toLocaleLowerCase("he").includes(needle)) &&
+        matchesFilter(customerOrderState(orderByCustomerId.get(row.id) ?? null), filter),
+    );
     return [...filtered].sort((a, b) => a.name.localeCompare(b.name, "he"));
-  }, [customersQuery.data, search]);
+  }, [customersQuery.data, search, filter, orderByCustomerId]);
+
+  // "X מתוך Y" over EVERY active customer, ignoring the search and the
+  // filter. Hidden with no day, while the shop is not open yet, or when no
+  // customer has an order.
+  const counter = useMemo(() => {
+    if (!dayId || dayView.day?.phase === "initiated") return null;
+    const { done, total } = progressCount(
+      (customersQuery.data ?? []).map((row) =>
+        customerOrderState(orderByCustomerId.get(row.id) ?? null),
+      ),
+      ["submitted"],
+    );
+    return total === 0 ? null : { label: "הזמנות הוזנו", done, total };
+  }, [dayId, dayView.day?.phase, customersQuery.data, orderByCustomerId]);
 
   // One mutation, keyed per call by `dailyOrderId` — see distributor-
   // grower.tsx's identical reminderMutation for why `variables` is what
@@ -222,22 +249,16 @@ export default function DistributorAsCustomerPage() {
         }
       />
 
-      <label className="relative mb-4 block max-w-xs">
-        <span className="sr-only">חיפוש לקוח</span>
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 start-3 flex items-center text-ink-subtle"
-        >
-          <Icon name="search" className="h-4 w-4" />
-        </span>
-        <input
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="חיפוש לקוח…"
-          className="h-10 w-full rounded-md bg-surface ps-9 pe-3 text-sm text-ink shadow-card ring-1 ring-inset ring-border-strong outline-none transition-colors duration-150 placeholder:text-ink-subtle focus:ring-2 focus:ring-accent/40"
-        />
-      </label>
+      <OversightToolbar
+        search={search}
+        onSearchChange={setSearch}
+        searchLabel="חיפוש לקוח"
+        searchPlaceholder="חיפוש לקוח…"
+        filter={filter}
+        onFilterChange={setFilter}
+        filterOptions={CUSTOMER_FILTER_OPTIONS}
+        counter={counter}
+      />
 
       {isLoading ? (
         <div className="space-y-2">
@@ -290,11 +311,19 @@ export default function DistributorAsCustomerPage() {
           hint="פתח את החנות בסרגל הצד כדי שלקוחות יוכלו להזמין, ולנהל הזמנות בשמם."
         />
       ) : rows.length === 0 ? (
-        <EmptyState
-          icon="briefcase"
-          title="אין לקוחות להצגה"
-          hint={search ? "נסה מונח חיפוש אחר." : "אין לקוחות פעילים במערכת."}
-        />
+        filter !== "all" ? (
+          <EmptyState
+            icon="briefcase"
+            title="אין לקוחות בסטטוס הזה"
+            hint={search ? "נסה מונח חיפוש או סטטוס אחר." : "בחר סטטוס אחר."}
+          />
+        ) : (
+          <EmptyState
+            icon="briefcase"
+            title="אין לקוחות להצגה"
+            hint={search ? "נסה מונח חיפוש אחר." : "אין לקוחות פעילים במערכת."}
+          />
+        )
       ) : (
         <TwoColumnRowList rows={rows} />
       )}
