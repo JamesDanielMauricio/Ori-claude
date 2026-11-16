@@ -929,7 +929,7 @@ describe("customer ordering module", () => {
     );
   }, 30000);
 
-  // Migration 0106 (design 2026-11-16, row 6): in Bubble the customer user who
+  // Migration 0107 (design 2026-11-16, row 6): in Bubble the customer user who
   // sends an order gets the same text privately, as well as the office. The
   // copy is its own message type (order_submitted_copy) so the office log can
   // name it, and its row lists the one person it is for (0104).

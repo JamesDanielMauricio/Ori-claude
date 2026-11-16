@@ -18,7 +18,7 @@ describe("delivery labels", () => {
     expect(canSendAgain("skipped")).toBe(false);
   });
 
-  it("names the customer's private copy of a new order (0106)", () => {
+  it("names the customer's private copy of a new order (0107)", () => {
     expect(templateLabel("order_submitted_copy", "customer")).toBe("העתק ללקוח ששלח הזמנה");
   });
 

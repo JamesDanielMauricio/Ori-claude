@@ -18,10 +18,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { createTestOutboxRow } from "./test-helpers";
 
-// Migration 0106 §1: which of a company's WhatsApp group and its people a
+// Migration 0107 §1: which of a company's WhatsApp group and its people a
 // message reaches depends on the message type, the way the old Bubble app did
 // it. The templates are the REAL seeded ones.
-describe("WhatsApp routing by message type (0106)", () => {
+describe("WhatsApp routing by message type (0107)", () => {
   type Client = SupabaseClient<Database>;
   const cleanupFns: Array<() => Promise<void>> = [];
   const fileCleanupFns: Array<() => Promise<void>> = [];

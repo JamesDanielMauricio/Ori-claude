@@ -1,4 +1,4 @@
--- 0106 — each WhatsApp message follows Bubble's routing rule.
+-- 0107 — each WhatsApp message follows Bubble's routing rule.
 --
 -- Until now every message used one rule: the company's WhatsApp group if it has
 -- one, otherwise each person with a usable phone. The old Bubble app chose per
@@ -28,11 +28,11 @@
 -- right after the office's message. When the office orders on a customer's
 -- behalf nobody gets a copy.
 --
--- Rollout (design 2026-11-16, section 9): 0106 and the web deploy can go in
--- either order; the recommended order is to run 0106, then push the website.
+-- Rollout (design 2026-11-16, section 9): 0107 and the web deploy can go in
+-- either order; the recommended order is to run 0107, then push the website.
 -- The whatsapp-dispatch edge function is NOT redeployed: resolve_outbox_dispatch
 -- keeps its signature, result columns, security and grants. Rows queued before
--- 0106 and sent after it follow the new rules when they are sent.
+-- 0107 and sent after it follow the new rules when they are sent.
 --
 -- Safe to run again: the functions are create or replace, the seven comment on
 -- function statements and the two in section 10 (the column comment on
@@ -75,7 +75,7 @@ as $$
 $$;
 
 comment on function public.outbox_routing(text) is
-  'Names the routing rule of one message type (migration 0106), as Bubble does it: pick_reminder = group_and_people (the group and each person), shop_open = people_only (each person, never the group), pick_updated = group_only (the grower''s group only), anything else = group_else_people (the group, else each person). Used by resolve_outbox_dispatch.';
+  'Names the routing rule of one message type (migration 0107), as Bubble does it: pick_reminder = group_and_people (the group and each person), shop_open = people_only (each person, never the group), pick_updated = group_only (the grower''s group only), anything else = group_else_people (the group, else each person). Used by resolve_outbox_dispatch.';
 
 -- SECURITY: ALLOWS signed-in sessions and the service role to call it.
 -- PROTECTS AGAINST a visitor who is not signed in (and PUBLIC) reaching it.
@@ -149,7 +149,7 @@ end;
 $$;
 
 comment on function public.resolve_outbox_dispatch(uuid) is
-  'Resolves one notification_outbox row into its actual send targets, following the message type''s rule (outbox_routing, migration 0106): the recipient company''s WhatsApp group (one row, the bare group id, is_group = true) and/or each user with a phone number on file (is_group = false, addressed by country code and number — whatsapp_personal_number, 0077), in user order. pick_reminder = the group and each person; shop_open = each person only; pick_updated = the group only; anything else = the group, else each person. A row that carries recipient_user_ids (0104) never uses the group: it goes privately to exactly those users of the recipient company who have a number. A user whose number cannot be read as a phone number is skipped. The text is compose_outbox_message''s (Bubble''s wording and layouts, migration 0102): %FIRST_NAME% is the company''s name for a group, else the user''s first name. Raises P0002 if the outbox row or its template_key does not resolve.';
+  'Resolves one notification_outbox row into its actual send targets, following the message type''s rule (outbox_routing, migration 0107): the recipient company''s WhatsApp group (one row, the bare group id, is_group = true) and/or each user with a phone number on file (is_group = false, addressed by country code and number — whatsapp_personal_number, 0077), in user order. pick_reminder = the group and each person; shop_open = each person only; pick_updated = the group only; anything else = the group, else each person. A row that carries recipient_user_ids (0104) never uses the group: it goes privately to exactly those users of the recipient company who have a number. A user whose number cannot be read as a phone number is skipped. The text is compose_outbox_message''s (Bubble''s wording and layouts, migration 0102): %FIRST_NAME% is the company''s name for a group, else the user''s first name. Raises P0002 if the outbox row or its template_key does not resolve.';
 
 -- 3. enqueue_company_notification: queue one message for ONE named company
 -- (the office helper, enqueue_backoffice_notification, only reaches the
@@ -197,7 +197,7 @@ end;
 $$;
 
 comment on function public.enqueue_company_notification(uuid, public.notification_recipient_type, uuid, text, jsonb, uuid[]) is
-  'Internal (migration 0106). Queues one notification_outbox row for one named company, unless 5 rows of the same message type for that company and trading day were already queued in the last 10 minutes. p_recipient_user_ids, when given, lists the people it goes to privately (0104). Called by the security definer functions that queue messages and by the service role; not callable by public, anon or signed-in users.';
+  'Internal (migration 0107). Queues one notification_outbox row for one named company, unless 5 rows of the same message type for that company and trading day were already queued in the last 10 minutes. p_recipient_user_ids, when given, lists the people it goes to privately (0104). Called by the security definer functions that queue messages and by the service role; not callable by public, anon or signed-in users.';
 
 -- SECURITY: the same lock-down as enqueue_backoffice_notification (0055). This
 -- revoke ALLOWS the security definer functions that call it (they run as
@@ -346,7 +346,7 @@ begin
   -- ONE pick_updated alert per save, not one per changed line. Still gated on
   -- the grower being the actor: backoffice editing a pick on the grower's
   -- behalf must not message the grower about backoffice's own action.
-  -- 0106: the alert goes to the grower's own company (its WhatsApp group), as
+  -- 0107: the alert goes to the grower's own company (its WhatsApp group), as
   -- in Bubble, not to the office.
   if v_is_grower_initiated and v_any_quantity_changed then
     select trade_date into v_trade_date from public.trading_days where id = v_trading_day_id;
@@ -364,7 +364,7 @@ end;
 $$;
 
 comment on function public.save_pick_lines(uuid, jsonb) is
-  'The owning grower (or backoffice). Saves every line of one Daily Pick in a single transaction: pallets_picked, leftover_pallets and comment per line, all-or-nothing. Enforces P0002 unknown pick/line, 42501 wrong grower or a line not belonging to this pick, P0007 closed pick, P0008 negative/missing quantity, and P0006 — the arrangement floor, checked against pallets_picked + leftover_pallets COMBINED, so a grower may shift quantity between the two fields freely as long as the sum never drops below what''s already arranged. Queues at most one pick_updated notification per save, for the grower''s own company (migration 0106), when the grower themselves changed a quantity. Returns the pick''s full line set as saved.';
+  'The owning grower (or backoffice). Saves every line of one Daily Pick in a single transaction: pallets_picked, leftover_pallets and comment per line, all-or-nothing. Enforces P0002 unknown pick/line, 42501 wrong grower or a line not belonging to this pick, P0007 closed pick, P0008 negative/missing quantity, and P0006 — the arrangement floor, checked against pallets_picked + leftover_pallets COMBINED, so a grower may shift quantity between the two fields freely as long as the sum never drops below what''s already arranged. Queues at most one pick_updated notification per save, for the grower''s own company (migration 0107), when the grower themselves changed a quantity. Returns the pick''s full line set as saved.';
 
 -- 5. update_pick_product_pallets: 0076's body, changed only where the
 -- pick_updated alert is queued (the grower's own company, not the office).
@@ -459,7 +459,7 @@ end;
 $$;
 
 comment on function public.update_pick_product_pallets(uuid, numeric) is
-  'The owning grower (or backoffice). Updates a Daily Pick Product line''s pallets_picked. security definer for the same reason as submit_pick. Enforces the arrangement-edit rule against the COMBINED pallets_picked + leftover_pallets (raises P0006), and rejects edits once the parent pick is closed (P0007). When the caller is the grower themselves (not backoffice acting on their behalf), queues at most one pick_updated notification_outbox row for the grower''s own company (id 3; migration 0106), capped at 5 per 10 minutes per grower and trading day.';
+  'The owning grower (or backoffice). Updates a Daily Pick Product line''s pallets_picked. security definer for the same reason as submit_pick. Enforces the arrangement-edit rule against the COMBINED pallets_picked + leftover_pallets (raises P0006), and rejects edits once the parent pick is closed (P0007). When the caller is the grower themselves (not backoffice acting on their behalf), queues at most one pick_updated notification_outbox row for the grower''s own company (id 3; migration 0107), capped at 5 per 10 minutes per grower and trading day.';
 
 -- 6. The pick_updated message now reaches the grower, so its link opens the
 -- grower's own picks screen, not the office's grower page.
@@ -469,7 +469,7 @@ where template_key = 'pick_updated';
 
 -- CHECK: notification_templates has forced row-level security (0023), so the
 -- update above only takes effect because the role running this migration
--- bypasses RLS. If it were ever silently filtered, 0106 would half-apply
+-- bypasses RLS. If it were ever silently filtered, 0107 would half-apply
 -- unnoticed; this stops the run with a clear message instead.
 do $$
 begin
@@ -478,7 +478,7 @@ begin
     where template_key = 'pick_updated'
       and link = 'https://ori-claude-web.vercel.app/grower/picks'
   ) then
-    raise exception '0106: the pick_updated template link was not set to the grower picks screen';
+    raise exception '0107: the pick_updated template link was not set to the grower picks screen';
   end if;
 end;
 $$;
@@ -505,7 +505,7 @@ on conflict (template_key) do nothing;
 do $$
 begin
   if not exists (select 1 from public.notification_templates where template_key = 'order_submitted_copy') then
-    raise exception '0106: the order_submitted_copy template was not created (is the order_submitted template missing?)';
+    raise exception '0107: the order_submitted_copy template was not created (is the order_submitted template missing?)';
   end if;
 end;
 $$;
@@ -581,7 +581,7 @@ end;
 $$;
 
 comment on function public.compose_outbox_message(public.notification_outbox, text) is
-  'One notification_outbox row''s WhatsApp text, as Bubble writes it (migration 0102): the row''s template with every placeholder filled — %FIRST_NAME% from p_first_name, %COMPANY% from the payload (else the recipient''s own name), %COMPANY_USER_FULL_NAME%, %ORDER_DETAILS% (compose_order_submitted_details for an office order message, or the customer''s private copy of it (order_submitted_copy, migration 0106), carrying its order, else compose_order_details_text), %NL%, %CURRENT_OPEN_BUSINESS_DAY% (message_trade_date; the date alone in the grower''s and transporter''s messages), %PICKUP_TIME%, %PRODUCT_NAME%, %PRODUCT_OVERBOOKING% — then a blank line and the template''s link, if it has one. The grower''s message drops "הודעה זו נשלחה גם למוביל" when the grower has no transporter. Raises P0002 for an unknown template. security invoker.';
+  'One notification_outbox row''s WhatsApp text, as Bubble writes it (migration 0102): the row''s template with every placeholder filled — %FIRST_NAME% from p_first_name, %COMPANY% from the payload (else the recipient''s own name), %COMPANY_USER_FULL_NAME%, %ORDER_DETAILS% (compose_order_submitted_details for an office order message, or the customer''s private copy of it (order_submitted_copy, migration 0107), carrying its order, else compose_order_details_text), %NL%, %CURRENT_OPEN_BUSINESS_DAY% (message_trade_date; the date alone in the grower''s and transporter''s messages), %PICKUP_TIME%, %PRODUCT_NAME%, %PRODUCT_OVERBOOKING% — then a blank line and the template''s link, if it has one. The grower''s message drops "הודעה זו נשלחה גם למוביל" when the grower has no transporter. Raises P0002 for an unknown template. security invoker.';
 
 -- SECURITY: ALLOWS signed-in sessions and the service role to call it (it runs
 -- as the caller, so row access still applies). PROTECTS AGAINST a visitor who
@@ -967,7 +967,7 @@ begin
         'submittedByName', (select p.display_name from public.profiles p where p.user_id = (select auth.uid()))
       )
     );
-    -- 0106: in Bubble the customer user who sent the order gets the same text
+    -- 0107: in Bubble the customer user who sent the order gets the same text
     -- privately. Only here, on a direct customer submission: when the office
     -- orders on a customer's behalf nobody gets this message or its copy. The
     -- row lists its one person (0104), so it never goes to the company's group.
@@ -1027,13 +1027,13 @@ end;
 $$;
 
 comment on function public.submit_order(uuid, jsonb, uuid, text) is
-  'Customer-only for their own company (p_customer_company_id omitted). Backoffice-only when p_customer_company_id is supplied. One transaction: upserts-and-prunes daily_order_products from p_lines, sets the order to submitted and stamps submitted_at, writes one order_submission_logs row (attributed to whoever actually called this), and — only on a direct customer submission, never the backoffice-on-behalf-of path — enqueues one order_submitted notification to backoffice (id 6) and one order_submitted_copy for the customer user who sent it, privately (migration 0106), and rejects (P0008) any line raised above max_orderable_for_customer() for that variety (a line kept at, or lowered from, its saved quantity is accepted even when stock has since dropped below it — migration 0068). On a direct customer submission, a line for a product on the calling user''s own blocked list (profile_blocked_products) is ignored if sent and never pruned: it is left exactly as it was (migration 0072). Also computes, for every variety this call''s lines could have pushed across a threshold, whether it just became fully-ordered-with-overbooking-room (stock_overbooking_reached, id 10) or fully-exhausted (stock_fully_exhausted, id 11) — live, in this same transaction, never via a stored out-of-stock list or trigger. A pruned line that an arrangement_records row points at is zeroed rather than deleted, so re-saving an order can no longer cascade away the distributor''s allocations. Sends for one trading day run one at a time (a transaction-level advisory lock, 0068), so two customers can never both take the same last pallets. Raises P0007 if the trading day is closed, or — for a customer''s own order — if the shop is not open (phase shop_open; migration 0071, which also reads the phase `for share` so a send and close_shop can never cross), P0008 if a line references a variety not in today''s shop, has a negative pallet count, or (direct customer submissions only) raises a line above the per-customer cap. p_comment (0093): the order-level comment (הערה כללית) — null keeps the stored comment, empty text clears it, other text is saved trimmed; it is written under the same checks as the lines and is not part of the submission log snapshot. Price record (0101): every line a send writes records the product''s price as the order''s customer is shown it — price_type, plus price for fixed (מספר) or price_range_from/price_range_to for range (טווח), the type alone for a record_* (תקליט) type; with no type, a price reads as fixed and both ends of a range as range — but only when that customer''s company has can_see_product_prices and the day''s shop can_see_prices (on a staff send on their behalf too). It is recorded again on every such send, untouched lines included; a send that may not see prices records nothing and clears nothing. A zeroed or blocked line keeps its record.';
+  'Customer-only for their own company (p_customer_company_id omitted). Backoffice-only when p_customer_company_id is supplied. One transaction: upserts-and-prunes daily_order_products from p_lines, sets the order to submitted and stamps submitted_at, writes one order_submission_logs row (attributed to whoever actually called this), and — only on a direct customer submission, never the backoffice-on-behalf-of path — enqueues one order_submitted notification to backoffice (id 6) and one order_submitted_copy for the customer user who sent it, privately (migration 0107), and rejects (P0008) any line raised above max_orderable_for_customer() for that variety (a line kept at, or lowered from, its saved quantity is accepted even when stock has since dropped below it — migration 0068). On a direct customer submission, a line for a product on the calling user''s own blocked list (profile_blocked_products) is ignored if sent and never pruned: it is left exactly as it was (migration 0072). Also computes, for every variety this call''s lines could have pushed across a threshold, whether it just became fully-ordered-with-overbooking-room (stock_overbooking_reached, id 10) or fully-exhausted (stock_fully_exhausted, id 11) — live, in this same transaction, never via a stored out-of-stock list or trigger. A pruned line that an arrangement_records row points at is zeroed rather than deleted, so re-saving an order can no longer cascade away the distributor''s allocations. Sends for one trading day run one at a time (a transaction-level advisory lock, 0068), so two customers can never both take the same last pallets. Raises P0007 if the trading day is closed, or — for a customer''s own order — if the shop is not open (phase shop_open; migration 0071, which also reads the phase `for share` so a send and close_shop can never cross), P0008 if a line references a variety not in today''s shop, has a negative pallet count, or (direct customer submissions only) raises a line above the per-customer cap. p_comment (0093): the order-level comment (הערה כללית) — null keeps the stored comment, empty text clears it, other text is saved trimmed; it is written under the same checks as the lines and is not part of the submission log snapshot. Price record (0101): every line a send writes records the product''s price as the order''s customer is shown it — price_type, plus price for fixed (מספר) or price_range_from/price_range_to for range (טווח), the type alone for a record_* (תקליט) type; with no type, a price reads as fixed and both ends of a range as range — but only when that customer''s company has can_see_product_prices and the day''s shop can_see_prices (on a staff send on their behalf too). It is recorded again on every such send, untouched lines included; a send that may not see prices records nothing and clears nothing. A zeroed or blocked line keeps its record.';
 
--- 10. Two catalog comments that 0106 made out of date, restated here because
+-- 10. Two catalog comments that 0107 made out of date, restated here because
 -- 0031 and 0104 have already run and cannot be edited. Comments only: no
 -- column, function body, grant or policy changes.
 comment on column public.notification_outbox.recipient_user_ids is
-  'NULL = the message type''s routing rule (outbox_routing, migration 0106: the group, the people, both, or the group else the people). A list = exactly these users, and only those who still belong to recipient_company_id and have a usable number, privately, never the group. Written by send_order_reminder (migration 0104) and by submit_order''s private copy of a new order, through enqueue_company_notification (migration 0106).';
+  'NULL = the message type''s routing rule (outbox_routing, migration 0107: the group, the people, both, or the group else the people). A list = exactly these users, and only those who still belong to recipient_company_id and have a usable number, privately, never the group. Written by send_order_reminder (migration 0104) and by submit_order''s private copy of a new order, through enqueue_company_notification (migration 0107).';
 
 comment on function public.enqueue_backoffice_notification(uuid, text, jsonb) is
-  'Internal only (no grant to authenticated) — enqueues one notification_outbox row per active backoffice-typed company. The one reusable pattern for the office-addressed triggers (order_submitted, stock_overbooking_reached, stock_fully_exhausted) rather than independent queries; capped at 5 rows per company, message type, day and company/product name per 10 minutes (migration 0082). pick_updated is no longer queued here: since migration 0106 it goes to the grower''s own WhatsApp group through enqueue_company_notification.';
+  'Internal only (no grant to authenticated) — enqueues one notification_outbox row per active backoffice-typed company. The one reusable pattern for the office-addressed triggers (order_submitted, stock_overbooking_reached, stock_fully_exhausted) rather than independent queries; capped at 5 rows per company, message type, day and company/product name per 10 minutes (migration 0082). pick_updated is no longer queued here: since migration 0107 it goes to the grower''s own WhatsApp group through enqueue_company_notification.';

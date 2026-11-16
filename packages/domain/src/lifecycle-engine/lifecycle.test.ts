@@ -915,7 +915,7 @@ describe("lifecycle engine", () => {
     expect(afterBackofficeEdit).toHaveLength(0);
 
     // The grower editing their own line queues one pick_updated row for the
-    // grower's own company (0106) — and none for the office.
+    // grower's own company (0107) — and none for the office.
     const growerClient = await signedInGrowerFor(grower.companyId);
     const growerEdit = await growerClient.rpc(
       "update_pick_product_pallets",

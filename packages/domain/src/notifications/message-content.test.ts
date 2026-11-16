@@ -127,7 +127,7 @@ describe("message content and phone numbers (0077)", () => {
     }
   }, 60000);
 
-  // 0106: Bubble posts "the grower updated the pick estimate" in that grower's
+  // 0107: Bubble posts "the grower updated the pick estimate" in that grower's
   // own group only (0102 wording: main alert 3, the day as "<letter> dd.mm.yy").
   it("pick_updated names the grower — to the grower's group only", async () => {
     const text = "שלום. משק הבדיקה עדכן את הערכת הקטיף ליום ר 08.11.26 ";
@@ -312,7 +312,7 @@ describe("message content and phone numbers (0077)", () => {
       text: "שלום %FIRST_NAME%. \n%COMPANY% שלחו הזמנה על ידי %COMPANY_USER_FULL_NAME%.\nלהלן מצב ההזמנה הנוכחי שלהם:\n\n%ORDER_DETAILS%",
       link: `${ORI}/backoffice/distributor-customer`,
     }, // 6
-    // 0106: the customer's own private copy of main alert 6 — the same text,
+    // 0107: the customer's own private copy of main alert 6 — the same text,
     // linked to the customer's own order screen.
     order_submitted_copy: {
       text: "שלום %FIRST_NAME%. \n%COMPANY% שלחו הזמנה על ידי %COMPANY_USER_FULL_NAME%.\nלהלן מצב ההזמנה הנוכחי שלהם:\n\n%ORDER_DETAILS%",

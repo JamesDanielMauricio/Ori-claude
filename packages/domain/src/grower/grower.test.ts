@@ -889,7 +889,7 @@ describe("grower picking module", () => {
     expect(secondPage.data).toHaveLength(100);
   }, 60000);
 
-  // 0106: Bubble posts "the grower updated the pick estimate" in the grower's
+  // 0107: Bubble posts "the grower updated the pick estimate" in the grower's
   // own group, not the office. A quantity change queues it; a comment-only save
   // and a backoffice save do not.
   it("save_pick_lines by the grower queues pick_updated for the grower, not the office", async () => {

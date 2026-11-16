@@ -1,5 +1,7 @@
 # WhatsApp routing like Bubble — design
 
+Renumbered to 0107 at merge time (2026-11-17): main's 0106 is the WhatsApp-schedule migration.
+
 Status: approved by James (2026-11-16). Approach A chosen by James.
 
 ## 1. Why

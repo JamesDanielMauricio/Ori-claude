@@ -1,5 +1,7 @@
 # WhatsApp Routing Like Bubble Implementation Plan
 
+Renumbered to 0107 at merge time (2026-11-17): main's 0106 is the WhatsApp-schedule migration.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Every WhatsApp message except the reset link reaches the people Bubble's live app reaches — group, people, or both — per message.
