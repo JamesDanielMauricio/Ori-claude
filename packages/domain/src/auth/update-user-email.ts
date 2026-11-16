@@ -10,19 +10,6 @@ export interface UpdateUserEmailInput {
   email: string;
 }
 
-// The Users screen's "change login email". The address lives in
-// `auth.users`, which the browser's client can't reach, so this goes through
-// the Supabase Admin API with the service-role key.
-//
-// `email_confirm: true` marks the new address as already confirmed, so
-// Supabase applies the change at once and sends no confirmation email. That
-// adds no new power: the office can already change a user's phone and send
-// them a password-reset link, and the person is signed in with the same
-// password either way.
-//
-// SECURITY: the service-role key bypasses every access rule, so the only
-// caller (apps/api's auth.updateUserEmail) restricts this to backoffice
-// users before it gets here.
 // Does a DIFFERENT account already hold this (normalised) address?
 async function heldByAnotherAccount(email: string, targetUserId: string): Promise<boolean> {
   const rows = await db.execute(
@@ -31,6 +18,26 @@ async function heldByAnotherAccount(email: string, targetUserId: string): Promis
   return rows.length > 0;
 }
 
+// The Users screen's "change login email". The address lives in
+// `auth.users`, which the browser's client can't reach, so this goes through
+// the Supabase Admin API with the service-role key.
+//
+// `email_confirm: true` marks the new address as already confirmed, so
+// Supabase applies the change at once and sends no confirmation email.
+//
+// Does that hand the office a new way to take over someone's account? No.
+// Changing the email leaves the person's password exactly as it was, so the
+// office learns nothing that lets it sign in as them. The office could already
+// change a user's phone number and send them a password reset (which replaces
+// the password and WhatsApps the link to that number), so this is no stronger
+// than what it can do today; it only changes the address people type to log in.
+//
+// SECURITY: ALLOWS only a backoffice user (apps/api's auth.updateUserEmail
+// checks that before calling this) to change any account's login email.
+// PROTECTS AGAINST anyone else (a grower, a customer, a signed-out caller)
+// pointing an account's email at themselves to take it over. This matters
+// because the service-role key used below bypasses every access rule, so
+// nothing here would stop a caller who got past the API check.
 export async function updateUserEmail({
   targetUserId,
   email,
