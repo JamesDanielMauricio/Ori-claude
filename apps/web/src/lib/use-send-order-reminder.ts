@@ -10,8 +10,11 @@ import { failureNeedsToast, shouldResetOnClose } from "@/lib/order-reminder";
 import type { DailyOrderForDay } from "@/lib/queries/oversight";
 import { createClient } from "@/lib/supabase/client";
 
-// Sends a customer's order reminder to the chosen people only. Shared by the
-// "בשם לקוח" screen and any other screen that opens the reminder window.
+// Sends a customer's order reminder. With a list of people, only those people
+// get it; with no list (the סידור board's bell), the server's rule decides: the
+// customer's group, else each person with a usable phone. Shared by the
+// "בשם לקוח" screen, which opens the reminder window, and the סידור board,
+// which never opens one.
 //
 // `reminder_sent_at` is real, persisted state on the order row, so when the
 // caller passes the key of the day's orders it is patched optimistically,
@@ -43,8 +46,8 @@ export function useSendOrderReminder(options?: { ordersForDayQueryKey?: QueryKey
   const mutation = useMutation<
     void,
     { message?: string },
-    // No list = the server's routing rule decides (the group, else everyone):
-    // what the סידור board's bell sends.
+    // No list = the server's routing rule decides (the customer's group, else
+    // each person with a usable phone): what the סידור board's bell sends.
     { dailyOrderId: string; recipientUserIds?: string[] },
     { previous: DailyOrderForDay[] | undefined }
   >({
@@ -62,9 +65,10 @@ export function useSendOrderReminder(options?: { ordersForDayQueryKey?: QueryKey
       // nudge-whatsapp-dispatch.ts.
       nudgeWhatsAppDispatch(supabase);
     },
-    // The rollback, plus a toast only when the window the refusal belongs to
-    // is already closed: while it is open the caller shows the refusal inside
-    // it (OrderReminderDialog's `error`), and one failure gets one message.
+    // The rollback, plus a toast only when no window is open to show the
+    // refusal: while one is open the caller shows it inside the window
+    // (OrderReminderDialog's `error`), and one failure gets one message. A
+    // caller that never opens a window (the סידור board) always gets the toast.
     onError: (error, variables, context) => {
       optimistic.onError(error, variables, context);
       if (failureNeedsToast({ windowOpen: windowOpen.current })) {
