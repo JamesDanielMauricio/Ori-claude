@@ -164,8 +164,9 @@ function ProductCard({
   // from which customer.
   const hasDemand = row.ordered > 0;
   // A single-grower product's "במלאי" is that one line's stock, so it can open
-  // the stock popup. It sits OUTSIDE the toggle button below — a button inside
-  // a button is invalid, and a tap on it would also toggle the card.
+  // the stock popup. The toggle below is a sibling stretched over the row, not
+  // a wrapper — a button inside a button is invalid, and a tap on the stock
+  // button must not also toggle the card.
   const stockLine = editableStockLine(row, editable && onEditStock !== undefined);
 
   return (
@@ -174,49 +175,51 @@ function ProductCard({
         hasDemand ? "ring-marked-edge/60" : "ring-border/70"
       }`}
     >
-      <div className="flex items-center">
+      {/* The header is one row, laid out exactly as it was before the stock
+          button: name and family at the start, the figures, then the chevron
+          at the far edge. The toggle is a button stretched over the whole row
+          (not wrapped around it), so the stock button below can sit on top
+          without ever being nested inside another button. */}
+      <div className="relative flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3.5">
         <button
           type="button"
           onClick={onToggle}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3.5 text-start"
-        >
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-semibold text-ink">{row.varietyName}</span>
-            {row.familyName && (
-              <span className="mt-0.5 block truncate text-xs text-ink-subtle">
-                {row.familyName}
-              </span>
-            )}
-          </span>
+          aria-label={row.varietyName}
+          className="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-bright"
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold text-ink">{row.varietyName}</span>
+          {row.familyName && (
+            <span className="mt-0.5 block truncate text-xs text-ink-subtle">{row.familyName}</span>
+          )}
+        </span>
 
-          <span className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
-            {!stockLine && <Stat label="במלאי" value={row.inStock} />}
-            <Stat
-              label="זמין"
-              value={row.available}
-              tone={row.available < 0 ? "danger" : "normal"}
-            />
-            {hasDemand && <StatusPill tone="marked">הוזמן {formatPallets(row.ordered)}</StatusPill>}
-          </span>
-
-          <Icon
-            name="chevronDown"
-            className={`h-4 w-4 shrink-0 text-ink-subtle transition-transform duration-200 ${
-              open ? "rotate-180" : ""
-            }`}
-          />
-        </button>
-        {stockLine && (
-          <span className="shrink-0 pe-4">
+        <span className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
+          {stockLine ? (
             <Stat
               label="במלאי"
               value={row.inStock}
               onEdit={() => onEditStock?.(stockLine.pickLineId)}
               editLabel={`עדכון מלאי — ${stockLine.growerName}`}
             />
-          </span>
-        )}
+          ) : (
+            <Stat label="במלאי" value={row.inStock} />
+          )}
+          <Stat
+            label="זמין"
+            value={row.available}
+            tone={row.available < 0 ? "danger" : "normal"}
+          />
+          {hasDemand && <StatusPill tone="marked">הוזמן {formatPallets(row.ordered)}</StatusPill>}
+        </span>
+
+        <Icon
+          name="chevronDown"
+          className={`h-4 w-4 shrink-0 text-ink-subtle transition-transform duration-200 ${
+            open ? "rotate-180" : ""
+          }`}
+        />
       </div>
 
       {open && (
@@ -505,12 +508,13 @@ function Stat({
   if (!onEdit) return <span className="whitespace-nowrap text-xs">{content}</span>;
   return (
     // Padded to a larger tap target than the text, and underlined on hover
-    // like the desktop grid's number.
+    // like the desktop grid's number. `relative` lifts it above the card's
+    // stretched toggle button, so a tap here opens the popup, not the card.
     <button
       type="button"
       onClick={onEdit}
       aria-label={editLabel}
-      className="-m-2 whitespace-nowrap rounded-sm p-2 text-xs underline-offset-4 hover:underline hover:decoration-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-bright"
+      className="relative -m-2 whitespace-nowrap rounded-sm p-2 text-xs underline-offset-4 hover:underline hover:decoration-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-bright"
     >
       {content}
     </button>

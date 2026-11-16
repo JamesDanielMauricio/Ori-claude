@@ -754,6 +754,40 @@ test.describe("Backoffice — arrangement workspace", () => {
     await expect(page.locator("dialog[open]").getByLabel("משטחים מהיום:")).toHaveValue("12");
   });
 
+  test("the phone card header keeps במלאי beside זמין, and only the rest of the header toggles", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    const { grower } = await startStockDay(page);
+
+    await page.getByPlaceholder("חיפוש מוצר…").fill(grower.varietyName);
+    const card = page.locator("li").filter({ hasText: grower.varietyName }).first();
+    // The toggle has a name (the variety), and holds no other button.
+    const toggle = card.getByRole("button", { name: grower.varietyName, exact: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(card.locator("button button")).toHaveCount(0);
+
+    // In the right-to-left row the figures read: במלאי, then זמין, then the
+    // chevron at the far (left) edge — so במלאי is to the right of זמין.
+    const stock = card.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` });
+    const stockBox = (await stock.boundingBox())!;
+    const availableBox = (await card.getByText("זמין", { exact: false }).first().boundingBox())!;
+    expect(stockBox.x).toBeGreaterThan(availableBox.x);
+
+    // The stock button opens the popup and does not toggle the card.
+    await stock.click();
+    await expect(page.locator("dialog[open]")).toHaveCount(1);
+    await page.locator("dialog[open]").getByRole("button", { name: "ביטול" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    // Anywhere else on the header toggles it (here: the variety's name).
+    // `force`: Playwright refuses a click whose target has the (invisible)
+    // toggle laid over it; the click still lands where a finger would.
+    await card.getByText(grower.varietyName, { exact: true }).first().click({ force: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  });
+
   test("the phone layout offers the same popup", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });
     const { adminClient, grower, pickLine } = await startStockDay(page);
