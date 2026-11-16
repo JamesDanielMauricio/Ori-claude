@@ -164,4 +164,15 @@ describe("errorMessage", () => {
     const other = "INVALID_INPUT: something else";
     expect(errorMessage({ code: "P0008", message: other })).toBe(other);
   });
+
+  it("maps the reminder refusal for an order the customer already sent, and only that one", () => {
+    expect(
+      errorMessage({
+        code: "P0007",
+        message: "INVALID_STATE: cannot send a reminder about an order that's already been submitted",
+      }),
+    ).toBe("הלקוח כבר שלח את ההזמנה, ואין צורך בתזכורת.");
+    const other = "INVALID_STATE: cannot send a reminder about something else";
+    expect(errorMessage({ code: "P0007", message: other })).toBe(other);
+  });
 });

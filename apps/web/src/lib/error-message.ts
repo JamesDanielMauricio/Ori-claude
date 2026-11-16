@@ -94,6 +94,19 @@ function reminderRecipientRefusal(code: unknown, message: string): string | null
   return null;
 }
 
+// send_order_reminder when the customer submitted while the window was open
+// (P0007). Matched on the message too: other P0007 refusals mean other things
+// and keep showing as they are.
+function reminderAlreadySubmittedRefusal(code: unknown, message: string): string | null {
+  if (
+    code === "P0007" &&
+    message.startsWith("INVALID_STATE: cannot send a reminder about an order that's already been submitted")
+  ) {
+    return "הלקוח כבר שלח את ההזמנה, ואין צורך בתזכורת.";
+  }
+  return null;
+}
+
 export function errorMessage(error: unknown): string {
   if (error && typeof error === "object") {
     const { name, issues, message, code } = error as { name?: unknown; issues?: unknown; message?: unknown; code?: unknown };
@@ -108,6 +121,8 @@ export function errorMessage(error: unknown): string {
       if (refusal) return refusal;
       const recipientRefusal = reminderRecipientRefusal(code, message);
       if (recipientRefusal) return recipientRefusal;
+      const submittedRefusal = reminderAlreadySubmittedRefusal(code, message);
+      if (submittedRefusal) return submittedRefusal;
     }
     if (typeof message === "string" && message) return message;
   }
