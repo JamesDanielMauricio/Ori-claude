@@ -104,8 +104,6 @@ describe("message content and phone numbers (0077)", () => {
   }
 
   it.each([
-    // 0102: Bubble's wording (main alert 3), the day as "<letter> dd.mm.yy".
-    ["pick_updated", { companyName: "משק הבדיקה" }, ["שלום. משק הבדיקה עדכן את הערכת הקטיף ליום ר 08.11.26 "]],
     ["order_submitted", { companyName: "שוק הבדיקה" }, ["שוק הבדיקה שלחו הזמנה"]],
     ["stock_overbooking_reached", { productName: "בננה גדולה", productOverbooking: "3" }, ["עבור בננה גדולה הוזמנו", "לעוד 3 משטחים"]],
     ["stock_fully_exhausted", { productName: "בננה קטנה" }, ["עבור בננה קטנה הוזמנו"]],
@@ -120,15 +118,49 @@ describe("message content and phone numbers (0077)", () => {
       expect(message).not.toMatch(/%[A-Z_]+%/);
       if (how === "people") {
         expect(resolved.data![0]).toMatchObject({ target: "972527654321", is_group: false });
-        // Each person by their first name, the Bubble way ("שלום רונית.") —
-        // except main alert 3, which greets nobody by name.
-        const greeting = templateKey === "pick_updated" ? "שלום. משק הבדיקה" : "שלום רונית.";
-        expect(message.startsWith(greeting), message).toBe(true);
+        // Each person by their first name, the Bubble way ("שלום רונית.").
+        expect(message.startsWith("שלום רונית."), message).toBe(true);
       }
       const preview = await admin.rpc("resolve_outbox_preview", { p_outbox_id: id });
       expect(preview.error).toBeNull();
       for (const text of expected) expect(preview.data).toContain(text);
     }
+  }, 60000);
+
+  // 0106: Bubble posts "the grower updated the pick estimate" in that grower's
+  // own group only (0102 wording: main alert 3, the day as "<letter> dd.mm.yy").
+  it("pick_updated names the grower — to the grower's group only", async () => {
+    const text = "שלום. משק הבדיקה עדכן את הערכת הקטיף ליום ר 08.11.26 ";
+    const grower = await createTestCompany(`משק בדיקה ${randomUUID()}`, "grower");
+    cleanupFns.push(() => deleteTestCompany(grower.id));
+    await db.update(companies).set({ whatsappGroupId: `grp-${randomUUID()}` }).where(eq(companies.id, grower.id));
+    const person = await createTestProfile({ companyId: grower.id, role: "grower", displayName: "דנה כהן", phoneNumber: "052-765 4321" });
+    cleanupFns.push(() => deleteTestUser(person.userId));
+
+    const row = await createTestOutboxRow({
+      tradingDayId: dayId,
+      recipientType: "grower",
+      recipientCompanyId: grower.id,
+      templateKey: "pick_updated",
+      payload: { tradeDate: "2026-11-08", lines: [], companyName: "משק הבדיקה" },
+    });
+    cleanupFns.push(async () => {
+      await db.delete(notificationOutbox).where(eq(notificationOutbox.id, row.id));
+    });
+    const grouped = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: row.id });
+    expect(grouped.error).toBeNull();
+    expect(grouped.data).toHaveLength(1);
+    expect(grouped.data![0]).toMatchObject({ is_group: true });
+    expect(grouped.data![0]!.message).toContain(text);
+    const preview = await admin.rpc("resolve_outbox_preview", { p_outbox_id: row.id });
+    expect(preview.error).toBeNull();
+    expect(preview.data).toContain(text);
+
+    // A grower without a group is not messaged person by person.
+    await db.update(companies).set({ whatsappGroupId: null }).where(eq(companies.id, grower.id));
+    const none = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: row.id });
+    expect(none.error).toBeNull();
+    expect(none.data).toEqual([]);
   }, 60000);
 
   it("the SQL phone rule agrees with packages/shared/src/phone-cases.json, and so does the password-reset sender", async () => {

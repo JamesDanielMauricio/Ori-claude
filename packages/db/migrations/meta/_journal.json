@@ -743,6 +743,13 @@
       "when": 1793221200000,
       "tag": "0105_grower-sets-pickup-time",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1793307600000,
+      "tag": "0106_whatsapp-routing-like-bubble",
+      "breakpoints": true
     }
   ]
 }
