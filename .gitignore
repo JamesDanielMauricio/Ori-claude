@@ -28,6 +28,12 @@ out/
 # people's emails and phone numbers; never commit
 .bubble-export/
 
+# SECURITY: the dev project's test logins and their passwords, written by
+# packages/db/scripts/seed-dev.ts. Allows the developer to keep them on
+# their own computer; protects against publishing working passwords in this
+# public repo (dev holds only made-up data, but its logins still sign in).
+/dev-logins.local.txt
+
 # logs
 *.log
 npm-debug.log*
