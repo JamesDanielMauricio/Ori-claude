@@ -933,12 +933,12 @@ describe("customer ordering module", () => {
   // sends an order gets the same text privately, as well as the office. The
   // copy is its own message type (order_submitted_copy) so the office log can
   // name it, and its row lists the one person it is for (0104).
-  async function customerWithPhone(customerCompanyId: string, phoneNumber: string | undefined) {
+  async function customerWithPhone(customerCompanyId: string, phoneNumber?: string) {
     const person = await createTestProfile({
       companyId: customerCompanyId,
       role: "customer",
       displayName: "אילנה כהן",
-      phoneNumber,
+      ...(phoneNumber === undefined ? {} : { phoneNumber }),
     });
     cleanupFns.push(() => deleteTestUser(person.userId));
     const client = await signInTestUser(person.email, person.password);
@@ -1047,7 +1047,7 @@ describe("customer ordering module", () => {
     const day = await createOpenTestDay(admin.userId);
     await pickLine(day.id, grower.companyId, grower.varietyId, 10);
     const customer = await createTestCustomer(day.id);
-    const orderer = await customerWithPhone(customer.companyId, undefined);
+    const orderer = await customerWithPhone(customer.companyId);
     cleanupFns.push(() => deleteTestTradingDay(day.id));
 
     const submit = await orderer.client.rpc(

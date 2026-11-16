@@ -34,10 +34,12 @@
 -- keeps its signature, result columns, security and grants. Rows queued before
 -- 0106 and sent after it follow the new rules when they are sent.
 --
--- Safe to run again: the functions are create or replace, the revokes and
--- grants repeat harmlessly, the pick_updated link update (section 6) sets the
--- same value, and the new template row (section 7) is insert ... on conflict
--- do nothing, so a second run adds nothing.
+-- Safe to run again: the functions are create or replace, the seven comment on
+-- function statements rewrite the same text, the revokes and grants repeat
+-- harmlessly, the pick_updated link update (section 6) sets the same value, the
+-- new template row (section 7) is insert ... on conflict do nothing, so a second
+-- run adds nothing, and the two checks after the template writes (sections 6
+-- and 7) only read, and pass again on a second run.
 
 -- 1. outbox_routing: one place that says, per message type, who it reaches.
 -- Pure lookup on the template key; it reads no table, so it is immutable.
@@ -457,6 +459,22 @@ update public.notification_templates
 set link = 'https://ori-claude-web.vercel.app/grower/picks', updated_at = now()
 where template_key = 'pick_updated';
 
+-- CHECK: notification_templates has forced row-level security (0023), so the
+-- update above only takes effect because the role running this migration
+-- bypasses RLS. If it were ever silently filtered, 0106 would half-apply
+-- unnoticed; this stops the run with a clear message instead.
+do $$
+begin
+  if not exists (
+    select 1 from public.notification_templates
+    where template_key = 'pick_updated'
+      and link = 'https://ori-claude-web.vercel.app/grower/picks'
+  ) then
+    raise exception '0106: the pick_updated template link was not set to the grower picks screen';
+  end if;
+end;
+$$;
+
 -- 7. The customer's private copy of a new order (design 2026-11-16, row 6). In
 -- Bubble the customer user who sends an order gets the same text as the office,
 -- privately. Its own message type, so the office's message log can name it. The
@@ -464,14 +482,25 @@ where template_key = 'pick_updated';
 -- alert 6); only the title and the link differ: the link opens the customer's
 -- own order screen. Run again, it leaves an existing row alone.
 --
--- SECURITY: no grant here. notification_templates keeps its own row-level
--- security (0023, forced); this insert runs as the migration's owner.
+-- SECURITY: no grant here. notification_templates has forced row-level
+-- security (0023), which applies to its owner too; this insert passes only
+-- because the role running the migration bypasses RLS. The check right after
+-- it stops the run if the row is still missing, so a filtered insert cannot
+-- go unnoticed.
 insert into public.notification_templates (template_key, channel, title, content, link)
 select 'order_submitted_copy', t.channel, 'העתק ללקוח ששלח הזמנה', t.content,
        'https://ori-claude-web.vercel.app/customer/order'
 from public.notification_templates t
 where t.template_key = 'order_submitted'
 on conflict (template_key) do nothing;
+
+do $$
+begin
+  if not exists (select 1 from public.notification_templates where template_key = 'order_submitted_copy') then
+    raise exception '0106: the order_submitted_copy template was not created (is the order_submitted template missing?)';
+  end if;
+end;
+$$;
 
 -- 8. compose_outbox_message: 0102's body, changed only where the order's
 -- lines are listed (the details case): the customer's copy lists the order
@@ -555,9 +584,10 @@ grant execute on function public.compose_outbox_message(public.notification_outb
 -- enqueue_company_notification (section 3, capped 5 per 10 minutes).
 -- Signature and grants are unchanged.
 --
--- SECURITY: security definer ALLOWS this function to queue the messages as the
--- owner, which a customer's own row access cannot do (the outbox has no insert
--- policy for ordinary users). It PROTECTS AGAINST misuse through the caller
+-- SECURITY: security definer ALLOWS this function to write as the owner what a
+-- customer's own row access cannot: the order's lines (customers have no write
+-- policy on daily_order_products), the submission log and the order header, and
+-- the queued messages (the outbox has no insert policy for ordinary users). It PROTECTS AGAINST misuse through the caller
 -- checks inside the body (from 0102 and earlier): a customer may only send
 -- their own company's order, only while the shop is open; backoffice only on a
 -- customer's behalf; everyone else, signed-out callers included, is refused.
@@ -927,7 +957,7 @@ begin
     );
     -- 0106: in Bubble the customer user who sent the order gets the same text
     -- privately. Only here, on a direct customer submission: when the office
-    -- orders on a customer's behalf nobody is messaged. The row lists its one
+    -- orders on a customer's behalf nobody gets this message or its copy. The row lists its one
     -- person (0104), so it never goes to the company's group.
     perform public.enqueue_company_notification(
       p_trading_day_id, 'customer', v_customer_company_id, 'order_submitted_copy',
