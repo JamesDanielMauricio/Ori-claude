@@ -305,7 +305,7 @@ describe("message content and phone numbers (0077)", () => {
   const BUBBLE: Record<string, { text: string; link: string | null }> = {
     business_day_open_grower: { text: "שלום %FIRST_NAME%. אנא עדכנו הערכת קטיף ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/grower/picks` }, // main alert 1
     pick_reminder: { text: "שלום %FIRST_NAME%. אנא עדכנו הערכת קטיף ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/grower/picks` }, // 2
-    pick_updated: { text: "שלום. %COMPANY% עדכן את הערכת הקטיף ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/backoffice/distributor-grower` }, // 3
+    pick_updated: { text: "שלום. %COMPANY% עדכן את הערכת הקטיף ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/grower/picks` }, // 3
     shop_open: { text: "שלום %FIRST_NAME%. החנות כעת פתוחה להזמנות.", link: `${ORI}/customer/order` }, // 4
     order_reminder: { text: "שלום %FIRST_NAME%. זוהי תזכורת לשלוח הזמנה ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/customer/order` }, // 5
     order_submitted: {
