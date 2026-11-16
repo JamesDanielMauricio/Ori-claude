@@ -163,6 +163,15 @@ export async function deleteTestUser(userId: string): Promise<void> {
   await deleteProfileDirectly(userId);
 }
 
+// Moves a test user's profile to another company, written straight to the
+// database like the fixtures above. Not through the service-role REST client:
+// that depends on Supabase's automatic table grants, and CI's database gives
+// service_role only SELECT on profiles (0078 grants it exactly that), so the
+// REST update is refused there with "permission denied for table profiles".
+export async function moveTestProfileToCompany(userId: string, companyId: string): Promise<void> {
+  await db.update(profiles).set({ companyId }).where(eq(profiles.userId, userId));
+}
+
 export interface TestBackofficeAdmin extends TestProfile {
   companyId: string;
 }

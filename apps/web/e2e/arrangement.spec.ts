@@ -731,6 +731,19 @@ test.describe("Backoffice — arrangement workspace", () => {
     // Someone else arranges two more pallets while the popup is open. The
     // popup still believes 9, so 10 + 0 passes its own check — the server is
     // the one to refuse it, with the real floor (11).
+    //
+    // Live updates re-read everything on screen when anything changes, so
+    // the popup would normally hear of the 11 within moments and switch
+    // אישור off by itself (CI, with real Realtime, did exactly that). The
+    // server's refusal is for when that news is late or lost, so the popup's
+    // re-read of this line is held until the refusal has been shown.
+    const heldReads: Array<() => Promise<void>> = [];
+    const isThisLinesRead = (url: URL) =>
+      url.pathname.endsWith("/rest/v1/daily_pick_products") &&
+      url.searchParams.get("id") === `eq.${pickLine.id}`;
+    await page.route(isThisLinesRead, (route) => {
+      heldReads.push(() => route.continue());
+    });
     const second = await arrange(11);
     if (second.error) throw second.error;
     await dialog.getByLabel("משטחים מהיום:").fill("10");
@@ -747,6 +760,9 @@ test.describe("Backoffice — arrangement workspace", () => {
       .eq("id", pickLine.id)
       .single();
     expect(Number(stored.data!.pallets_picked)).toBe(12);
+    // Let the held re-reads through, so reopening reads what is true now.
+    await page.unroute(isThisLinesRead);
+    for (const release of heldReads.splice(0)) await release();
     await dialog.getByRole("button", { name: "ביטול" }).click();
     await expect(page.locator("dialog[open]")).toHaveCount(0);
     await row.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` }).click();
