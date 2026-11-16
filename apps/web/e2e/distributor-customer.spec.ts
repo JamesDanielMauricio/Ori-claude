@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { createClient } from "@supabase/supabase-js";
 
 import {
   createTestCompany,
   createTestProfile,
   deleteTestCompany,
   deleteTestUser,
+  moveTestProfileToCompany,
   runCleanup,
   signInTestUser,
 } from "@ori/domain/auth/testing";
@@ -264,21 +264,8 @@ test.describe("Backoffice — Customer Order Status", () => {
     cleanupFns.push(() => deleteTestCompany(otherCompany.id));
     // Cleanup runs last-in first-out: put the person back before the other
     // company is deleted (a company with a person cannot be).
-    // The service-role client the other e2e helpers use (bypasses RLS).
-    const service = createClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      { auth: { autoRefreshToken: false, persistSession: false } },
-    );
-    const moveTo = async (companyId: string) => {
-      const { error } = await service
-        .from("profiles")
-        .update({ company_id: companyId })
-        .eq("user_id", withPhone.userId);
-      if (error) throw error;
-    };
-    cleanupFns.push(() => moveTo(customerCompany.id));
-    await moveTo(otherCompany.id);
+    cleanupFns.push(() => moveTestProfileToCompany(withPhone.userId, customerCompany.id));
+    await moveTestProfileToCompany(withPhone.userId, otherCompany.id);
 
     await dialog.getByRole("button", { name: "שלח", exact: true }).click();
     // The refusal is a line inside the still-open window.

@@ -748,7 +748,14 @@
       "idx": 106,
       "version": "7",
       "when": 1793307600000,
-      "tag": "0106_whatsapp-routing-like-bubble",
+      "tag": "0106_whatsapp-schedule-calls-its-own-project",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1793394000000,
+      "tag": "0107_whatsapp-routing-like-bubble",
       "breakpoints": true
     }
   ]

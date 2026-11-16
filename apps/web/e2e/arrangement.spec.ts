@@ -787,24 +787,20 @@ test.describe("Backoffice — arrangement workspace", () => {
     // popup still believes 9, so 10 + 0 passes its own check — the server is
     // the one to refuse it, with the real floor (11).
     //
-    // The app's live updates would re-read the popup's line a moment after
-    // arrange(11) and switch אישור off (10 < the true floor 11) before the
-    // click below, so the refusal would never come from the server. The
-    // re-read of this one line is therefore held until the refusal is seen.
+    // Live updates re-read everything on screen when anything changes, so
+    // the popup would normally hear of the 11 within moments and switch
+    // אישור off by itself (CI, with real Realtime, did exactly that). The
+    // server's refusal is for when that news is late or lost, so the popup's
+    // re-read of this line is held until the refusal has been shown.
     const heldReads: Array<() => Promise<void>> = [];
-    let holdReads = true;
-    await page.route(
-      (url) =>
-        url.pathname.endsWith("/rest/v1/daily_pick_products") &&
-        url.searchParams.get("id") === `eq.${pickLine.id}`,
-      async (route) => {
-        if (holdReads && route.request().method() === "GET") {
-          heldReads.push(() => route.continue());
-        } else {
-          await route.continue();
-        }
-      },
-    );
+    let holding = true;
+    const isThisLinesRead = (url: URL) =>
+      url.pathname.endsWith("/rest/v1/daily_pick_products") &&
+      url.searchParams.get("id") === `eq.${pickLine.id}`;
+    await page.route(isThisLinesRead, async (route) => {
+      if (holding) heldReads.push(() => route.continue());
+      else await route.continue();
+    });
     const second = await arrange(11);
     if (second.error) throw second.error;
     await dialog.getByLabel("משטחים מהיום:").fill("10");
@@ -814,10 +810,6 @@ test.describe("Backoffice — arrangement workspace", () => {
     await expect(dialog.getByRole("alert")).toContainText("כבר סודרו 11 משטחים");
     await expect(dialog).toBeVisible();
 
-    // Let the held re-reads through; from here the popup shows the truth.
-    holdReads = false;
-    for (const release of heldReads) await release();
-
     // Nothing was written, and reopening shows what is true now.
     const stored = await adminClient
       .from("daily_pick_products")
@@ -825,6 +817,13 @@ test.describe("Backoffice — arrangement workspace", () => {
       .eq("id", pickLine.id)
       .single();
     expect(Number(stored.data!.pallets_picked)).toBe(12);
+    // Let the held re-reads through, then stop holding, so reopening reads
+    // what is true now. A held read can already be over by then — the page
+    // drops an older read when it starts a newer one — and there is nothing
+    // left to let through for that one, so its "already handled" is ignored.
+    holding = false;
+    for (const release of heldReads.splice(0)) await release().catch(() => {});
+    await page.unroute(isThisLinesRead);
     await dialog.getByRole("button", { name: "ביטול" }).click();
     await expect(page.locator("dialog[open]")).toHaveCount(0);
     await row.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` }).click();
