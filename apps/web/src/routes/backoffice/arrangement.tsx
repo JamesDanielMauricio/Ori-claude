@@ -655,8 +655,7 @@ export default function ArrangementPage() {
           onRemind={(customerId) => {
             const customer = view.customers.find((c) => c.customerId === customerId);
             if (!customer) return;
-            // A fresh window never starts with the last one's refusal.
-            reminderMutation.reset();
+            reminderMutation.openWindow();
             setReminderTarget({
               dailyOrderId: customer.dailyOrderId,
               customerId: customer.customerId,
@@ -666,7 +665,15 @@ export default function ArrangementPage() {
           remindDisabled={(customer) =>
             !dayView.isLive || customer.status === "submitted" || reminderMutation.isPending
           }
-          remindingId={reminderMutation.isPending ? (reminderTarget?.customerId ?? null) : null}
+          // From the send itself, not from the window: the window may have
+          // been closed while the send is still in flight.
+          remindingId={
+            reminderMutation.isPending
+              ? (view.customers.find(
+                  (c) => c.dailyOrderId === reminderMutation.variables?.dailyOrderId,
+                )?.customerId ?? null)
+              : null
+          }
           onArrange={arrange}
           onSave={saveAllocation}
           onDelete={(recordId) => deleteMutation.mutate(recordId)}
@@ -703,7 +710,7 @@ export default function ArrangementPage() {
       <OrderReminderDialog
         target={reminderTarget}
         onClose={() => {
-          reminderMutation.reset();
+          reminderMutation.closeWindow();
           setReminderTarget(null);
         }}
         sending={reminderMutation.isPending}

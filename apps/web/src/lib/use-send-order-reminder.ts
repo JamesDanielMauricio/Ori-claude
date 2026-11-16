@@ -1,9 +1,12 @@
 import { sendOrderReminderInputSchema, toSendOrderReminderRpcArgs } from "@ori/domain/customer";
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { useRef } from "react";
 
 import { useToast } from "@/components/ui/toast";
+import { errorMessage } from "@/lib/error-message";
 import { nudgeWhatsAppDispatch } from "@/lib/nudge-whatsapp-dispatch";
 import { optimisticUpdate } from "@/lib/optimistic-mutation";
+import { failureNeedsToast, shouldResetOnClose } from "@/lib/order-reminder";
 import type { DailyOrderForDay } from "@/lib/queries/oversight";
 import { createClient } from "@/lib/supabase/client";
 
@@ -13,11 +16,18 @@ import { createClient } from "@/lib/supabase/client";
 // `reminder_sent_at` is real, persisted state on the order row, so when the
 // caller passes the key of the day's orders it is patched optimistically,
 // like any other field; the invalidation afterwards is the source of truth.
+//
+// The hook also owns the window rules both screens share (see
+// order-reminder.ts): call `openWindow()` when the reminder window opens and
+// `closeWindow()` from its onClose. Closing while a send is in flight keeps
+// the screen attached to it, and a failure that lands after the window closed
+// is shown as a toast instead of being lost.
 export function useSendOrderReminder(options?: { ordersForDayQueryKey?: QueryKey }) {
   const supabase = createClient();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const ordersKey = options?.ordersForDayQueryKey;
+  const windowOpen = useRef(false);
 
   // Without a key there is nothing cached to patch: the placeholder key holds
   // no data, so the updater returns undefined and nothing is written.
@@ -30,7 +40,7 @@ export function useSendOrderReminder(options?: { ordersForDayQueryKey?: QueryKey
     ),
   );
 
-  return useMutation<
+  const mutation = useMutation<
     void,
     { message?: string },
     { dailyOrderId: string; recipientUserIds: string[] },
@@ -50,8 +60,29 @@ export function useSendOrderReminder(options?: { ordersForDayQueryKey?: QueryKey
       // nudge-whatsapp-dispatch.ts.
       nudgeWhatsAppDispatch(supabase);
     },
-    // Only the rollback: a refusal is shown by the caller inside the reminder
-    // window (OrderReminderDialog's `error`), not as a second message here.
-    onError: optimistic.onError,
+    // The rollback, plus a toast only when the window the refusal belongs to
+    // is already closed: while it is open the caller shows the refusal inside
+    // it (OrderReminderDialog's `error`), and one failure gets one message.
+    onError: (error, variables, context) => {
+      optimistic.onError(error, variables, context);
+      if (failureNeedsToast({ windowOpen: windowOpen.current })) {
+        showToast(`שליחת התזכורת נכשלה: ${errorMessage(error)}`, "error");
+      }
+    },
   });
+
+  return {
+    ...mutation,
+    // A fresh window never starts with the last one's refusal.
+    openWindow: () => {
+      windowOpen.current = true;
+      mutation.reset();
+    },
+    // Harmless to call twice (the dialog's native close event calls onClose
+    // again after Escape or the backdrop).
+    closeWindow: () => {
+      windowOpen.current = false;
+      if (shouldResetOnClose({ sending: mutation.isPending })) mutation.reset();
+    },
+  };
 }

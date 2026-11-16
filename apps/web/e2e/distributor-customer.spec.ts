@@ -293,6 +293,50 @@ test.describe("Backoffice — Customer Order Status", () => {
     expect(await reminderRows(adminClient, customerCompany.id)).toHaveLength(0);
   });
 
+  test("closing the window while a reminder is sending keeps the bell off, and a later failure is a toast", async ({
+    page,
+  }) => {
+    const { customerCompany, dialog } = await reminderWorld(page);
+
+    // Hold the send open so the window can be closed while it is in flight.
+    let releaseSend: (() => void) | undefined;
+    const sendHeld = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    let sends = 0;
+    await page.route("**/rest/v1/rpc/send_order_reminder", async (route) => {
+      sends += 1;
+      await sendHeld;
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "P0007",
+          message:
+            "INVALID_STATE: cannot send a reminder about an order that's already been submitted",
+          details: null,
+          hint: null,
+        }),
+      });
+    });
+
+    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
+    await expect.poll(() => sends).toBe(1);
+    await dialog.getByRole("button", { name: "ביטול" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+
+    // Closing did not detach the send: the bell stays off until the answer.
+    const bell = page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` });
+    await expect(bell).toBeDisabled();
+
+    releaseSend!();
+    await expect(
+      page.getByText("שליחת התזכורת נכשלה: הלקוח כבר שלח את ההזמנה, ואין צורך בתזכורת."),
+    ).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    expect(sends).toBe(1);
+  });
+
   test("filters customers by order status and counts orders sent", async ({ page }) => {
     const grower = await createTestGrowerWithProduct();
     cleanupFns.push(() => deleteTestGrowerWithProduct(grower));

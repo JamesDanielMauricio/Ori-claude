@@ -186,8 +186,7 @@ export default function DistributorAsCustomerPage() {
         editLabel={`ערוך את הזמנת ${customer.name}`}
         onRemind={() => {
           if (!order) return;
-          // A fresh window never starts with the last one's refusal.
-          reminderMutation.reset();
+          reminderMutation.openWindow();
           setReminderTarget({
             dailyOrderId: order.id,
             customerId: customer.id,
@@ -306,7 +305,7 @@ export default function DistributorAsCustomerPage() {
       <OrderReminderDialog
         target={reminderTarget}
         onClose={() => {
-          reminderMutation.reset();
+          reminderMutation.closeWindow();
           setReminderTarget(null);
         }}
         sending={reminderMutation.isPending}
@@ -314,7 +313,8 @@ export default function DistributorAsCustomerPage() {
         onSend={(recipientUserIds) => {
           if (!reminderTarget) return;
           // Closes only on success; a refusal leaves the window open with
-          // the mapped message in the error toast.
+          // the mapped message as a line inside it (a refusal that lands after
+          // the window was closed becomes a toast, in the hook).
           reminderMutation.mutate(
             { dailyOrderId: reminderTarget.dailyOrderId, recipientUserIds },
             { onSuccess: () => setReminderTarget(null) },

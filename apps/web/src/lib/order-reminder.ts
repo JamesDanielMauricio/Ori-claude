@@ -37,3 +37,18 @@ export function reminderPeople(
 export function initiallyTicked(people: ReminderPerson[]): Set<string> {
   return new Set(people.filter((person) => person.canReceive).map((person) => person.userId));
 }
+
+// What happens when the reminder window is closed while a send is still in
+// flight. Closing cannot cancel a send that has already left, so the screen
+// must stay attached to it: if it let go (TanStack's reset()), the bells would
+// switch back on at once and the same reminder could be sent twice.
+export function shouldResetOnClose({ sending }: { sending: boolean }): boolean {
+  return !sending;
+}
+
+// A refusal that arrives while the window is open is shown inside it, as a
+// line (never also as a toast: one failure, one message). Once the window is
+// closed that line is gone, so the failure needs a toast of its own.
+export function failureNeedsToast({ windowOpen }: { windowOpen: boolean }): boolean {
+  return !windowOpen;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { initiallyTicked, reminderPeople } from "./order-reminder";
+import { failureNeedsToast, initiallyTicked, reminderPeople, shouldResetOnClose } from "./order-reminder";
 
 const row = (user_id: string, display_name: string, phone_number: string | null) => ({
   user_id,
@@ -41,5 +41,17 @@ describe("initiallyTicked", () => {
   it("ticks exactly the reachable", () => {
     const people = reminderPeople([row("a", "א", "0501234567"), row("b", "ב", null), row("c", "ג", "12")]);
     expect([...initiallyTicked(people)]).toEqual(["a"]);
+  });
+});
+
+describe("the reminder window while a send is in flight", () => {
+  it("closing it detaches nothing that is still sending", () => {
+    expect(shouldResetOnClose({ sending: true })).toBe(false);
+    expect(shouldResetOnClose({ sending: false })).toBe(true);
+  });
+
+  it("a failure shows its own toast only when the window it belongs to is gone", () => {
+    expect(failureNeedsToast({ windowOpen: false })).toBe(true);
+    expect(failureNeedsToast({ windowOpen: true })).toBe(false);
   });
 });
