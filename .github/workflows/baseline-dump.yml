@@ -1,0 +1,124 @@
+# One-off: take a "photo" of production's database layout (schema only, no
+# rows) so it can become the first file of the new Supabase CLI migration
+# list (CI/CD playbook Step 5.1). Run it a second time just before the first
+# production deploy to prove production hasn't changed since (Step 5.2b).
+#
+# It only READS production: `supabase db dump` runs pg_dump, which never
+# writes. The result is pushed to its own branch, baseline-dump/run-<N>, for
+# Claude to pull — never to main or develop.
+#
+# Started by hand only (Actions → Baseline dump → Run workflow), and it waits
+# for James's approval, because it uses the Production environment.
+#
+# Delete this file once the baseline is recorded on production.
+
+name: Baseline dump
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+
+    # Security: the Production environment releases the production database
+    # password only to a run from main, and only after James clicks
+    # "Approve and deploy" (required reviewer). Without this line the job
+    # couldn't read the Production secrets at all; with it, nobody can start
+    # a production read from another branch or without his say-so.
+    environment: Production
+
+    # Security: the job's GitHub token may push a branch (to hand over the
+    # dump) and nothing else — no issues, PRs, releases or workflow edits.
+    # The ruleset still stops it pushing to main or develop.
+    permissions:
+      contents: write
+
+    env:
+      PROJECT_ID: ${{ secrets.PRODUCTION_PROJECT_ID }}
+      POOLER_HOST: ${{ secrets.PRODUCTION_POOLER_HOST }}
+      DB_PASSWORD: ${{ secrets.PRODUCTION_DB_PASSWORD }}
+      # Production's ref, written out on purpose: it's not a secret (it's in
+      # every API URL), and the guard below compares against it.
+      EXPECTED_PROJECT_REF: zvzqfjrxknxigddkwlir
+      DUMP_FILE: supabase/baseline-dump/prod-schema.sql
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Security: a missing secret fails here with its name, instead of
+      # half-working further down.
+      - name: Check the Production secrets are set
+        run: |
+          missing=""
+          [ -n "$PROJECT_ID" ]  || missing="$missing PRODUCTION_PROJECT_ID"
+          [ -n "$POOLER_HOST" ] || missing="$missing PRODUCTION_POOLER_HOST"
+          [ -n "$DB_PASSWORD" ] || missing="$missing PRODUCTION_DB_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing in the Production environment's secrets:$missing"
+            exit 1
+          fi
+
+      # Security: a mistyped or swapped secret must not point this at another
+      # project (e.g. dev), which would give a photo of the wrong database.
+      - name: Guard exact production project
+        run: |
+          if [ "$PROJECT_ID" != "$EXPECTED_PROJECT_REF" ]; then
+            echo "::error::PRODUCTION_PROJECT_ID is not the known production project. Refusing to run."
+            exit 1
+          fi
+
+      # Pinned, never "latest": the newest 2.x (the playbook's templates are
+      # written for v2; v3 changes what database commands target).
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.1
+
+      # The session pooler, not the direct host: direct database hosts are
+      # IPv6-only and GitHub runners can't reach them. A connection string
+      # needs the password percent-encoded (special characters like @ or #
+      # would break it), so encode it first.
+      - name: Dump production schema
+        run: |
+          # Security: GitHub hides the secret itself in logs, but not this
+          # encoded copy, so tell it to hide that too.
+          ENC_PW=$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["DB_PASSWORD"], safe=""))')
+          echo "::add-mask::$ENC_PW"
+          mkdir -p "$(dirname "$DUMP_FILE")"
+          supabase db dump \
+            --db-url "postgresql://postgres.${PROJECT_ID}:${ENC_PW}@${POOLER_HOST}:5432/postgres" \
+            -f "$DUMP_FILE"
+          if [ ! -s "$DUMP_FILE" ]; then
+            echo "::error::The dump came out empty."
+            exit 1
+          fi
+          echo "Lines: $(wc -l < "$DUMP_FILE")"
+          # Fingerprint without the comment lines, so two runs can be compared
+          # at a glance (same number = same schema).
+          echo "Fingerprint: $(grep -v '^--' "$DUMP_FILE" | sha256sum | cut -c1-16)"
+
+      # Security: the dump goes onto a PUBLIC branch. A schema dump holds no
+      # rows, but stop anyway if anything key-like slipped into a function
+      # body or default: the database password, a Supabase JWT, or an access
+      # token.
+      - name: Refuse to publish anything secret-looking
+        run: |
+          if grep -qF -- "$DB_PASSWORD" "$DUMP_FILE"; then
+            echo "::error::The dump contains the database password. Not publishing."; exit 1
+          fi
+          if grep -qE 'eyJhbGci|sbp_[A-Za-z0-9]{20}|sb_secret_' "$DUMP_FILE"; then
+            echo "::error::The dump contains a key-like string. Not publishing."
+            grep -nE 'eyJhbGci|sbp_[A-Za-z0-9]{20}|sb_secret_' "$DUMP_FILE" | cut -c1-12
+            exit 1
+          fi
+
+      - name: Push the dump to its own branch
+        run: |
+          BRANCH="baseline-dump/run-${GITHUB_RUN_NUMBER}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$DUMP_FILE"
+          git commit -m "chore(db): production schema dump, run ${GITHUB_RUN_NUMBER}"
+          git push origin "$BRANCH"
+          echo "Pushed to branch $BRANCH"
