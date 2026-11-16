@@ -786,6 +786,25 @@ test.describe("Backoffice — arrangement workspace", () => {
     // Someone else arranges two more pallets while the popup is open. The
     // popup still believes 9, so 10 + 0 passes its own check — the server is
     // the one to refuse it, with the real floor (11).
+    //
+    // The app's live updates would re-read the popup's line a moment after
+    // arrange(11) and switch אישור off (10 < the true floor 11) before the
+    // click below, so the refusal would never come from the server. The
+    // re-read of this one line is therefore held until the refusal is seen.
+    const heldReads: Array<() => Promise<void>> = [];
+    let holdReads = true;
+    await page.route(
+      (url) =>
+        url.pathname.endsWith("/rest/v1/daily_pick_products") &&
+        url.searchParams.get("id") === `eq.${pickLine.id}`,
+      async (route) => {
+        if (holdReads && route.request().method() === "GET") {
+          heldReads.push(() => route.continue());
+        } else {
+          await route.continue();
+        }
+      },
+    );
     const second = await arrange(11);
     if (second.error) throw second.error;
     await dialog.getByLabel("משטחים מהיום:").fill("10");
@@ -794,6 +813,10 @@ test.describe("Backoffice — arrangement workspace", () => {
     await confirm.click();
     await expect(dialog.getByRole("alert")).toContainText("כבר סודרו 11 משטחים");
     await expect(dialog).toBeVisible();
+
+    // Let the held re-reads through; from here the popup shows the truth.
+    holdReads = false;
+    for (const release of heldReads) await release();
 
     // Nothing was written, and reopening shows what is true now.
     const stored = await adminClient
