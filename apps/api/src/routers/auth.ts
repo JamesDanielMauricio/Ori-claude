@@ -6,6 +6,7 @@ import {
   listUserEmails,
   updateUserEmail,
 } from "@ori/domain/auth";
+import { emailSchema } from "@ori/shared/email";
 import { userRoleSchema } from "@ori/shared/roles";
 import { z } from "zod";
 
@@ -109,7 +110,7 @@ export const authRouter = router({
   // service-role call in updateUserEmail runs, because that key bypasses
   // every access rule.
   updateUserEmail: backofficeProcedure
-    .input(z.object({ targetUserId: z.string().uuid(), email: z.string().trim().email() }))
+    .input(z.object({ targetUserId: z.string().uuid(), email: emailSchema }))
     .mutation(async ({ input }) => {
       try {
         const { email } = await updateUserEmail({

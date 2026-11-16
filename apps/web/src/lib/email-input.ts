@@ -1,3 +1,5 @@
+import { isValidEmail } from "@ori/shared/email";
+
 // Helpers for the email box on the Users screen. Login addresses are matched
 // without regard to case or surrounding spaces, so every comparison and every
 // value sent to the server goes through the same normalising step.
@@ -6,11 +8,10 @@ export function normalizeEmailInput(value: string): string {
   return value.trim().toLowerCase();
 }
 
-// Deliberately loose: something, an @, something, a dot, something. The
-// server (zod + Supabase) has the final say; this only catches obvious typos
-// before anything is saved.
+// The very rule the API applies (shared, not a second copy), so an address
+// that passes here is never refused by the server with a raw validation dump.
 export function isEmailShaped(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmailInput(value));
+  return isValidEmail(normalizeEmailInput(value));
 }
 
 // The address to send, or null when typing changed nothing that matters

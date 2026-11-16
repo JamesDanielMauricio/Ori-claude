@@ -38,4 +38,13 @@ describe("email input", () => {
     expect(isEmailShaped("")).toBe(false);
     expect(isEmailShaped(" a@b.co ")).toBe(true);
   });
+
+  it("refuses what the API's email rule refuses, so the box and the server cannot disagree", () => {
+    // Typing with the Hebrew keyboard layout gives non-ASCII letters.
+    expect(isEmailShaped("שגשד@עצשןך.בםצ")).toBe(false);
+    // A one-letter top-level domain.
+    expect(isEmailShaped("a@b.c")).toBe(false);
+    expect(isEmailShaped("name@example.co.il")).toBe(true);
+    expect(planEmailChange("a@b.co", "שגשד@עצשןך.בםצ")).toEqual({ kind: "invalid" });
+  });
 });
