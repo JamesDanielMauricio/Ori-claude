@@ -1,6 +1,6 @@
 # WhatsApp routing like Bubble — design
 
-Status: draft for James's approval (2026-11-16). Approach A chosen by James.
+Status: approved by James (2026-11-16). Approach A chosen by James.
 
 ## 1. Why
 

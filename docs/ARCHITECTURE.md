@@ -580,10 +580,12 @@ transaction has already committed. Three things were the explicit point of this 
   comparison.
 - **The business logic lives in Postgres, not in the Edge Function.** `resolve_outbox_dispatch`
   and `substitute_template_placeholders` (`packages/db/migrations/0024`) do the actual work — which
-  send targets a `notification_outbox` row resolves to (the company's WhatsApp group if
+  send targets a `notification_outbox` row resolves to (by default the company's WhatsApp group if
   `whatsapp_group_id` is set, otherwise one target per individual user with a `phone_number` on
   file, 972-prefixed with the leading 0 stripped, per `close-arrangement-phase-4-terminal.md`
-  actions 7/8) and the per-recipient `%TOKEN%` substitution. Since migration 0102 (2026-11-13) the
+  actions 7/8; since migration 0106 each message type has its own rule, named by `outbox_routing`:
+  the pick reminder goes to the group and each person, the shop-open message to each person only,
+  the pick update to the grower's group only) and the per-recipient `%TOKEN%` substitution. Since migration 0102 (2026-11-13) the
   text itself is Bubble's: the eleven templates are Bubble's `main alert` texts word for word, and
   `compose_outbox_message` fills them the way Bubble's live workflows do — the day as
   "<first letter of its Hebrew name> dd.mm.yy", Bubble's three order-detail layouts, the sender's
@@ -904,7 +906,9 @@ authenticated caller enqueue an arbitrary `template_key`/payload addressed to ba
 
 - **id 3** — `update_pick_product_pallets` enqueues `pick_updated`, but only when the GROWER
   themselves made the edit (`current_role() = 'grower'`), never on the backoffice-on-behalf-of path
-  (distributor-grower) — notifying backoffice about backoffice's own action would be pointless.
+  (distributor-grower) — notifying the grower about backoffice's own action would be pointless.
+  Since migration 0106 this message is addressed to the grower's own company (group only), not
+  to the back office.
 - **id 6** — `submit_order` enqueues `order_submitted` the same way: only on a direct customer
   submission, never when backoffice submits on a customer's behalf. Opposite direction from id 5.
 
