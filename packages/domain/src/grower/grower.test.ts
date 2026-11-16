@@ -920,7 +920,7 @@ describe("grower picking module", () => {
 
     // A quantity change: one row, to the grower's own company and nobody else.
     expect((await save(growerClient, 12, null)).error).toBeNull();
-    let rows = await pickUpdatedRows();
+    const rows = await pickUpdatedRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ recipientType: "grower", recipientCompanyId: grower.companyId });
 

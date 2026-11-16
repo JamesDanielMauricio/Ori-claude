@@ -135,7 +135,9 @@ comment on function public.resolve_outbox_dispatch(uuid) is
 -- saving in a loop: past the cap the save still works, it just queues no
 -- further message until the window moves on. security definer because the
 -- outbox has no insert policy for ordinary users; the revoke below keeps it
--- callable only from other security definer functions.
+-- out of reach of public, anon and signed-in users. It is called by the
+-- definer functions that queue messages, and the server's own service-role
+-- key can call it too.
 create or replace function public.enqueue_company_notification(
   p_trading_day_id uuid,
   p_recipient_type public.notification_recipient_type,
@@ -166,11 +168,13 @@ end;
 $$;
 
 comment on function public.enqueue_company_notification(uuid, public.notification_recipient_type, uuid, text, jsonb, uuid[]) is
-  'Internal (migration 0106). Queues one notification_outbox row for one named company, unless 5 rows of the same message type for that company and trading day were already queued in the last 10 minutes. p_recipient_user_ids, when given, lists the people it goes to privately (0104). Callable only from other security definer functions.';
+  'Internal (migration 0106). Queues one notification_outbox row for one named company, unless 5 rows of the same message type for that company and trading day were already queued in the last 10 minutes. p_recipient_user_ids, when given, lists the people it goes to privately (0104). Called by the security definer functions that queue messages and by the service role; not callable by public, anon or signed-in users.';
 
 -- SECURITY: the same lock-down as enqueue_backoffice_notification (0055). This
--- revoke ALLOWS only the security definer functions that call it (they run as
--- postgres, whose own grant this does not touch). It PROTECTS AGAINST a
+-- revoke ALLOWS the security definer functions that call it (they run as
+-- postgres, whose own grant this does not touch) and leaves the server's
+-- service-role key able to call it (Supabase's default privileges; as for
+-- enqueue_backoffice_notification). It PROTECTS AGAINST a
 -- customer, a grower or a self-registered account calling it directly through
 -- the API to queue WhatsApp messages of their own wording to any company, as
 -- many times as they like, which whatsapp-dispatch would then send from the
@@ -181,6 +185,12 @@ revoke execute on function public.enqueue_company_notification(uuid, public.noti
 -- 4. save_pick_lines: 0076's body, changed only where the pick_updated alert is
 -- queued — now for the grower's own company instead of the office. Signature,
 -- security definer, search_path, SECURITY checks and grants are unchanged.
+--
+-- SECURITY: security definer ALLOWS the function to write the pick lines and
+-- queue the message as the owner, which a grower's own row access cannot do.
+-- It PROTECTS AGAINST misuse through the fail-closed role and ownership check
+-- at the top of the body (from 0076): only backoffice or this pick's own
+-- grower gets past it; everyone else, signed-out callers included, is refused.
 create or replace function public.save_pick_lines(
   p_daily_pick_id uuid,
   p_lines jsonb
@@ -329,6 +339,12 @@ comment on function public.save_pick_lines(uuid, jsonb) is
 
 -- 5. update_pick_product_pallets: 0076's body, changed only where the
 -- pick_updated alert is queued (the grower's own company, not the office).
+--
+-- SECURITY: security definer ALLOWS the function to write the pick line and
+-- queue the message as the owner, which a grower's own row access cannot do.
+-- It PROTECTS AGAINST misuse through the fail-closed role and ownership check
+-- at the top of the body (from 0076): only backoffice or this pick's own
+-- grower gets past it; everyone else, signed-out callers included, is refused.
 create or replace function public.update_pick_product_pallets(
   p_daily_pick_product_id uuid,
   p_pallets_picked numeric
