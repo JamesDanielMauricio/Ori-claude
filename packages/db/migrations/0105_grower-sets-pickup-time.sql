@@ -147,3 +147,12 @@ begin
   return v_pick;
 end;
 $$;
+
+-- 3. Two descriptions written by 0043 stopped being true with this migration,
+-- so they are rewritten here (this file is not applied anywhere yet; 0043
+-- itself is never edited).
+comment on column public.daily_picks.pickup_time is
+  'The day''s pickup time for this pick. The grower (or backoffice) may set it at any time until the pick is closed, with set_pick_pickup_time (migration 0105) — on a draft as well as on a sent pick. If nobody has set one, submit_pick records the grower company''s default_pickup_time when the pick is sent (migration 0043), and ending the day does the same for a pick that was never sent, so a later change to the default cannot rewrite this day. Sending a pick back to draft clears the time. Null only while a draft has no time chosen; the UI reads the live company default until then.';
+
+comment on function public.submit_pick(uuid) is
+  'The owning grower (or backoffice). Draft -> Submitted on a Daily Pick. Keeps the pickup time already set on the pick (set_pick_pickup_time, migration 0105); only when none is set does it record the grower company''s current default_pickup_time, so a later edit to the default cannot rewrite this day''s record. security definer: RLS grants growers no general write on daily_picks, so this function is the sole path, checking ownership and forward-only status itself. Raises 42501 for anyone but backoffice or this pick''s grower, and P0007 if the pick is not currently in draft.';

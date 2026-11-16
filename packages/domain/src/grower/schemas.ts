@@ -110,14 +110,14 @@ export function toSetPickPickupTimeRpcArgs(input: SetPickPickupTimeInput) {
 // for the full convention this mirrors — these are just the subset this
 // module's own functions (0015) actually raise.
 export const GROWER_ERROR_CODES = {
-  /** No row matched (a pick or pick-product line that doesn't exist). */
+  /** No row matched (a pick or pick-product line that doesn't exist; also set_pick_pickup_time on an unknown pick). */
   NOT_FOUND: "P0002",
-  /** current_role() <> 'backoffice', or a grower acting on a line that isn't theirs. */
+  /** current_role() <> 'backoffice', or a grower acting on a line that isn't theirs (also set_pick_pickup_time on another grower's pick). */
   FORBIDDEN: "42501",
-  /** update_pick_product_details, save_pick_lines or send_pick_reminder called against an already-closed pick. */
+  /** update_pick_product_details, save_pick_lines, set_pick_pickup_time or send_pick_reminder called against an already-closed pick. */
   INVALID_STATE: "P0007",
   /** save_pick_lines: pallets_picked + leftover_pallets combined below what's already committed in arrangement_records for that line. */
   CONFLICT: "P0006",
-  /** save_pick_lines: a negative or missing pallet or leftover count. */
+  /** save_pick_lines: a negative or missing pallet or leftover count; set_pick_pickup_time: a missing time. */
   INVALID_INPUT: "P0008",
 } as const;
