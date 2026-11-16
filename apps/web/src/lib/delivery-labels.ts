@@ -37,6 +37,7 @@ const TEMPLATE_LABELS: Record<string, string> = {
   pick_reminder: "תזכורת לקטיף",
   pick_updated: "מגדל עדכן קטיף",
   order_submitted: "לקוח שלח הזמנה",
+  order_submitted_copy: "העתק ללקוח ששלח הזמנה",
   stock_overbooking_reached: "מלאי — כל הנקטף הוזמן",
   stock_fully_exhausted: "מלאי — אזל כולל אוברבוקינג",
   shop_open: "החנות נפתחה",

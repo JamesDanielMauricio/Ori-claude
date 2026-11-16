@@ -312,6 +312,12 @@ describe("message content and phone numbers (0077)", () => {
       text: "שלום %FIRST_NAME%. \n%COMPANY% שלחו הזמנה על ידי %COMPANY_USER_FULL_NAME%.\nלהלן מצב ההזמנה הנוכחי שלהם:\n\n%ORDER_DETAILS%",
       link: `${ORI}/backoffice/distributor-customer`,
     }, // 6
+    // 0106: the customer's own private copy of main alert 6 — the same text,
+    // linked to the customer's own order screen.
+    order_submitted_copy: {
+      text: "שלום %FIRST_NAME%. \n%COMPANY% שלחו הזמנה על ידי %COMPANY_USER_FULL_NAME%.\nלהלן מצב ההזמנה הנוכחי שלהם:\n\n%ORDER_DETAILS%",
+      link: `${ORI}/customer/order`,
+    },
     close_arrangement_grower_transporter: {
       text: "היי, %NL%\nלהלן הסידור של %COMPANY% לתאריך %CURRENT_OPEN_BUSINESS_DAY%.  %NL%\n%ORDER_DETAILS% %NL%\nהמשטחים יהיו מוכנים לאיסוף ב %PICKUP_TIME%",
       link: null,
@@ -418,6 +424,44 @@ describe("message content and phone numbers (0077)", () => {
         `\n\n${ORI}/backoffice/distributor-customer`,
     );
   }, 60000);
+
+  it("order_submitted_copy lists the order like the office message", async () => {
+    const tag = randomUUID().slice(0, 8);
+    const customer = await createTestCompany(`לקוח בדיקה ${tag}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(customer.id));
+    const [family] = await db.insert(productFamilies).values({ name: `עגבניה ${tag}` }).returning();
+    cleanupFns.push(async () => {
+      await db.delete(productFamilies).where(eq(productFamilies.id, family!.id));
+    });
+    const [variety] = await db.insert(productVarieties).values({ familyId: family!.id, name: "אשכולות", sizes: "XL" }).returning();
+    cleanupFns.push(async () => {
+      await db.delete(productVarieties).where(eq(productVarieties.id, variety!.id));
+    });
+    const [order] = await db.insert(dailyOrders).values({ tradingDayId: dayId, customerCompanyId: customer.id }).returning();
+    cleanupFns.push(async () => {
+      await db.delete(dailyOrders).where(eq(dailyOrders.id, order!.id));
+    });
+    await db.insert(dailyOrderProducts).values({ dailyOrderId: order!.id, productVarietyId: variety!.id, palletsOrdered: "2" });
+
+    const recipient = await officeRecipient("people");
+    const payload = { companyName: "שוק הבדיקה", dailyOrderId: order!.id, submittedByName: "דודו אטיאס" };
+    const officeId = await queued("order_submitted", recipient, payload);
+    const copyId = await queued("order_submitted_copy", recipient, payload);
+    const office = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: officeId });
+    const copy = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: copyId });
+    expect(office.error).toBeNull();
+    expect(copy.error).toBeNull();
+
+    const details = `${family!.name} אשכולות XL  |  כמות: 2 \n`;
+    expect(office.data![0]!.message).toContain(details);
+    expect(copy.data![0]!.message).toContain(details);
+    // Same text, different link: the copy opens the customer's own order screen.
+    expect(copy.data![0]!.message).toBe(
+      office.data![0]!.message.replace("/backoffice/distributor-customer", "/customer/order"),
+    );
+    expect(copy.data![0]!.message.endsWith("\n\nhttps://ori-claude-web.vercel.app/customer/order")).toBe(true);
+  }, 60000);
+
 
   it("an order message queued before 0102 (no order on it) still goes out: named, without the lines", async () => {
     const id = await queued("order_submitted", await officeRecipient("people"), { companyName: "שוק הבדיקה" });
