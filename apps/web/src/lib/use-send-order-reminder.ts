@@ -33,7 +33,7 @@ export function useSendOrderReminder(options?: { ordersForDayQueryKey?: QueryKey
   // no data, so the updater returns undefined and nothing is written.
   const optimistic = optimisticUpdate<
     DailyOrderForDay[],
-    { dailyOrderId: string; recipientUserIds: string[] }
+    { dailyOrderId: string; recipientUserIds?: string[] }
   >(queryClient, ordersKey ?? ["order-reminder", "no-orders-cache"], (orders, { dailyOrderId }) =>
     orders?.map((order) =>
       order.id === dailyOrderId ? { ...order, reminder_sent_at: new Date().toISOString() } : order,
@@ -43,7 +43,9 @@ export function useSendOrderReminder(options?: { ordersForDayQueryKey?: QueryKey
   const mutation = useMutation<
     void,
     { message?: string },
-    { dailyOrderId: string; recipientUserIds: string[] },
+    // No list = the server's routing rule decides (the group, else everyone):
+    // what the סידור board's bell sends.
+    { dailyOrderId: string; recipientUserIds?: string[] },
     { previous: DailyOrderForDay[] | undefined }
   >({
     mutationFn: async ({ dailyOrderId, recipientUserIds }) => {

@@ -36,8 +36,9 @@ import { GrowerSupplyColumn } from "@/components/arrangement/grower-supply-colum
 import { PriceEditDialog } from "@/components/arrangement/price-edit-dialog";
 import { ProductStrip } from "@/components/arrangement/product-strip";
 import { ArrangementRecordsSection } from "@/components/arrangement/records-table";
-import { OrderReminderDialog } from "@/components/reference-data/order-reminder-dialog";
+import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
@@ -92,12 +93,14 @@ export default function ArrangementPage() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
 
-  // The bell on a customer card opens the reminder window (who gets it); "שלח"
-  // there runs this mutation with the ticked people. No cache key: the board
-  // does not display reminder state, so there is nothing to patch.
+  // The bell on a customer card asks "send a reminder to <customer>?"; "שלח"
+  // runs this mutation. This follows Bubble's board: no choosing people — the
+  // server sends to the customer's WhatsApp group, or to every person when
+  // there is no group (a send with no list). The openWindow/closeWindow pair
+  // is deliberately not used, so a failure always shows as a toast. No cache
+  // key: the board does not display reminder state, so there is nothing to patch.
   const [reminderTarget, setReminderTarget] = useState<{
     dailyOrderId: string;
-    customerId: string;
     customerName: string;
   } | null>(null);
   const reminderMutation = useSendOrderReminder();
@@ -655,10 +658,8 @@ export default function ArrangementPage() {
           onRemind={(customerId) => {
             const customer = view.customers.find((c) => c.customerId === customerId);
             if (!customer) return;
-            reminderMutation.openWindow();
             setReminderTarget({
               dailyOrderId: customer.dailyOrderId,
-              customerId: customer.customerId,
               customerName: customer.customerName,
             });
           }}
@@ -707,23 +708,33 @@ export default function ArrangementPage() {
         readOnly={!dayView.isLive}
       />
 
-      <OrderReminderDialog
-        target={reminderTarget}
-        onClose={() => {
-          reminderMutation.closeWindow();
-          setReminderTarget(null);
-        }}
-        sending={reminderMutation.isPending}
-        error={reminderMutation.error ? errorMessage(reminderMutation.error) : null}
-        onSend={(recipientUserIds) => {
-          if (!reminderTarget) return;
-          // Closes only on success; a refusal stays inside the window.
-          reminderMutation.mutate(
-            { dailyOrderId: reminderTarget.dailyOrderId, recipientUserIds },
-            { onSuccess: () => setReminderTarget(null) },
-          );
-        }}
-      />
+      {/* Asked first, because a reminder is a real WhatsApp message to the
+          customer and cannot be taken back. */}
+      <Dialog
+        open={reminderTarget !== null}
+        onClose={() => setReminderTarget(null)}
+        title="שליחת תזכורת"
+      >
+        <p className="mb-4 text-sm">
+          {`לשלוח ל${reminderTarget?.customerName ?? ""} תזכורת לשלוח הזמנה?`}
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setReminderTarget(null)}>
+            ביטול
+          </Button>
+          <Button
+            onClick={() => {
+              if (!reminderTarget) return;
+              // Closes at once; the bell's spinner shows the send, and the
+              // result (sent or refused) arrives as a toast.
+              reminderMutation.mutate({ dailyOrderId: reminderTarget.dailyOrderId });
+              setReminderTarget(null);
+            }}
+          >
+            שלח
+          </Button>
+        </div>
+      </Dialog>
 
       <CustomerOrdersDialog
         tradingDayId={boardDay.id}
