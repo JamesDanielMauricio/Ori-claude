@@ -7,7 +7,7 @@ import {
   FamilyGroupedLines,
   type FamilyGroupedRow,
 } from "@/components/reference-data/family-grouped-lines";
-import { OrderReminderDialog } from "@/components/reference-data/order-reminder-dialog";
+import { OrderReminderConfirmDialog } from "@/components/reference-data/order-reminder-confirm-dialog";
 import { OversightToolbar } from "@/components/reference-data/oversight-toolbar";
 import { TwoColumnRowList } from "@/components/reference-data/two-column-row-list";
 import { StatusPill } from "@/components/ui/card";
@@ -15,7 +15,6 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
-import { errorMessage } from "@/lib/error-message";
 import { groupLinesByFamily } from "@/lib/family-grouping";
 import {
   CUSTOMER_FILTER_OPTIONS,
@@ -129,13 +128,14 @@ export default function DistributorAsCustomerPage() {
     return total === 0 ? null : { label: "הזמנות הוזנו", done, total };
   }, [dayId, dayView.day?.phase, customersQuery.data, orderByCustomerId]);
 
-  // The bell opens the reminder window (who gets it); "שלח" there runs this
-  // mutation with the ticked people. `variables` tells each row's bell whether
-  // it is the one currently sending. The optimistic `reminder_sent_at` patch
-  // and the toasts live in the hook, shared with other screens.
+  // The bell asks "send <customer> a reminder?", and "שלח" there runs this
+  // mutation with no list of people, so the server sends to the customer's
+  // WhatsApp group, otherwise to each person with a usable phone — the same
+  // as the סידור board (James, 2026-11-17). `variables` tells each row's bell
+  // whether it is the one currently sending. The optimistic `reminder_sent_at`
+  // patch and the toasts live in the hook, shared with other screens.
   const [reminderTarget, setReminderTarget] = useState<{
     dailyOrderId: string;
-    customerId: string;
     customerName: string;
   } | null>(null);
   const reminderMutation = useSendOrderReminder({ ordersForDayQueryKey });
@@ -186,12 +186,7 @@ export default function DistributorAsCustomerPage() {
         editLabel={`ערוך את הזמנת ${customer.name}`}
         onRemind={() => {
           if (!order) return;
-          reminderMutation.openWindow();
-          setReminderTarget({
-            dailyOrderId: order.id,
-            customerId: customer.id,
-            customerName: customer.name,
-          });
+          setReminderTarget({ dailyOrderId: order.id, customerName: customer.name });
         }}
         remindLabel={`שלח תזכורת ל${customer.name}`}
         remindDisabled={
@@ -302,24 +297,11 @@ export default function DistributorAsCustomerPage() {
         <TwoColumnRowList rows={rows} />
       )}
 
-      <OrderReminderDialog
+      {/* The bell's spinner shows the send, and the result arrives as a toast. */}
+      <OrderReminderConfirmDialog
         target={reminderTarget}
-        onClose={() => {
-          reminderMutation.closeWindow();
-          setReminderTarget(null);
-        }}
-        sending={reminderMutation.isPending}
-        error={reminderMutation.error ? errorMessage(reminderMutation.error) : null}
-        onSend={(recipientUserIds) => {
-          if (!reminderTarget) return;
-          // Closes only on success; a refusal leaves the window open with
-          // the mapped message as a line inside it (a refusal that lands after
-          // the window was closed becomes a toast, in the hook).
-          reminderMutation.mutate(
-            { dailyOrderId: reminderTarget.dailyOrderId, recipientUserIds },
-            { onSuccess: () => setReminderTarget(null) },
-          );
-        }}
+        onClose={() => setReminderTarget(null)}
+        onConfirm={(dailyOrderId) => reminderMutation.mutate({ dailyOrderId })}
       />
 
       <CustomerOrdersDialog
