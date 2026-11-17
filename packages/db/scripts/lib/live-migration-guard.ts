@@ -1,15 +1,21 @@
 // Decides whether the migrate-live job (.github/workflows/migrate-live.yml) may
-// run `drizzle-kit migrate` against the LIVE Supabase project, and which
-// migration files that run will apply. Pure: no database, no files — the
-// script check-live-migration-log.ts feeds it the journal and live's log.
+// run Drizzle's migrator against the LIVE Supabase project, and which
+// migration files that run will apply. Pure: no database, no files —
+// migrate-live.ts (next to this file) feeds it the journal, this checkout's
+// file hashes and live's log.
 //
 // How Drizzle picks what to run (drizzle-orm's migrator): it reads only the
 // LAST row of drizzle.__drizzle_migrations, by created_at, and runs every
-// journal entry whose `when` is later. Two consequences this guards against:
+// journal entry whose `when` is later. It tells files apart by `when` alone.
+// The consequences this guards against:
 // - a log that is behind the database (live's stopped at 0033 because 0034+
 //   were pasted by hand) makes it re-run files on real data;
 // - a file whose `when` is earlier than the last logged one is skipped
-//   forever, without a word (two branches merged out of order).
+//   forever, without a word (two branches merged out of order);
+// - two files with the same `when`: only one ever runs;
+// - live having run a file this checkout does not have at that `when` (a
+//   reverted pull request, or a renumbered or edited file): a new file
+//   that reuses the `when` would be taken as already run.
 
 export const LIVE_PROJECT_REF = "zvzqfjrxknxigddkwlir";
 
@@ -19,6 +25,10 @@ export const LIVE_PROJECT_REF = "zvzqfjrxknxigddkwlir";
 export const BACKFILL_FLOOR_WHEN = 1793307600000;
 
 export type JournalEntry = { idx: number; when: number; tag: string };
+
+// One row of live's drizzle.__drizzle_migrations: the file's sha256 as Drizzle
+// computed it, and its journal `when` (the created_at column).
+export type LoggedRow = { hash: string; when: number };
 
 export type GuardResult = { ok: true; pending: JournalEntry[] } | { ok: false; reason: string };
 
@@ -50,15 +60,46 @@ export function liveUrlProblem(databaseUrl: string | undefined): string | null {
   return null;
 }
 
+// What is wrong with the journal itself, one line per problem: entries must be
+// numbered one after another, with distinct tags, and each `when` later than
+// the one before. Also run on the real journal by journal-integrity.test.ts,
+// so a pull request that breaks this fails its checks before it can merge.
+export function journalProblems(journal: JournalEntry[]): string[] {
+  const problems: string[] = [];
+  const seenTags = new Set<string>();
+  journal.forEach((entry, i) => {
+    if (seenTags.has(entry.tag)) problems.push(`${entry.tag} appears more than once.`);
+    seenTags.add(entry.tag);
+    const before = journal[i - 1];
+    if (before === undefined) return;
+    if (entry.idx !== before.idx + 1) problems.push(`${entry.tag} has idx ${entry.idx}; the entry before it has idx ${before.idx}.`);
+    if (!(entry.when > before.when)) {
+      problems.push(`${entry.tag}'s "when" (${entry.when}) is not later than ${before.tag}'s (${before.when}).`);
+    }
+  });
+  return problems;
+}
+
 export function checkLiveMigrationLog(input: {
   databaseUrl: string | undefined;
   journal: JournalEntry[];
-  loggedWhens: number[];
+  // tag → sha256 of that migration file, computed the way Drizzle does.
+  fileHashes: Record<string, string>;
+  logged: LoggedRow[];
 }): GuardResult {
   const urlProblem = liveUrlProblem(input.databaseUrl);
   if (urlProblem) return { ok: false, reason: urlProblem };
 
-  const lastLogged = input.loggedWhens.length > 0 ? Math.max(...input.loggedWhens) : Number.NEGATIVE_INFINITY;
+  const broken = journalProblems(input.journal);
+  if (broken.length > 0) {
+    return {
+      ok: false,
+      reason: `The migration journal (meta/_journal.json) is out of order, so Drizzle would skip a file without a word: ${broken.join(" ")} Nothing was run. Fix it in a new pull request: each new file's "when" is the time it was written.`,
+    };
+  }
+
+  const loggedWhens = input.logged.map((row) => row.when);
+  const lastLogged = loggedWhens.length > 0 ? Math.max(...loggedWhens) : Number.NEGATIVE_INFINITY;
   if (lastLogged < BACKFILL_FLOOR_WHEN) {
     return {
       ok: false,
@@ -67,7 +108,27 @@ export function checkLiveMigrationLog(input: {
     };
   }
 
-  const logged = new Set(input.loggedWhens);
+  // Every row this job wrote (all of them above the floor) must be a file of
+  // this checkout, byte for byte: same `when`, same hash. Rows at or below the
+  // floor came from the one-time backfill and carry dev's hashes, which differ
+  // from this checkout's (line endings), so only their `when` is compared.
+  const byWhen = new Map(input.journal.map((entry) => [entry.when, entry]));
+  const foreign = input.logged
+    .filter((row) => row.when > BACKFILL_FLOOR_WHEN)
+    .flatMap((row) => {
+      const entry = byWhen.get(row.when);
+      if (entry === undefined) return [`live ran a file at "when" ${row.when}, which this checkout's journal does not have`];
+      if (input.fileHashes[entry.tag] !== row.hash) return [`live ran a different file at "when" ${row.when} than this checkout's ${entry.tag}`];
+      return [];
+    });
+  if (foreign.length > 0) {
+    return {
+      ok: false,
+      reason: `${foreign.join("; ")}. Nothing was run. This happens after a migration's pull request is reverted (reverting does not undo a database change), or when a file that already ran on live is renumbered or edited. Ask Claude for a new migration file that puts it right.`,
+    };
+  }
+
+  const logged = new Set(loggedWhens);
   const skipped = input.journal.filter((entry) => entry.when <= lastLogged && !logged.has(entry.when));
   if (skipped.length > 0) {
     return {

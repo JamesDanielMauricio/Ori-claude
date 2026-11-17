@@ -108,6 +108,34 @@ check; never use it for this.)
 
 File layout inside `scripts/`, the test cases' shape, the doc's wording.
 
+## Revised after the final review (2026-11-17)
+
+The guard script and `pnpm db:migrate` became **one script,
+`packages/db/scripts/migrate-live.ts`** (`pnpm --filter @ori/db db:migrate-live`):
+
+- **One connection, encrypted:** `ssl: "require"`. postgres.js does not encrypt
+  unless told to.
+- **Drizzle's own migrator**, the same function `drizzle-kit migrate` calls, so
+  the run is still one transaction.
+- **Errors print only code, message, table, column and constraint.** The
+  `detail`, `where` and `hint` fields can quote live rows into the public log.
+  Notices are dropped.
+- **It reads the log again afterwards:** green means every file was recorded.
+- **The entry point always runs its checks.** It no longer asks "was I started
+  directly?", a check that could answer wrong and pass silently.
+
+The guard also refuses on:
+
+- **A journal out of order:** `when`s that are not strictly increasing, an idx
+  gap, or a repeated tag. The same check runs on the real journal in CI.
+- **A row live logged above the 0106 floor that this checkout does not have**,
+  at that `when` with that hash. That means a reverted pull request, or a
+  renumbered or edited file.
+
+New files take the current time as their `when`. The doc now asks for a
+one-time check that Deployment Checks hold `ori-claude-web.vercel.app`; Vercel's
+docs speak of custom domains.
+
 ## Open
 
 - Whether Deployment Checks are available on his Vercel plan. He looks at the
