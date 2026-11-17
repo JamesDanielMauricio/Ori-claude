@@ -281,6 +281,22 @@ test.describe("Backoffice — Customer Order Status", () => {
     expect(rows[0]!.recipient_user_ids).toBeNull();
   });
 
+  test("a quick double Enter on שלח sends one reminder", async ({ page }) => {
+    const { bell } = await reminderWorld(page);
+    const bodies = reminderRequests(page);
+
+    // The keyboard twin of the double click: the closing box ignores the
+    // mouse, but not a key, and שלח keeps the focus while the box fades out.
+    await bell.click();
+    await page.locator("dialog[open]").getByRole("button", { name: "שלח", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("התזכורת נשלחה.").first()).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+
+    expect(bodies).toHaveLength(1);
+  });
+
   test("a send in flight keeps the bell off, and a later refusal is a toast", async ({ page }) => {
     const { bell } = await reminderWorld(page);
 
