@@ -207,11 +207,22 @@ function GrowerRow({
             </span>
             {/* Left in RTL flow: "51 נקטף" is a Hebrew phrase, and forcing
                 it LTR put the numeral on the far side of the word it
-                counts. */}
+                counts.
+
+                Each piece is a <span> of its own holding one string, for
+                Chrome's "Translate this page". The translator swaps every
+                bit of text on the page for its own <font> tags, while React
+                still points at the text it wrote. Removing a bare piece of
+                text then fails and crashes the screen — "· N פנוי" going
+                away as an over-stock arrangement is tried was one staff hit.
+                A whole <span> is something the translator leaves in place,
+                so React can always add or remove it, and a <span> holding a
+                single string gets its new text written in whole, so a
+                translated page still shows the new numbers. */}
             <span className="mt-0.5 block text-xs text-ink-subtle">
-              {formatPallets(grower.picked)} נקטף
-              {grower.leftover > 0 && ` + ${formatPallets(grower.leftover)} עודף`}
-              {free > 0 && ` · ${formatPallets(free)} פנוי`}
+              <span>{`${formatPallets(grower.picked)} נקטף`}</span>
+              {grower.leftover > 0 && <span>{` + ${formatPallets(grower.leftover)} עודף`}</span>}
+              {free > 0 && <span>{` · ${formatPallets(free)} פנוי`}</span>}
             </span>
           </span>
           {holdsSelection && (
