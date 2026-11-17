@@ -7,7 +7,15 @@ import { OrderReminderConfirmDialog } from "./order-reminder-confirm-dialog";
 // this node test environment) has no notion of. Stand in a plain element that
 // keeps what matters here: whether it is open, the title and the content.
 vi.mock("@/components/ui/dialog", () => ({
-  Dialog: ({ open, title, children }: { open: boolean; title: string; children: React.ReactNode }) => (
+  Dialog: ({
+    open,
+    title,
+    children,
+  }: {
+    open: boolean;
+    title: string;
+    children: React.ReactNode;
+  }) => (
     <section data-open={String(open)}>
       <h2>{title}</h2>
       {children}
@@ -17,7 +25,11 @@ vi.mock("@/components/ui/dialog", () => ({
 
 function render(target: { dailyOrderId: string; customerName: string } | null) {
   return renderToStaticMarkup(
-    <OrderReminderConfirmDialog target={target} onClose={() => undefined} onConfirm={() => undefined} />,
+    <OrderReminderConfirmDialog
+      target={target}
+      onClose={() => undefined}
+      onConfirm={() => undefined}
+    />,
   );
 }
 

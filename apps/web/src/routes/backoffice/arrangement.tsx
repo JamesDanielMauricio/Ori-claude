@@ -95,9 +95,9 @@ export default function ArrangementPage() {
   // The bell on a customer card asks "send a reminder to <customer>?"; "שלח"
   // runs this mutation. This follows Bubble's board: no choosing people — the
   // server sends to the customer's WhatsApp group, or to every person when
-  // there is no group (a send with no list). The openWindow/closeWindow pair
-  // is deliberately not used, so a failure always shows as a toast. No cache
-  // key: the board does not display reminder state, so there is nothing to patch.
+  // there is no group (a send with no list). A failure shows as a toast. No
+  // cache key: the board does not display reminder state, so there is nothing
+  // to patch.
   const [reminderTarget, setReminderTarget] = useState<{
     dailyOrderId: string;
     customerName: string;
