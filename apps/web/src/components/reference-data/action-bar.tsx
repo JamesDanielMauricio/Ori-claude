@@ -94,7 +94,17 @@ export function ActionBar({
             className="animate-spin-loop h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent"
           />
         )}
-        {saving ? "שומר…" : "שמור"}
+        {/* The word is a <span> of its own, for Chrome's "Translate this
+            page". The translator swaps every bit of text on the page for
+            its own <font> tags, while React still points at the text it
+            wrote. As bare text, "שמור" was what the spinner above had to be
+            put in front of — text no longer on the page — so pressing save
+            crashed a translated screen, even though the save itself still
+            went through. A whole <span> is something the translator leaves
+            in place, and one holding a single string gets "שומר…" written
+            in whole. See the grower card's count line
+            (grower-supply-column.tsx) for the longer story. */}
+        <span>{saving ? "שומר…" : "שמור"}</span>
       </Button>
       {/* Greyed out with nothing to discard. */}
       <Button type="button" variant="secondary" onClick={onDiscard} disabled={saving || !dirty}>
