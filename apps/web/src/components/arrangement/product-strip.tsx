@@ -136,23 +136,26 @@ export function ProductStrip({
           <p className="text-xs text-ink-muted">
             מסדר מ־<span className="font-semibold text-accent">{selected.grower.growerName}</span>
           </p>
+          {/* Every piece of text in this line is a tag of its own, for
+              Chrome's "Translate this page": the "· עודף" piece comes and
+              goes as the selection moves, and React can only add or remove
+              it safely between tags the translator leaves in place. See the
+              grower card's count line (grower-supply-column.tsx) for why a
+              bare piece of text crashes the screen. */}
           <p className="text-xs text-ink-muted">
-            נקטף{" "}
+            <span>{"נקטף "}</span>
             <span className="font-semibold text-ink">{formatPallets(selected.line.picked)}</span>
             {selected.line.leftover > 0 && (
-              <>
-                {" · "}
-                עודף{" "}
+              <span>
+                <span>{" · עודף "}</span>
                 <span className="font-semibold text-ink">
                   {formatPallets(selected.line.leftover)}
                 </span>
-              </>
+              </span>
             )}
-            {" · "}
-            חולק{" "}
+            <span>{" · חולק "}</span>
             <span className="font-semibold text-ink">{formatPallets(selected.line.allocated)}</span>
-            {" · "}
-            פנוי{" "}
+            <span>{" · פנוי "}</span>
             <span
               className={`font-semibold ${selected.line.remaining > 0 ? "text-accent" : "text-danger"}`}
             >
