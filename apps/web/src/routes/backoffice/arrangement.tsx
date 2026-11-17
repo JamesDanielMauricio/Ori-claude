@@ -36,9 +36,8 @@ import { GrowerSupplyColumn } from "@/components/arrangement/grower-supply-colum
 import { PriceEditDialog } from "@/components/arrangement/price-edit-dialog";
 import { ProductStrip } from "@/components/arrangement/product-strip";
 import { ArrangementRecordsSection } from "@/components/arrangement/records-table";
-import { Button } from "@/components/ui/button";
+import { OrderReminderConfirmDialog } from "@/components/reference-data/order-reminder-confirm-dialog";
 import { StatusPill } from "@/components/ui/card";
-import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
@@ -708,33 +707,12 @@ export default function ArrangementPage() {
         readOnly={!dayView.isLive}
       />
 
-      {/* Asked first, because a reminder is a real WhatsApp message to the
-          customer and cannot be taken back. */}
-      <Dialog
-        open={reminderTarget !== null}
+      {/* The bell's spinner shows the send, and the result arrives as a toast. */}
+      <OrderReminderConfirmDialog
+        target={reminderTarget}
         onClose={() => setReminderTarget(null)}
-        title="שליחת תזכורת"
-      >
-        <p className="mb-4 text-sm">
-          {`לשלוח ל${reminderTarget?.customerName ?? ""} תזכורת לשלוח הזמנה?`}
-        </p>
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setReminderTarget(null)}>
-            ביטול
-          </Button>
-          <Button
-            onClick={() => {
-              if (!reminderTarget) return;
-              // Closes at once; the bell's spinner shows the send, and the
-              // result (sent or refused) arrives as a toast.
-              reminderMutation.mutate({ dailyOrderId: reminderTarget.dailyOrderId });
-              setReminderTarget(null);
-            }}
-          >
-            שלח
-          </Button>
-        </div>
-      </Dialog>
+        onConfirm={(dailyOrderId) => reminderMutation.mutate({ dailyOrderId })}
+      />
 
       <CustomerOrdersDialog
         tradingDayId={boardDay.id}
