@@ -4,7 +4,9 @@ import {
   createWhatsAppRecoveryDelivery,
   deleteUser,
   listUserEmails,
+  updateUserEmail,
 } from "@ori/domain/auth";
+import { emailSchema } from "@ori/shared/email";
 import { userRoleSchema } from "@ori/shared/roles";
 import { z } from "zod";
 
@@ -100,6 +102,26 @@ export const authRouter = router({
       throw toTRPCError(error);
     }
   }),
+
+  // Changes a user's login email. Allows: a signed-in backoffice user only.
+  // Protects against: anyone else (a grower, a customer, a signed-out caller)
+  // changing who can log in as whom — taking over an account by pointing its
+  // email at themselves. `backofficeProcedure` rejects them BEFORE the
+  // service-role call in updateUserEmail runs, because that key bypasses
+  // every access rule.
+  updateUserEmail: backofficeProcedure
+    .input(z.object({ targetUserId: z.string().uuid(), email: emailSchema }))
+    .mutation(async ({ input }) => {
+      try {
+        const { email } = await updateUserEmail({
+          targetUserId: input.targetUserId,
+          email: input.email,
+        });
+        return { ok: true as const, email };
+      } catch (error) {
+        throw toTRPCError(error);
+      }
+    }),
 
   // The Users screen's delete action — needs the service-role Admin API to
   // remove the `auth.users` identity itself, which RLS can't reach (see

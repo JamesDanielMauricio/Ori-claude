@@ -81,6 +81,32 @@ function pickSaveRefusal(code: unknown, message: string): string | null {
   return null;
 }
 
+// send_order_reminder's two refusals about the chosen recipients (P0008, the
+// code every INVALID_INPUT shares — hence the message check as well).
+function reminderRecipientRefusal(code: unknown, message: string): string | null {
+  if (code !== "P0008") return null;
+  if (message.startsWith("INVALID_INPUT: choose at least one recipient")) {
+    return "יש לבחור לפחות אדם אחד.";
+  }
+  if (message.startsWith("INVALID_INPUT: a recipient is not a user of this customer")) {
+    return "אחד המקבלים כבר לא משויך ללקוח הזה. סגרו את החלון ופתחו אותו שוב.";
+  }
+  return null;
+}
+
+// send_order_reminder when the customer submitted while the window was open
+// (P0007). Matched on the message too: other P0007 refusals mean other things
+// and keep showing as they are.
+function reminderAlreadySubmittedRefusal(code: unknown, message: string): string | null {
+  if (
+    code === "P0007" &&
+    message.startsWith("INVALID_STATE: cannot send a reminder about an order that's already been submitted")
+  ) {
+    return "הלקוח כבר שלח את ההזמנה, ואין צורך בתזכורת.";
+  }
+  return null;
+}
+
 export function errorMessage(error: unknown): string {
   if (error && typeof error === "object") {
     const { name, issues, message, code } = error as { name?: unknown; issues?: unknown; message?: unknown; code?: unknown };
@@ -93,6 +119,10 @@ export function errorMessage(error: unknown): string {
     if (typeof message === "string") {
       const refusal = pickSaveRefusal(code, message);
       if (refusal) return refusal;
+      const recipientRefusal = reminderRecipientRefusal(code, message);
+      if (recipientRefusal) return recipientRefusal;
+      const submittedRefusal = reminderAlreadySubmittedRefusal(code, message);
+      if (submittedRefusal) return submittedRefusal;
     }
     if (typeof message === "string" && message) return message;
   }

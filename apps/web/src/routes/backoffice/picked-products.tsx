@@ -1,9 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 
+import { StockEditDialog } from "@/components/arrangement/stock-edit-dialog";
 import { ProductCatalogScreen } from "@/components/reference-data/product-catalog-screen";
 import { StatusPill } from "@/components/ui/card";
 import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
+import { invalidateStockReads } from "@/lib/queries/arrangement";
 import { NO_PICKED_STOCK, pickedProductsQueries } from "@/lib/queries/picked-products";
 import { useTradingDayView } from "@/lib/trading-day-view";
 
@@ -28,6 +31,9 @@ const SUBTITLE =
 export default function PickedProductsPage() {
   const dayView = useTradingDayView();
   const day = dayView.day;
+  const queryClient = useQueryClient();
+  // The pick line whose stock popup is open (null = closed).
+  const [stockLineId, setStockLineId] = useState<string | null>(null);
 
   // Which varieties had supply on the day (see
   // pickedProductsQueries.varietiesForDay).
@@ -62,31 +68,47 @@ export default function PickedProductsPage() {
     : null;
 
   return (
-    <ProductCatalogScreen
-      title={TITLE}
-      subtitle={SUBTITLE}
-      // Which day these rows came from. Unlike the other date-aware screens
-      // this one does NOT add "לא ניתן לערוך" when a past day is pinned: the
-      // DAY decides which products are listed, but the records themselves are
-      // catalog records with no day of their own, so editing one from here is
-      // the same edit as from /backoffice/products and stays allowed.
-      headerActions={
-        <>
-          {tradeDateLabel && <StatusPill tone="neutral">{tradeDateLabel}</StatusPill>}
-          {!dayView.isLive && <StatusPill tone="warning">יום מסחר קודם</StatusPill>}
-        </>
-      }
-      varietyIds={(pickedQuery.data ?? NO_PICKED_STOCK).varietyIds}
-      // משטחים במלאי: each variety's picked + leftover pallets that day.
-      stockByVariety={(pickedQuery.data ?? NO_PICKED_STOCK).stockByVariety}
-      extraLoading={dayView.isLoading || pickedQuery.isLoading}
-      emptyLabel={
-        day
-          ? "לא נקטפו מוצרים ביום המסחר הזה."
-          : dayView.isLive
-            ? "אין יום מסחר פתוח."
-            : "לא נמצא יום מסחר בתאריך שנבחר."
-      }
-    />
+    <>
+      <ProductCatalogScreen
+        title={TITLE}
+        subtitle={SUBTITLE}
+        // Which day these rows came from. Unlike the other date-aware screens
+        // this one does NOT add "לא ניתן לערוך" when a past day is pinned: the
+        // DAY decides which products are listed, but the records themselves are
+        // catalog records with no day of their own, so editing one from here is
+        // the same edit as from /backoffice/products and stays allowed.
+        headerActions={
+          <>
+            {tradeDateLabel && <StatusPill tone="neutral">{tradeDateLabel}</StatusPill>}
+            {!dayView.isLive && <StatusPill tone="warning">יום מסחר קודם</StatusPill>}
+          </>
+        }
+        varietyIds={(pickedQuery.data ?? NO_PICKED_STOCK).varietyIds}
+        // משטחים במלאי: each variety's picked + leftover pallets that day.
+        stockByVariety={(pickedQuery.data ?? NO_PICKED_STOCK).stockByVariety}
+        // The number becomes a stock-edit button for a product one grower
+        // supplies — on the live day only; a pinned past day stays read-only.
+        singleLineByVariety={(pickedQuery.data ?? NO_PICKED_STOCK).singleLineByVariety}
+        {...(dayView.isLive ? { onEditStock: setStockLineId } : {})}
+        extraLoading={dayView.isLoading || pickedQuery.isLoading}
+        emptyLabel={
+          day
+            ? "לא נקטפו מוצרים ביום המסחר הזה."
+            : dayView.isLive
+              ? "אין יום מסחר פתוח."
+              : "לא נמצא יום מסחר בתאריך שנבחר."
+        }
+      />
+
+      {/* The quick stock edit, the same popup as the arrangement grid. */}
+      <StockEditDialog
+        pickLineId={stockLineId}
+        onClose={() => setStockLineId(null)}
+        onSaved={() => {
+          if (day) invalidateStockReads(queryClient, day.id);
+          setStockLineId(null);
+        }}
+      />
+    </>
   );
 }

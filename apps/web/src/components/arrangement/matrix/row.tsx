@@ -5,7 +5,13 @@ import { Icon } from "@/components/ui/icon";
 import { limitToOneDecimal } from "@/lib/pallet-input";
 
 import { formatPallets } from "../board-data";
-import { cellTarget, cellTone, type Matrix, type MatrixRow } from "../matrix-data";
+import {
+  cellTarget,
+  cellTone,
+  editableStockLine,
+  type Matrix,
+  type MatrixRow,
+} from "../matrix-data";
 
 import { CELL_TONE, UNSAVED_BOX, UNSAVED_TITLE } from "./cell-look";
 import {
@@ -25,7 +31,7 @@ const BLANK_CELL = {
   ordered: 0,
   comment: null,
   allocated: 0,
-  proposed: 0,
+  unsaved: false,
   recordId: null,
   price: null,
   priceType: null,
@@ -57,6 +63,7 @@ export function MatrixRowCells({
   onCommit,
   onKeyDown,
   onFocusCell,
+  onEditStock,
 }: {
   row: MatrixRow;
   rowIndex: number;
@@ -72,6 +79,8 @@ export function MatrixRowCells({
   onCommit: () => void;
   onKeyDown: (event: KeyboardEvent<HTMLInputElement>, row: number, col: number) => void;
   onFocusCell: (cell: CellAddress) => void;
+  /** Opens the quick stock edit for a pick line; without it סה״כ במלאי is a plain number. */
+  onEditStock?: (pickLineId: string) => void;
 }) {
   const isProduct = row.kind === "product";
   const compact = productWidth < COMPACT_PRODUCT_BELOW;
@@ -92,6 +101,7 @@ export function MatrixRowCells({
   // carry meaning there (ordered, arranged), and those are what this screen
   // exists to make visible.
   const stickyTint = isActiveRow ? "bg-accent-soft" : rowBase;
+  const stockLine = editableStockLine(row, editable && onEditStock !== undefined);
 
   return (
     <tr style={{ height: ROW_H }}>
@@ -149,6 +159,12 @@ export function MatrixRowCells({
         value={formatPallets(row.inStock)}
         offset={{ right: productWidth }}
         tint={stickyTint}
+        {...(stockLine
+          ? {
+              onEdit: () => onEditStock?.(stockLine.pickLineId),
+              editLabel: `עדכון מלאי — ${stockLine.growerName}`,
+            }
+          : {})}
       />
       <TotalCell
         // A grower row has no demand of its own — the order was placed
@@ -243,9 +259,9 @@ export function MatrixRowCells({
                   // Unsaved numbers keep their own look in the box as well:
                   // it is the only thing telling them from what is already
                   // in the day now that both can be typed over.
-                  title={cell.proposed > 0 ? UNSAVED_TITLE : undefined}
+                  title={cell.unsaved ? UNSAVED_TITLE : undefined}
                   className={`h-7 w-full rounded-sm border px-1 text-center text-sm font-semibold outline-none transition-colors duration-150 focus:border-accent focus:bg-surface focus:ring-2 focus:ring-accent/30 ${
-                    cell.proposed > 0 ? UNSAVED_BOX : "border-border-strong bg-surface text-ink"
+                    cell.unsaved ? UNSAVED_BOX : "border-border-strong bg-surface text-ink"
                   }`}
                   onFocus={(event) => {
                     onFocusCell({ row: rowIndex, col: colIndex, key: row.key });
@@ -267,16 +283,18 @@ export function MatrixRowCells({
               ) : (
                 // Read-only: either a multi-grower product row (the sum of
                 // the growers below, which cannot be written as one number),
-                // a day that is closed or being viewed in the past, or a
-                // proposal in the middle of being saved. The dashed edge says
-                // "this is a total", not "this is disabled".
+                // a day that is closed or being viewed in the past, or a grid
+                // held while its changes are being saved or "הצע סידור" works
+                // a suggestion out. The dashed edge says "this is a total",
+                // not "this is disabled".
                 //
-                // A sum with unsaved pallets in it takes the same accent as
-                // the boxes they were typed or suggested into.
+                // A sum with an unsaved change under it — a number typed or
+                // suggested, or a box emptied — takes the same accent as
+                // that box.
                 <span
-                  title={cell.proposed > 0 ? UNSAVED_TITLE : undefined}
+                  title={cell.unsaved ? UNSAVED_TITLE : undefined}
                   className={`flex h-7 w-full items-center justify-center rounded-sm border text-center text-sm font-semibold ${
-                    cell.proposed > 0
+                    cell.unsaved
                       ? UNSAVED_BOX
                       : "border-dashed border-border-strong bg-surface-muted/70 text-ink-muted"
                   }`}
@@ -323,18 +341,34 @@ function TotalCell({
   offset,
   tint,
   tone = "normal",
+  onEdit,
+  editLabel,
 }: {
   value: string;
   offset: { right: number } | { left: number };
   tint: string;
   tone?: keyof typeof TONE_CLASS;
+  /** When given, the number is a button that calls it (סה״כ במלאי → the stock popup). */
+  onEdit?: () => void;
+  editLabel?: string;
 }) {
   return (
     <td
       style={offset}
       className={`sticky ${Z_STICKY_COL} ${CELL_BORDER} ${tint} px-2 text-center text-sm font-semibold ${TONE_CLASS[tone]}`}
     >
-      {value}
+      {onEdit ? (
+        <button
+          type="button"
+          onClick={onEdit}
+          aria-label={editLabel}
+          className="rounded-sm underline-offset-4 hover:text-accent hover:underline hover:decoration-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-bright"
+        >
+          {value}
+        </button>
+      ) : (
+        value
+      )}
     </td>
   );
 }

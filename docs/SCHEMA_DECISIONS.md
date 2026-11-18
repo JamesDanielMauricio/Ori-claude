@@ -5,7 +5,36 @@ A running log of non-obvious decisions made about `packages/db`'s schema — the
 
 ---
 
-## 2026-11-12 (latest) — Price types are Bubble's closed list (`0100`)
+## 2026-11-12 (latest) — Each order line records the price it was saved at (`0101`)
+
+James's call, 2026-11-12: a record kept for later use. No screen shows it. `daily_order_products`
+gets `price`, `price_range_from`, `price_range_to` and `price_type`, typed as on
+`product_varieties`, and `submit_order` fills them from the product at the moment of the save. Nothing
+the browser sends is used for it. Bubble's order lines have kept the same record since 2026-09-08
+("price type", "price value (fixed)", "price value (range)").
+
+- **By the type, as the shop shows it.** מספר records the type and the price, טווח the type and both
+  ends, a תקליט type the type alone. With no type, a price reads as מספר and both ends of a range as
+  טווח, as `priceTypeOf` reads them; otherwise nothing. A number the type hides is never recorded.
+- **Only for a customer who may see prices**: their company's `can_see_product_prices` and the day's
+  `daily_shops.can_see_prices`, the test the shop applies before it shows a customer a price (0072).
+  A staff save on a customer's behalf follows the customer's permission, not staff's, as Bubble did
+  (every one of its 1,171 staff-made lines for companies without the permission is empty). It is both
+  switches, not the company's alone, because customers can read their own order lines straight from
+  the API (`daily_order_products_select_own`): a price recorded on a day the shop hides prices would
+  reach them there.
+- **Every save records every line again**, untouched lines included (James chose this over keeping
+  each line's first price), so a line holds the price of its last save. A save that may not see
+  prices records nothing and clears nothing. A line the prune zeroes (arranged, no longer ordered) and
+  a line for a product blocked for the customer keep their record.
+- **Nothing else changes.** `submit_order` keeps 0093's arguments, grants and every other effect. That
+  was checked against the database before `0101` on PGlite, and ten deliberately broken copies of the
+  migration were each caught. Lines saved before `0101` have no record, and nothing is backfilled.
+  Either deploy order works: the web app reads none of it.
+
+---
+
+## 2026-11-12 — Price types are Bubble's closed list (`0100`)
 
 James's call, 2026-11-12: the price type is Bubble's "Price Types" option set, not free text.
 `product_varieties.price_type` and `arrangement_records.price_type` become the enum

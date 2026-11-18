@@ -96,6 +96,13 @@ test.describe("Backoffice — Products", () => {
     // with is not an edit.
     await expect(editingRow(page).getByRole("button", { name: "שמור", exact: true })).toBeDisabled();
     await editingRow(page).getByLabel("זן / שם").fill(productName);
+    // A new variety has no price type, and with none there is no price box:
+    // the type decides which boxes the row shows (migration 0100). מספר is
+    // the one with a single "מחיר" box.
+    await chooseOption(
+      editingRow(page).getByRole("combobox", { name: "סוג מחיר", exact: true }),
+      "מספר",
+    );
     await editingRow(page).getByLabel("מחיר", { exact: true }).fill("12.5");
     await editingRow(page).getByRole("button", { name: "שמור" }).click();
 

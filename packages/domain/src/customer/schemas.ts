@@ -80,13 +80,27 @@ export function toSubmitOrderRpcArgs(input: SubmitOrderInput) {
 // daily_orders (customer-domain) entity — same placement logic as
 // sendPickReminderInputSchema living in the grower module despite being
 // backoffice-triggered.
+//
+// recipientUserIds (migration 0104) names which of the customer's people get
+// it; left out, the company's usual routing applies.
 export const sendOrderReminderInputSchema = z.object({
   dailyOrderId: z.string().uuid(),
+  recipientUserIds: z
+    .array(z.string().uuid())
+    .min(1)
+    .max(50)
+    .refine((ids) => new Set(ids).size === ids.length, { message: "no duplicates" })
+    .optional(),
 });
 export type SendOrderReminderInput = z.infer<typeof sendOrderReminderInputSchema>;
 
 export function toSendOrderReminderRpcArgs(input: SendOrderReminderInput) {
-  return { p_daily_order_id: input.dailyOrderId };
+  return {
+    p_daily_order_id: input.dailyOrderId,
+    // Sent only when a list is given, so a call without one is exactly
+    // today's call.
+    ...(input.recipientUserIds === undefined ? {} : { p_recipient_user_ids: input.recipientUserIds }),
+  };
 }
 
 // See packages/domain/src/lifecycle-engine/schemas.ts's LIFECYCLE_ERROR_CODES

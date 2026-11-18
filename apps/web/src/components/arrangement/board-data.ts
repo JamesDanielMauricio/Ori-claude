@@ -310,6 +310,8 @@ export interface CustomerOrderLine {
 }
 
 export interface CustomerDemand {
+  /** The customer's order header for the day — what a reminder is sent for. */
+  dailyOrderId: string;
   customerId: string;
   customerName: string;
   status: string;
@@ -637,6 +639,7 @@ export function buildBoard({
       );
 
       return {
+        dailyOrderId: order.id,
         customerId: order.customer_company_id,
         customerName: nameOf(order.customer_company_id),
         status: order.status,

@@ -37,7 +37,10 @@ export function useMatrixCursor({
   columns: Matrix["columns"];
   scrollRef: RefObject<HTMLDivElement | null>;
   range: { start: number; end: number };
-  /** Resolves to whether the write landed; a refusal reverts the cell. */
+  /**
+   * Resolves to whether the number was taken among the unsaved changes —
+   * nothing is written to the database; a refusal reverts the cell.
+   */
   onCommit: (write: MatrixWrite) => Promise<boolean>;
 }) {
   // The focused cell and the cell being typed into, each addressed by index
@@ -141,8 +144,9 @@ export function useMatrixCursor({
   // ---- committing ------------------------------------------------------
   // Called on blur, on Enter and before every navigation keystroke. Clearing
   // the draft first is what makes a refusal self-correcting: the input falls
-  // straight back to the server's own number, so a rejected quantity can
-  // never sit in a box next to a total that disagrees with it.
+  // straight back to the number the grid shows for the cell — saved, or the
+  // unsaved change it already had — so a rejected quantity can never sit in
+  // a box next to a total that disagrees with it.
   async function commitDraft() {
     // The resolved draft, so a write can never land on a row that has since
     // moved out from under the index it was typed at.
@@ -157,8 +161,10 @@ export function useMatrixCursor({
 
     // Shared with the mobile card view (matrix-data.ts) so a quantity is
     // accepted or rejected by the same rule wherever it's typed. Emptying a
-    // cell parses to 0, which means "nothing is arranged here" — a deletion,
-    // not a no-op; the route turns a zero into delete_arrangement_record.
+    // cell parses to 0, which means "nothing is arranged here" — a removal,
+    // not a no-op: over a saved number it is an unsaved removal, which "שמור
+    // שינויים" saves (save_arrangement_changes clears the cell through
+    // delete_arrangement_record).
     const next = parseMatrixQuantity(pending.value);
     if (next === null) return;
     if (next === target.current) return;

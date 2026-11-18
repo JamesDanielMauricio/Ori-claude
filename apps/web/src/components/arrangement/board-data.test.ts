@@ -331,6 +331,25 @@ describe("settleOptimisticRecord", () => {
 
 // The סידור strip's "הזמנת יתר מותרת" (Bubble parity): the variety's own
 // overbooking allowance, product_varieties.no_overbooking.
+describe("a board customer", () => {
+  it("each customer carries its order's id", () => {
+    const board = buildBoard({
+      picks: [],
+      orders: [
+        {
+          id: "order-77",
+          customer_company_id: CUSTOMER_1,
+          status: "open",
+          daily_order_products: [],
+        },
+      ],
+      records: [],
+      companies: [...companies, { id: CUSTOMER_1, name: "לקוח", default_pickup_time: null }],
+    });
+    expect(board.customers[0]?.dailyOrderId).toBe("order-77");
+  });
+});
+
 describe("a board product's overbooking allowance", () => {
   it("is the variety's no_overbooking, and 0 when the row has none", () => {
     const allowed = { ...variety("variety-allowed", "לימון מורשה", "family-lemon", lemonFamily), no_overbooking: 3 };

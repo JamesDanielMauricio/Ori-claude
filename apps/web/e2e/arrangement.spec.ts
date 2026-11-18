@@ -41,6 +41,7 @@ import { expect, type Page, test } from "@playwright/test";
 //
 // REQUIRES migration 0040 (arrange_to_customer). The ✓ button is that
 // function; without it the board reports "פעולה זו דורשת מיגרציה שטרם הורצה".
+// The grid's "שמור שינויים" needs 0103 (save_arrangement_changes) the same way.
 test.describe("Backoffice — arrangement workspace", () => {
   const cleanupFns: Array<() => Promise<void>> = [];
 
@@ -147,7 +148,18 @@ test.describe("Backoffice — arrangement workspace", () => {
     await page.goto("/backoffice/arrangement");
     await expect(page.getByText("בחר מוצר מכרטיס של מגדל כדי לסדר אותו ללקוחות.")).toBeVisible();
 
+    // --- The grower filter survives choosing a product (James, 2026-11-13) ---
+    // The product on the customer's card narrows the growers to those who
+    // brought it. Choosing it off one of them must keep that filter, so the
+    // distributor can go on to the next grower without filtering again; only
+    // "נקה סינון" (below) clears it. The variety name is unique to this test,
+    // so this is this fixture's own button.
+    await page.getByRole("button", { name: `סנן מגדלים לפי ${grower.varietyName}` }).click();
+    const growerFilter = page.getByText("מציג מגדלים עם");
+    await expect(growerFilter).toContainText(grower.varietyName);
+
     await selectGrowerProduct(page, growerName);
+    await expect(growerFilter).toContainText(grower.varietyName);
 
     // Each figure is a named `role="group"` wrapping its own label and
     // numeral, which is what makes them addressable at all — the numbers
@@ -161,6 +173,11 @@ test.describe("Backoffice — arrangement workspace", () => {
     // The dashed rule, with the customer who ordered above it and the one
     // who did not below.
     await expect(page.getByText("לא הזמינו את המוצר הנבחר")).toBeVisible();
+
+    // Clearing the filter leaves the chosen product chosen.
+    await page.getByRole("button", { name: "נקה סינון" }).click();
+    await expect(growerFilter).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "נקטף" })).toContainText("10");
 
     // --- The arrangement matrix (סידור לפי מוצרים) ---
     // Products down the side, customers across the top, reached from
@@ -187,22 +204,118 @@ test.describe("Backoffice — arrangement workspace", () => {
     const matrixCell = page.getByLabel(`${grower.varietyName} — ${customerCompany.name}`, {
       exact: true,
     });
+    const saveButton = page.getByRole("button", { name: "שמור שינויים" });
+    const search = page.getByPlaceholder("חיפוש מוצר…");
+    // How a refused save names this cell: "product (grower) ← customer".
+    const cellName = `${grower.varietyName} (${growerName}) ← ${customerCompany.name}`;
     await expect(matrixCell).toHaveValue("");
+
+    // 1. Enter only moves on; the number waits, marked unsaved, for שמור
+    // שינויים (James, 2026-11-13).
     await matrixCell.fill("5");
-    // Enter commits the cell, the same as it would in a spreadsheet. There is
-    // deliberately no success toast — a distributor types across a whole row
-    // — so the confirmation is the value coming back from the server.
     await matrixCell.press("Enter");
     await expect(matrixCell).toHaveValue("5");
+    await expect(matrixCell).toHaveAttribute("title", "עדיין לא נשמר");
+    await expect(page.getByText("שינוי אחד שלא נשמר.")).toBeVisible();
+    const written = await adminClient
+      .from("arrangement_records")
+      .select("id")
+      .eq("daily_pick_product_id", pickLine!.id);
+    expect(written.data).toEqual([]); // nothing is written while typing
+    await saveButton.click();
+    await expect(page.getByText("הסידור נשמר: 1 תאים.")).toBeVisible();
+    await expect(matrixCell).not.toHaveAttribute("title", "עדיין לא נשמר");
 
-    // A refused quantity must not be left sitting in the cell. Only 10 were
-    // picked, so 99 over-allocates and arrange_to_customer raises P0009; the
-    // grid has to fall back to the stored value rather than keep a number the
-    // day does not actually contain.
+    // 2. A refused save saves nothing and keeps the number to correct;
+    // discarding asks first. Only 10 were picked, so 99 over-allocates and
+    // the save is refused (P0009).
     await matrixCell.fill("99");
     await matrixCell.press("Enter");
-    await expect(page.getByText(/חורגת ממה שנקטף/)).toBeVisible();
+    await saveButton.click();
+    await expect(page.getByText(/חורגת ממה שנקטף/).first()).toBeVisible();
+    // Named on the bar, which outlasts the toast.
+    await expect(page.getByRole("status").filter({ hasText: "שלא נשמר" })).toContainText(cellName);
+    await expect(matrixCell).toHaveValue("99");
+    await page.getByRole("button", { name: "בטל שינויים" }).click();
+    await page.locator("dialog[open]").getByRole("button", { name: "בטל שינויים" }).click();
     await expect(matrixCell).toHaveValue("5");
+    // The dialog stays open, holding the page behind it inert, while it
+    // animates out (lib/use-exit-animation.ts). Typing into the grid before
+    // it has gone would type into nothing.
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+
+    // 3. Someone else changes the same cell meanwhile: refused, named, their
+    // number shows.
+    await matrixCell.fill("4");
+    await matrixCell.press("Enter");
+    const theirs = await adminClient.rpc("arrange_to_customer", {
+      p_daily_pick_product_id: pickLine!.id,
+      p_customer_company_id: customerCompany.id,
+      p_quantity_pallets: 2,
+    });
+    if (theirs.error) throw theirs.error;
+    await saveButton.click();
+    await expect(page.getByText(/השתנו בינתיים/).first()).toBeVisible();
+    await expect(
+      page.getByRole("status").filter({ hasText: "השתנו בינתיים" }).first(),
+    ).toContainText(cellName);
+    await expect(matrixCell).toHaveValue("2");
+    await expect(matrixCell).not.toHaveAttribute("title", "עדיין לא נשמר");
+
+    // 4. Leaving while the save is still on its way: it lands anyway.
+    //
+    // Step 1's toast says the same words and lives four seconds. Waiting for
+    // it to clear first is what makes the toast check below prove THIS save:
+    // otherwise it could pass on that stale toast before this save landed.
+    await expect(page.getByText("הסידור נשמר: 1 תאים.")).toHaveCount(0);
+    await matrixCell.fill("5");
+    await matrixCell.press("Enter");
+    await page.route("**/rest/v1/rpc/save_arrangement_changes", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await route.continue();
+    });
+    await saveButton.click();
+    await page.getByRole("link", { name: "לסידור לפי מגדל" }).click();
+    await expect(page.getByText("הסידור נשמר: 1 תאים.")).toBeVisible({ timeout: 10000 });
+    await page.unroute("**/rest/v1/rpc/save_arrangement_changes");
+    await page.getByRole("link", { name: "סידור לפי מוצרים" }).click();
+    await search.fill(grower.varietyName);
+    await expect(matrixCell).toHaveValue("5");
+    // The bar, not page text: a closed <dialog> keeps its words in the DOM.
+    await expect(page.getByRole("status").filter({ hasText: "שלא נשמר" })).toHaveCount(0);
+
+    // Unsaved numbers survive switching screens…
+    await matrixCell.fill("3");
+    await matrixCell.press("Enter");
+    await page.getByRole("link", { name: "לסידור לפי מגדל" }).click();
+    // On the board for real before coming back: two clicks in a row could
+    // otherwise both land before the grid was ever taken off the page.
+    await expect(page.getByText("בחר מוצר מכרטיס של מגדל כדי לסדר אותו ללקוחות.")).toBeVisible();
+    await page.getByRole("link", { name: "סידור לפי מוצרים" }).click();
+    await search.fill(grower.varietyName);
+    await expect(matrixCell).toHaveValue("3");
+    await expect(matrixCell).toHaveAttribute("title", "עדיין לא נשמר");
+
+    // …a reload drops them (James: fine to lose on reload)…
+    await page.reload();
+    await search.fill(grower.varietyName);
+    await expect(matrixCell).toHaveValue("5");
+    await matrixCell.fill("3");
+    await matrixCell.press("Enter");
+    // Unsaved before signing out, so the check after signing back in has
+    // something to prove.
+    await expect(matrixCell).toHaveAttribute("title", "עדיין לא נשמר");
+
+    // 5. …and so does signing out and back in.
+    await page.getByRole("button", { name: "התנתקות" }).click();
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+    await page.getByRole("link", { name: "סידור לפי מוצרים" }).click();
+    await search.fill(grower.varietyName);
+    await expect(matrixCell).toHaveValue("5");
+    await expect(matrixCell).not.toHaveAttribute("title", "עדיין לא נשמר");
 
     // --- Back on the board: the matrix's record shows against the day ---
     await page.goto("/backoffice/arrangement");
@@ -359,5 +472,367 @@ test.describe("Backoffice — arrangement workspace", () => {
     // The empty state is itself proof the close committed, on top of the
     // success toast above.
     await expect(page.getByRole("heading", { name: "אין יום מסחר פתוח" })).toBeVisible();
+  });
+
+  test("a customer card's bell sends a reminder to the ticked people", async ({ page }) => {
+    const adminCompany = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(adminCompany.id));
+    const admin = await createTestProfile({ companyId: adminCompany.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const adminClient = await signInTestUser(admin.email, admin.password);
+
+    // A grower's product must be selected for the board to list customers who
+    // ordered nothing (they are held back until there is a product to offer).
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+
+    // Created before open_shop, which gives every active customer an order
+    // header (open, un-submitted) — the state the bell is for.
+    const customerCompany = await createTestCompany(
+      `לקוח תזכורת ${crypto.randomUUID()}`,
+      "customer",
+    );
+    cleanupFns.push(() => deleteTestCompany(customerCompany.id));
+    const withPhone = await createTestProfile({
+      companyId: customerCompany.id,
+      role: "customer",
+      displayName: "אבי עם טלפון",
+      phoneNumber: "0501234567",
+    });
+    cleanupFns.push(() => deleteTestUser(withPhone.userId));
+
+    const tradeDate = new Date().toISOString().slice(0, 10);
+    const initiate = await adminClient.rpc(
+      "initiate_business_day",
+      toInitiateBusinessDayRpcArgs(initiateBusinessDayInputSchema.parse({ tradeDate })),
+    );
+    if (initiate.error) throw initiate.error;
+    const dayId = initiate.data!.id;
+    cleanupFns.push(() => deleteTestTradingDay(dayId));
+    const openShop = await adminClient.rpc(
+      "open_shop",
+      toOpenShopRpcArgs(openShopInputSchema.parse({ canSeePrices: true })),
+    );
+    if (openShop.error) throw openShop.error;
+
+    // Only a line with supply is listed on the grower's card.
+    const pick = await getDailyPickForGrower(dayId, grower.companyId);
+    const pickLine = await getPickProductLine(pick!.id, grower.varietyId);
+    const pickUpdate = await adminClient.rpc(
+      "update_pick_product_pallets",
+      toUpdatePickProductPalletsRpcArgs(
+        updatePickProductPalletsInputSchema.parse({
+          dailyPickProductId: pickLine!.id,
+          palletsPicked: 10,
+        }),
+      ),
+    );
+    if (pickUpdate.error) throw pickUpdate.error;
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+
+    await page.goto("/backoffice/arrangement");
+    await selectGrowerProduct(page, grower.companyName);
+    const bell = page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` });
+    await expect(bell).toBeEnabled();
+    await bell.click();
+
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText(`שליחת תזכורת — ${customerCompany.name}`);
+    await expect(dialog.getByRole("checkbox", { name: /אבי עם טלפון/ })).toBeChecked();
+    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
+    await expect(page.getByText("התזכורת נשלחה.")).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+
+    // The outbox row, read from the database: addressed to the ticked user.
+    const outbox = await adminClient
+      .from("notification_outbox")
+      .select("recipient_company_id, recipient_user_ids")
+      .eq("recipient_company_id", customerCompany.id)
+      .eq("template_key", "order_reminder");
+    if (outbox.error) throw outbox.error;
+    expect(outbox.data).toHaveLength(1);
+    expect(outbox.data[0]!.recipient_user_ids).toEqual([withPhone.userId]);
+
+    // Once the order is submitted there is nothing to remind about.
+    const markSent = await adminClient
+      .from("daily_orders")
+      .update({ status: "submitted", submitted_at: new Date().toISOString() })
+      .eq("trading_day_id", dayId)
+      .eq("customer_company_id", customerCompany.id);
+    if (markSent.error) throw markSent.error;
+    await page.reload();
+    await selectGrowerProduct(page, grower.companyName);
+    await expect(
+      page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` }),
+    ).toBeDisabled();
+  });
+
+  // --- The quick stock edit on סידור לפי מוצרים ---
+  // A day with one single-grower product (`grower`, 10 pallets picked), a
+  // customer column, and — when asked — a second grower's product, so a test
+  // can hold an unsaved number on a product other than the one being edited.
+  async function startStockDay(page: Page, options: { withOther?: boolean; picked?: number } = {}) {
+    const adminCompany = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(adminCompany.id));
+    const admin = await createTestProfile({ companyId: adminCompany.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const adminClient = await signInTestUser(admin.email, admin.password);
+
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const other = options.withOther ? await createTestGrowerWithProduct() : null;
+    if (other) cleanupFns.push(() => deleteTestGrowerWithProduct(other));
+    // Created before open_shop, so it is a column of the grid.
+    const customerCompany = await createTestCompany("לקוח מלאי", "customer");
+    cleanupFns.push(() => deleteTestCompany(customerCompany.id));
+
+    const initiate = await adminClient.rpc(
+      "initiate_business_day",
+      toInitiateBusinessDayRpcArgs(
+        initiateBusinessDayInputSchema.parse({ tradeDate: new Date().toISOString().slice(0, 10) }),
+      ),
+    );
+    if (initiate.error) throw initiate.error;
+    const dayId = initiate.data!.id;
+    cleanupFns.push(() => deleteTestTradingDay(dayId));
+    const openShop = await adminClient.rpc(
+      "open_shop",
+      toOpenShopRpcArgs(openShopInputSchema.parse({ canSeePrices: true })),
+    );
+    if (openShop.error) throw openShop.error;
+
+    async function pick(fixture: { companyId: string; varietyId: string }, pallets: number) {
+      const dailyPick = await getDailyPickForGrower(dayId, fixture.companyId);
+      const line = await getPickProductLine(dailyPick!.id, fixture.varietyId);
+      const update = await adminClient.rpc(
+        "update_pick_product_pallets",
+        toUpdatePickProductPalletsRpcArgs(
+          updatePickProductPalletsInputSchema.parse({
+            dailyPickProductId: line!.id,
+            palletsPicked: pallets,
+          }),
+        ),
+      );
+      if (update.error) throw update.error;
+      return line!;
+    }
+    const pickLine = await pick(grower, options.picked ?? 10);
+    const otherLine = other ? await pick(other, 5) : null;
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+    await page.goto("/backoffice/new-arrangement");
+
+    return { adminClient, grower, other, otherLine, customerCompany, pickLine };
+  }
+
+  test("סה״כ במלאי opens the stock popup and the new stock shows in the grid", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const { adminClient, grower, other, customerCompany, pickLine } = await startStockDay(page, {
+      withOther: true,
+    });
+    const search = page.getByPlaceholder("חיפוש מוצר…");
+    const saveBar = page.getByRole("status").filter({ hasText: "שלא נשמר" });
+
+    // An unsaved number on ANOTHER product, which the popup must not touch.
+    await search.fill(other!.varietyName);
+    const otherCell = page.getByLabel(`${other!.varietyName} — ${customerCompany.name}`, {
+      exact: true,
+    });
+    await otherCell.fill("1");
+    await otherCell.press("Enter");
+    await expect(otherCell).toHaveAttribute("title", "עדיין לא נשמר");
+    await expect(page.getByText("שינוי אחד שלא נשמר.")).toBeVisible();
+
+    await search.fill(grower.varietyName);
+    const row = page.locator("tr").filter({ hasText: grower.varietyName });
+    const stockButton = row.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` });
+    await expect(stockButton).toHaveText("10");
+    // The trailing pane: זמין, then סה״כ חולק.
+    const available = async () => {
+      const cells = await row.locator("td").allTextContents();
+      return cells[cells.length - 2];
+    };
+    await expect.poll(available).toBe("10");
+
+    await stockButton.click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText(
+      `עדכון מלאי — ${grower.companyName} · ${grower.varietyName}`,
+    );
+    await expect(dialog.getByLabel("משטחים מהיום:")).toHaveValue("10");
+    await expect(dialog.getByLabel("מלאי קודם:")).toHaveValue("0");
+    await expect(dialog).toContainText("כבר סודרו: 0");
+
+    await dialog.getByLabel("משטחים מהיום:").fill("12");
+    await dialog.getByLabel("מלאי קודם:").fill("3");
+    await dialog.getByRole("button", { name: "אישור" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+
+    await expect(stockButton).toHaveText("12");
+    await expect.poll(available).toBe("15");
+    const saved = await adminClient
+      .from("daily_pick_products")
+      .select("pallets_picked, leftover_pallets")
+      .eq("id", pickLine.id)
+      .single();
+    expect(Number(saved.data!.pallets_picked)).toBe(12);
+    expect(Number(saved.data!.leftover_pallets)).toBe(3);
+
+    // The other product's unsaved number is still there, still unsaved, and
+    // the bar still counts one change.
+    await expect(page.getByText("שינוי אחד שלא נשמר.")).toBeVisible();
+    await expect(saveBar).toBeVisible();
+    await search.fill(other!.varietyName);
+    await expect(otherCell).toHaveValue("1");
+    await expect(otherCell).toHaveAttribute("title", "עדיין לא נשמר");
+  });
+
+  test("a total below what is arranged is refused and the popup stays open", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // 12 picked, 9 arranged.
+    const { adminClient, grower, customerCompany, pickLine } = await startStockDay(page, {
+      picked: 12,
+    });
+    const arrange = (quantity: number) =>
+      adminClient.rpc("arrange_to_customer", {
+        p_daily_pick_product_id: pickLine.id,
+        p_customer_company_id: customerCompany.id,
+        p_quantity_pallets: quantity,
+      });
+    const first = await arrange(9);
+    if (first.error) throw first.error;
+    // Arranged after the grid first loaded, so read it again.
+    await page.reload();
+
+    await page.getByPlaceholder("חיפוש מוצר…").fill(grower.varietyName);
+    const row = page.locator("tr").filter({ hasText: grower.varietyName });
+    await row.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` }).click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText("כבר סודרו: 9");
+
+    // Below the 9 arranged: אישור is off.
+    const confirm = dialog.getByRole("button", { name: "אישור" });
+    await dialog.getByLabel("משטחים מהיום:").fill("8");
+    await dialog.getByLabel("מלאי קודם:").fill("0");
+    await expect(confirm).toBeDisabled();
+    // An empty box is as good as missing.
+    await dialog.getByLabel("מלאי קודם:").fill("");
+    await expect(confirm).toBeDisabled();
+
+    // Someone else arranges two more pallets while the popup is open. The
+    // popup still believes 9, so 10 + 0 passes its own check — the server is
+    // the one to refuse it, with the real floor (11).
+    //
+    // Live updates re-read everything on screen when anything changes, so
+    // the popup would normally hear of the 11 within moments and switch
+    // אישור off by itself (CI, with real Realtime, did exactly that). The
+    // server's refusal is for when that news is late or lost, so the popup's
+    // re-read of this line is held until the refusal has been shown.
+    const heldReads: Array<() => Promise<void>> = [];
+    let holding = true;
+    const isThisLinesRead = (url: URL) =>
+      url.pathname.endsWith("/rest/v1/daily_pick_products") &&
+      url.searchParams.get("id") === `eq.${pickLine.id}`;
+    await page.route(isThisLinesRead, async (route) => {
+      if (holding) heldReads.push(() => route.continue());
+      else await route.continue();
+    });
+    const second = await arrange(11);
+    if (second.error) throw second.error;
+    await dialog.getByLabel("משטחים מהיום:").fill("10");
+    await dialog.getByLabel("מלאי קודם:").fill("0");
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+    await expect(dialog.getByRole("alert")).toContainText("כבר סודרו 11 משטחים");
+    await expect(dialog).toBeVisible();
+
+    // Nothing was written, and reopening shows what is true now.
+    const stored = await adminClient
+      .from("daily_pick_products")
+      .select("pallets_picked")
+      .eq("id", pickLine.id)
+      .single();
+    expect(Number(stored.data!.pallets_picked)).toBe(12);
+    // Let the held re-reads through, then stop holding, so reopening reads
+    // what is true now. A held read can already be over by then — the page
+    // drops an older read when it starts a newer one — and there is nothing
+    // left to let through for that one, so its "already handled" is ignored.
+    holding = false;
+    for (const release of heldReads.splice(0)) await release().catch(() => {});
+    await page.unroute(isThisLinesRead);
+    await dialog.getByRole("button", { name: "ביטול" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await row.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` }).click();
+    await expect(page.locator("dialog[open]")).toContainText("כבר סודרו: 11");
+    await expect(page.locator("dialog[open]").getByLabel("משטחים מהיום:")).toHaveValue("12");
+  });
+
+  test("the phone card header keeps במלאי beside זמין, and only the rest of the header toggles", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    const { grower } = await startStockDay(page);
+
+    await page.getByPlaceholder("חיפוש מוצר…").fill(grower.varietyName);
+    const card = page.locator("li").filter({ hasText: grower.varietyName }).first();
+    // The toggle has a name (the variety), and holds no other button.
+    const toggle = card.getByRole("button", { name: grower.varietyName, exact: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(card.locator("button button")).toHaveCount(0);
+
+    // In the right-to-left row the figures read: במלאי, then זמין, then the
+    // chevron at the far (left) edge — so במלאי is to the right of זמין.
+    const stock = card.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` });
+    const stockBox = (await stock.boundingBox())!;
+    const availableBox = (await card.getByText("זמין", { exact: false }).first().boundingBox())!;
+    expect(stockBox.x).toBeGreaterThan(availableBox.x);
+
+    // The stock button opens the popup and does not toggle the card.
+    await stock.click();
+    await expect(page.locator("dialog[open]")).toHaveCount(1);
+    await page.locator("dialog[open]").getByRole("button", { name: "ביטול" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    // Anywhere else on the header toggles it (here: the variety's name).
+    // `force`: Playwright refuses a click whose target has the (invisible)
+    // toggle laid over it; the click still lands where a finger would.
+    await card.getByText(grower.varietyName, { exact: true }).first().click({ force: true });
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("the phone layout offers the same popup", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    const { adminClient, grower, pickLine } = await startStockDay(page);
+
+    await page.getByPlaceholder("חיפוש מוצר…").fill(grower.varietyName);
+    const stockButton = page.getByRole("button", { name: `עדכון מלאי — ${grower.companyName}` });
+    await expect(stockButton).toContainText("10");
+    await stockButton.click();
+
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText(`עדכון מלאי — ${grower.companyName}`);
+    await dialog.getByLabel("משטחים מהיום:").fill("7");
+    await dialog.getByLabel("מלאי קודם:").fill("2");
+    await dialog.getByRole("button", { name: "אישור" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(stockButton).toContainText("7");
+
+    const saved = await adminClient
+      .from("daily_pick_products")
+      .select("pallets_picked, leftover_pallets")
+      .eq("id", pickLine.id)
+      .single();
+    expect(Number(saved.data!.pallets_picked)).toBe(7);
+    expect(Number(saved.data!.leftover_pallets)).toBe(2);
   });
 });

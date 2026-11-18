@@ -92,18 +92,32 @@ export function toSendPickReminderRpcArgs(input: SendPickReminderInput) {
   return { p_daily_pick_id: input.dailyPickId };
 }
 
+// The grower's own pickup time for the day (migration 0105). "HH:MM", 24 hours
+// — the shape a browser's <input type="time"> gives; the database turns it
+// into a `time`. Seconds are refused so a stray "14:00:00" is not mistaken for
+// the same thing.
+export const setPickPickupTimeInputSchema = z.object({
+  dailyPickId: z.string().uuid(),
+  pickupTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+});
+export type SetPickPickupTimeInput = z.infer<typeof setPickPickupTimeInputSchema>;
+
+export function toSetPickPickupTimeRpcArgs(input: SetPickPickupTimeInput) {
+  return { p_daily_pick_id: input.dailyPickId, p_pickup_time: input.pickupTime };
+}
+
 // See packages/domain/src/lifecycle-engine/schemas.ts's LIFECYCLE_ERROR_CODES
 // for the full convention this mirrors — these are just the subset this
 // module's own functions (0015) actually raise.
 export const GROWER_ERROR_CODES = {
-  /** No row matched (a pick or pick-product line that doesn't exist). */
+  /** No row matched (a pick or pick-product line that doesn't exist; also set_pick_pickup_time on an unknown pick). */
   NOT_FOUND: "P0002",
-  /** current_role() <> 'backoffice', or a grower acting on a line that isn't theirs. */
+  /** current_role() <> 'backoffice', or a grower acting on a line that isn't theirs (also set_pick_pickup_time on another grower's pick). */
   FORBIDDEN: "42501",
-  /** update_pick_product_details, save_pick_lines or send_pick_reminder called against an already-closed pick. */
+  /** update_pick_product_details, save_pick_lines, set_pick_pickup_time or send_pick_reminder called against an already-closed pick. */
   INVALID_STATE: "P0007",
   /** save_pick_lines: pallets_picked + leftover_pallets combined below what's already committed in arrangement_records for that line. */
   CONFLICT: "P0006",
-  /** save_pick_lines: a negative or missing pallet or leftover count. */
+  /** save_pick_lines: a negative or missing pallet or leftover count; set_pick_pickup_time: a missing time. */
   INVALID_INPUT: "P0008",
 } as const;

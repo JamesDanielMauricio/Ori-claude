@@ -934,3 +934,107 @@ describe("lifecycle engine", () => {
     });
   }, 30000);
 });
+
+// Migration 0105: Bubble lets a grower change the day's pickup time on their
+// own picking screen until the pick is closed. set_pick_closed's truck is the
+// "closed" switch; submit_pick used to overwrite the time with the company
+// default every time, so a time the grower chose is now kept.
+describe("the grower sets the day's pickup time (0105)", () => {
+  const cleanupFns: Array<() => Promise<void>> = [];
+
+  afterEach(async () => {
+    await runCleanup(cleanupFns);
+  });
+
+  // One grower with a default time of 07:00, a draft pick on an open day, and
+  // sessions for the grower and for backoffice.
+  async function setUp() {
+    const office = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(office.id));
+    const bo = await createTestProfile({ companyId: office.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(bo.userId));
+    const backoffice = await signInTestUser(bo.email, bo.password);
+
+    const admin = await createTestBackofficeAdmin();
+    cleanupFns.push(() => deleteTestBackofficeAdmin(admin));
+    const grower = await createTestGrowerWithProduct({ defaultPickupTime: "07:00" });
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const day = await createTestTradingDay({ initiatedByUserId: admin.userId, phase: "initiated" });
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    const profile = await createTestProfile({ companyId: grower.companyId, role: "grower" });
+    cleanupFns.push(() => deleteTestUser(profile.userId));
+    const growerClient = await signInTestUser(profile.email, profile.password);
+
+    const pick = await backoffice
+      .from("daily_picks")
+      .insert({ trading_day_id: day.id, grower_company_id: grower.companyId, status: "draft" })
+      .select()
+      .single();
+    expect(pick.error).toBeNull();
+    const dailyPickId = pick.data!.id;
+
+    const setTime = (client: typeof growerClient, pickupTime: string | null) =>
+      client.rpc("set_pick_pickup_time", {
+        p_daily_pick_id: dailyPickId,
+        p_pickup_time: pickupTime as string,
+      });
+    return { backoffice, growerClient, dailyPickId, setTime };
+  }
+
+  it("the pick's own grower sets it on a draft", async () => {
+    const { growerClient, setTime } = await setUp();
+    const result = await setTime(growerClient, "06:30");
+    expect(result.error).toBeNull();
+    expect(result.data).toMatchObject({ status: "draft", pickup_time: "06:30:00" });
+  }, 60000);
+
+  it("sending keeps a time the grower chose", async () => {
+    const { growerClient, dailyPickId, setTime } = await setUp();
+    expect((await setTime(growerClient, "06:30")).error).toBeNull();
+    const sent = await growerClient.rpc("submit_pick", toSubmitPickRpcArgs({ dailyPickId }));
+    expect(sent.error).toBeNull();
+    expect(sent.data).toMatchObject({ status: "submitted", pickup_time: "06:30:00" });
+  }, 60000);
+
+  it("a grower who never chose still gets the default when sending", async () => {
+    const { growerClient, dailyPickId } = await setUp();
+    const sent = await growerClient.rpc("submit_pick", toSubmitPickRpcArgs({ dailyPickId }));
+    expect(sent.error).toBeNull();
+    expect(sent.data).toMatchObject({ status: "submitted", pickup_time: "07:00:00" });
+  }, 60000);
+
+  it("it can change after sending", async () => {
+    const { growerClient, dailyPickId, setTime } = await setUp();
+    expect((await growerClient.rpc("submit_pick", toSubmitPickRpcArgs({ dailyPickId }))).error).toBeNull();
+    const changed = await setTime(growerClient, "05:15");
+    expect(changed.error).toBeNull();
+    expect(changed.data).toMatchObject({ status: "submitted", pickup_time: "05:15:00" });
+  }, 60000);
+
+  it("backoffice may set it", async () => {
+    const { backoffice, setTime } = await setUp();
+    const result = await setTime(backoffice, "08:45");
+    expect(result.error).toBeNull();
+    expect(result.data).toMatchObject({ pickup_time: "08:45:00" });
+  }, 60000);
+
+  it("refuses a closed pick", async () => {
+    const { backoffice, growerClient, dailyPickId, setTime } = await setUp();
+    expect(
+      (await backoffice.rpc("set_pick_closed", toSetPickClosedRpcArgs({ dailyPickId, closed: true }))).error,
+    ).toBeNull();
+    for (const client of [growerClient, backoffice]) {
+      const refused = await setTime(client, "06:30");
+      expect(refused.error?.code).toBe(LIFECYCLE_ERROR_CODES.INVALID_STATE);
+      expect(refused.error?.message).toBe("INVALID_STATE: this pick is closed — no further edits are permitted");
+    }
+  }, 60000);
+
+  it("refuses a NULL time", async () => {
+    const { growerClient, setTime } = await setUp();
+    const refused = await setTime(growerClient, null);
+    expect(refused.error?.code).toBe(LIFECYCLE_ERROR_CODES.INVALID_INPUT);
+    expect(refused.error?.message).toBe("INVALID_INPUT: pickup time is required");
+  }, 60000);
+});

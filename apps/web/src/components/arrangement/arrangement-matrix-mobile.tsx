@@ -16,6 +16,7 @@ import {
 import {
   cellTone,
   cellTarget,
+  editableStockLine,
   parseMatrixQuantity,
   type CellTarget,
   type Matrix,
@@ -50,6 +51,7 @@ export function ArrangementMatrixMobile({
   onToggle,
   editable,
   onCommit,
+  onEditStock,
   emptyLabel = NO_ROWS_LABEL,
 }: {
   matrix: Matrix;
@@ -63,6 +65,11 @@ export function ArrangementMatrixMobile({
   onToggle: (varietyId: string) => void;
   editable: boolean;
   onCommit: (write: MatrixWrite) => Promise<boolean>;
+  /**
+   * Opens the quick stock edit for a pick line. When given, "במלאי" on a
+   * single-grower line whose pick is not closed becomes a button.
+   */
+  onEditStock?: (pickLineId: string) => void;
   /** What to say when there are no rows — the caller knows why there are none. */
   emptyLabel?: string;
 }) {
@@ -122,6 +129,7 @@ export function ArrangementMatrixMobile({
               onToggle={() => onToggle(row.varietyId)}
               editable={editable}
               onCommit={onCommit}
+              onEditStock={onEditStock}
             />
           ))}
         </ul>
@@ -140,6 +148,7 @@ function ProductCard({
   onToggle,
   editable,
   onCommit,
+  onEditStock,
 }: {
   row: MatrixProductRow;
   entries: ColumnEntry[];
@@ -148,11 +157,17 @@ function ProductCard({
   onToggle: () => void;
   editable: boolean;
   onCommit: (write: MatrixWrite) => Promise<boolean>;
+  onEditStock: ((pickLineId: string) => void) | undefined;
 }) {
   // Same signal as the desktop grid's marked cells, one level up: this
   // product has demand somewhere, so it's worth opening even before you know
   // from which customer.
   const hasDemand = row.ordered > 0;
+  // A single-grower product's "במלאי" is that one line's stock, so it can open
+  // the stock popup. The toggle below is a sibling stretched over the row, not
+  // a wrapper — a button inside a button is invalid, and a tap on the stock
+  // button must not also toggle the card.
+  const stockLine = editableStockLine(row, editable && onEditStock !== undefined);
 
   return (
     <li
@@ -160,12 +175,19 @@ function ProductCard({
         hasDemand ? "ring-marked-edge/60" : "ring-border/70"
       }`}
     >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3.5 text-start"
-      >
+      {/* The header is one row, laid out exactly as it was before the stock
+          button: name and family at the start, the figures, then the chevron
+          at the far edge. The toggle is a button stretched over the whole row
+          (not wrapped around it), so the stock button below can sit on top
+          without ever being nested inside another button. */}
+      <div className="relative flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3.5">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={row.varietyName}
+          className="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-bright"
+        />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold text-ink">{row.varietyName}</span>
           {row.familyName && (
@@ -174,8 +196,21 @@ function ProductCard({
         </span>
 
         <span className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
-          <Stat label="במלאי" value={row.inStock} />
-          <Stat label="זמין" value={row.available} tone={row.available < 0 ? "danger" : "normal"} />
+          {stockLine ? (
+            <Stat
+              label="במלאי"
+              value={row.inStock}
+              onEdit={() => onEditStock?.(stockLine.pickLineId)}
+              editLabel={`עדכון מלאי — ${stockLine.growerName}`}
+            />
+          ) : (
+            <Stat label="במלאי" value={row.inStock} />
+          )}
+          <Stat
+            label="זמין"
+            value={row.available}
+            tone={row.available < 0 ? "danger" : "normal"}
+          />
           {hasDemand && <StatusPill tone="marked">הוזמן {formatPallets(row.ordered)}</StatusPill>}
         </span>
 
@@ -185,7 +220,7 @@ function ProductCard({
             open ? "rotate-180" : ""
           }`}
         />
-      </button>
+      </div>
 
       {open && (
         <div className="border-t border-border/70 bg-surface-muted/40 px-3 py-3">
@@ -202,6 +237,7 @@ function ProductCard({
                   fullColumns={fullColumns}
                   editable={editable}
                   onCommit={onCommit}
+                  onEditStock={onEditStock}
                 />
               ))}
             </div>
@@ -226,13 +262,16 @@ function GrowerBlock({
   fullColumns,
   editable,
   onCommit,
+  onEditStock,
 }: {
   grower: MatrixGrowerRow;
   entries: ColumnEntry[];
   fullColumns: MatrixColumn[];
   editable: boolean;
   onCommit: (write: MatrixWrite) => Promise<boolean>;
+  onEditStock: ((pickLineId: string) => void) | undefined;
 }) {
+  const stockLine = editableStockLine(grower, editable && onEditStock !== undefined);
   return (
     <div className="overflow-hidden rounded-lg bg-surface shadow-card ring-1 ring-inset ring-border/70">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 bg-surface-muted/60 px-3 py-2">
@@ -240,7 +279,16 @@ function GrowerBlock({
           {grower.growerName}
         </p>
         <span className="flex shrink-0 gap-3">
-          <Stat label="במלאי" value={grower.inStock} />
+          <Stat
+            label="במלאי"
+            value={grower.inStock}
+            {...(stockLine
+              ? {
+                  onEdit: () => onEditStock?.(stockLine.pickLineId),
+                  editLabel: `עדכון מלאי — ${stockLine.growerName}`,
+                }
+              : {})}
+          />
           <Stat
             label="זמין"
             value={grower.available}
@@ -329,18 +377,18 @@ function CustomerCellList({
               <MatrixMobileInput
                 label={`${column.customerName} — כמות`}
                 displayValue={displayValue}
-                unsaved={cell.proposed > 0}
+                unsaved={cell.unsaved}
                 target={target}
                 onCommit={onCommit}
               />
             ) : (
               // Same dashed "this is a total, not a control" treatment the
               // desktop grid uses for its own read-only cells — including the
-              // accent on a number that is a proposal's and not yet saved.
+              // accent on a number that is not saved yet.
               <span
-                title={cell.proposed > 0 ? UNSAVED_TITLE : undefined}
+                title={cell.unsaved ? UNSAVED_TITLE : undefined}
                 className={`flex h-11 w-24 shrink-0 items-center justify-center rounded-md border text-center text-sm font-semibold ${
-                  cell.proposed > 0
+                  cell.unsaved
                     ? UNSAVED_BOX
                     : "border-dashed border-border-strong bg-surface-muted/70 text-ink-muted"
                 }`}
@@ -364,17 +412,18 @@ function MatrixMobileInput({
 }: {
   label: string;
   displayValue: string;
-  /** The number shown is a proposal's, not yet in the database — see UNSAVED_BOX. */
+  /** The number shown is not saved yet — see UNSAVED_BOX. */
   unsaved: boolean;
   target: CellTarget;
   onCommit: (write: MatrixWrite) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState(displayValue);
-  // Re-seeds when the server's own value changes under us (another
-  // distributor's write, or a push refetch) — tracked rather than synced in
-  // an effect, so a live update lands in the same render instead of painting
-  // the stale figure first. Same pattern as customer-demand-board.tsx's
-  // ArrangementCell.
+  // Re-seeds when the number the grid shows changes under us — another
+  // distributor's save, a push refetch, or the unsaved changes changing (a
+  // suggestion landing, the changes thrown away, a refusal dropping one) —
+  // tracked rather than synced in an effect, so a live update lands in the
+  // same render instead of painting the stale figure first. Same pattern as
+  // customer-demand-board.tsx's ArrangementCell.
   const [lastSeen, setLastSeen] = useState(displayValue);
   if (lastSeen !== displayValue) {
     setLastSeen(displayValue);
@@ -435,13 +484,18 @@ function Stat({
   label,
   value,
   tone = "normal",
+  onEdit,
+  editLabel,
 }: {
   label: string;
   value: number;
   tone?: "danger" | "normal";
+  /** When given, the stat is a button that calls it (במלאי → the stock popup). */
+  onEdit?: () => void;
+  editLabel?: string;
 }) {
-  return (
-    <span className="whitespace-nowrap text-xs">
+  const content = (
+    <>
       <span className="text-ink-subtle">{label} </span>
       <span
         className={`font-semibold tabular-nums ${tone === "danger" ? "text-danger" : "text-ink-muted"}`}
@@ -449,6 +503,20 @@ function Stat({
       >
         {formatPallets(value)}
       </span>
-    </span>
+    </>
+  );
+  if (!onEdit) return <span className="whitespace-nowrap text-xs">{content}</span>;
+  return (
+    // Padded to a larger tap target than the text, and underlined on hover
+    // like the desktop grid's number. `relative` lifts it above the card's
+    // stretched toggle button, so a tap here opens the popup, not the card.
+    <button
+      type="button"
+      onClick={onEdit}
+      aria-label={editLabel}
+      className="relative -m-2 whitespace-nowrap rounded-sm p-2 text-xs underline-offset-4 hover:underline hover:decoration-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-bright"
+    >
+      {content}
+    </button>
   );
 }

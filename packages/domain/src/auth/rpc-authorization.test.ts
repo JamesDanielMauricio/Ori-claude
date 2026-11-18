@@ -23,7 +23,11 @@ import {
 } from "@ori/domain/auth/testing";
 import { toOrderableCatalogRpcArgs, toSubmitOrderRpcArgs } from "@ori/domain/customer";
 import { createTestDailyOrder, createTestDailyShop } from "@ori/domain/customer/testing";
-import { toSavePickLinesRpcArgs, toUpdatePickProductDetailsRpcArgs } from "@ori/domain/grower";
+import {
+  toSavePickLinesRpcArgs,
+  toSetPickPickupTimeRpcArgs,
+  toUpdatePickProductDetailsRpcArgs,
+} from "@ori/domain/grower";
 import {
   toRevertPickToDraftRpcArgs,
   toSubmitPickRpcArgs,
@@ -289,6 +293,15 @@ describe("privileged functions refuse callers without a profile or a sign-in (00
       (c) => c.rpc("submit_pick", toSubmitPickRpcArgs({ dailyPickId: pickA.id })),
       everyoneButStaffAndOwner(),
     );
+    await expectRefused(
+      "set_pick_pickup_time",
+      (c) =>
+        c.rpc(
+          "set_pick_pickup_time",
+          toSetPickPickupTimeRpcArgs({ dailyPickId: pickA.id, pickupTime: "06:30" }),
+        ),
+      everyoneButStaffAndOwner(),
+    );
   }, 60000);
 
   it("revert_pick_to_draft, create_alert and build_arrangement_alerts refuse everyone but backoffice", async () => {
@@ -317,6 +330,27 @@ describe("privileged functions refuse callers without a profile or a sign-in (00
       (c) => c.rpc("build_arrangement_alerts", { p_trading_day_id: dayId }),
       outsiders(),
     );
+  }, 60000);
+
+  it("send_order_reminder with a list refuses everyone but backoffice and queues nothing (0104)", async () => {
+    const [order] = await db
+      .select()
+      .from(dailyOrders)
+      .where(inArray(dailyOrders.customerCompanyId, [customer2.companyId]));
+    await expectRefused(
+      "send_order_reminder",
+      (c) =>
+        c.rpc("send_order_reminder", {
+          p_daily_order_id: order!.id,
+          p_recipient_user_ids: [customer1.userId],
+        }),
+      everyoneButStaffAndOwner(),
+    );
+    // expectRefused already proves the day's outbox rows are unchanged; this
+    // says it plainly for the one company a reminder would have gone to.
+    expect(
+      await db.select().from(notificationOutbox).where(eq(notificationOutbox.recipientCompanyId, customer2.companyId)),
+    ).toHaveLength(0);
   }, 60000);
 
   it("submit_order refuses an order on another company's behalf from anyone but backoffice, and an own-order send from anyone but a customer", async () => {
@@ -414,6 +448,14 @@ describe("privileged functions refuse callers without a profile or a sign-in (00
     );
     expect(sent.error).toBeNull();
     expect((await pick()).status).toBe("submitted");
+
+    // The owning grower can set the day's pickup time (0105), even after sending.
+    const timed = await growerA.client.rpc(
+      "set_pick_pickup_time",
+      toSetPickPickupTimeRpcArgs({ dailyPickId: pickA.id, pickupTime: "06:30" }),
+    );
+    expect(timed.error).toBeNull();
+    expect((await pick()).pickupTime).toBe("06:30:00");
 
     const reopened = await admin.client.rpc(
       "revert_pick_to_draft",

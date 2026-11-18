@@ -169,4 +169,109 @@ test.describe("Backoffice — Grower Inventory Status", () => {
       "distributor-entered note",
     );
   });
+
+  test("filters growers by pick status and counts who has sent", async ({ page }) => {
+    const sentGrower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(sentGrower));
+    const draftGrower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(draftGrower));
+
+    const adminCompany = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(adminCompany.id));
+    const admin = await createTestProfile({ companyId: adminCompany.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const adminClient = await signInTestUser(admin.email, admin.password);
+
+    const nameOf = async (companyId: string) => {
+      const { data, error } = await adminClient
+        .from("companies")
+        .select("name")
+        .eq("id", companyId)
+        .single();
+      if (error) throw error;
+      return data.name;
+    };
+    const sentName = await nameOf(sentGrower.companyId);
+    const draftName = await nameOf(draftGrower.companyId);
+
+    const tradeDate = new Date().toISOString().slice(0, 10);
+    const input = initiateBusinessDayInputSchema.parse({ tradeDate });
+    const { data, error } = await adminClient.rpc(
+      "initiate_business_day",
+      toInitiateBusinessDayRpcArgs(input),
+    );
+    if (error) throw error;
+    const dayId = data!.id;
+    cleanupFns.push(() => deleteTestTradingDay(dayId));
+
+    // Send one of the two picks; the other stays a draft.
+    const sentPick = await getDailyPickForGrower(dayId, sentGrower.companyId);
+    const submit = await adminClient.rpc("submit_pick", { p_daily_pick_id: sentPick!.id });
+    if (submit.error) throw submit.error;
+
+    // The counter's two numbers, read from the database for this day rather
+    // than hard-coded: other fixtures may share the day. X = sent or closed
+    // picks and Y = picks, both of active growers only (the screen's list).
+    const activeGrowers = await adminClient
+      .from("companies")
+      .select("id")
+      .eq("type", "grower")
+      .eq("status", "active");
+    if (activeGrowers.error) throw activeGrowers.error;
+    const activeIds = new Set(activeGrowers.data.map((row) => row.id));
+    const picks = await adminClient
+      .from("daily_picks")
+      .select("grower_company_id, status")
+      .eq("trading_day_id", dayId);
+    if (picks.error) throw picks.error;
+    const ofActive = picks.data.filter((pick) => activeIds.has(pick.grower_company_id));
+    const expectedDone = ofActive.filter(
+      (pick) => pick.status === "submitted" || pick.status === "closed",
+    ).length;
+    const expectedTotal = ofActive.length;
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+    await page.goto("/backoffice/distributor-grower");
+
+    const sentEdit = page.getByRole("button", { name: `ערוך את מלאי ${sentName}` });
+    const draftEdit = page.getByRole("button", { name: `ערוך את מלאי ${draftName}` });
+    const statusFilter = page.getByRole("combobox", { name: "סינון לפי סטטוס" });
+    const pickStatus = async (label: string) => {
+      await statusFilter.click();
+      await page.getByRole("option", { name: label, exact: true }).click();
+    };
+
+    await expect(page.getByText(`הזינו קטיף: ${expectedDone} מתוך ${expectedTotal}`)).toBeVisible();
+    await expect(sentEdit).toBeVisible();
+    await expect(draftEdit).toBeVisible();
+
+    // Phone width: the filter and counter stay on screen (wrapped under the
+    // search box) and the page does not scroll sideways.
+    await page.setViewportSize({ width: 375, height: 800 });
+    await expect(statusFilter).toBeVisible();
+    await expect(page.getByText(`הזינו קטיף: ${expectedDone} מתוך ${expectedTotal}`)).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+    // Screenshots only on request, so CI writes no files.
+    if (process.env.ORI_SHOTS) await page.screenshot({ path: `${process.env.ORI_SHOTS}/grower-375.png` });
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    await pickStatus("נשלח");
+    await expect(sentEdit).toBeVisible();
+    await expect(draftEdit).toHaveCount(0);
+    // The counter ignores the filter.
+    await expect(page.getByText(`הזינו קטיף: ${expectedDone} מתוך ${expectedTotal}`)).toBeVisible();
+
+    await pickStatus("טיוטה");
+    await expect(draftEdit).toBeVisible();
+    await expect(sentEdit).toHaveCount(0);
+
+    // An impossible combination: the sent grower, filtered to drafts.
+    await page.getByRole("searchbox").fill(sentName);
+    await expect(page.getByText("אין מגדלים בסטטוס הזה")).toBeVisible();
+    await expect(page.getByText("נסה מונח חיפוש או סטטוס אחר.")).toBeVisible();
+  });
 });

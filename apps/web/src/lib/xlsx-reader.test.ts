@@ -691,7 +691,21 @@ describe("readXlsxSheet — files it refuses", () => {
 // repeats — turns them into many seconds of a frozen tab (6.7 s and 10.7 s,
 // before the tokenizer bounded its lookups; tens of milliseconds after). The
 // time limit is far from both.
-describe("readXlsxSheet — files built to be slow", () => {
+//
+// On CI the limit is longer. The runner is a small shared machine that also
+// runs the local Supabase stack and every package's tests at once, and one
+// whole run there went 3 to 13 times slower than a laptop: the 19 MB
+// hidden-columns file took 2.5 s, against under half a second on a laptop.
+// The narrowest catch is that file's own bug (every range marked across all
+// its columns, not just those read): 5.7 s on a laptop, so failed here at
+// 2 s, and some 30 s on CI at that run's pace, failed there at 10 s. Only a
+// CI run as fast as a laptop would let it through, and a laptop run still
+// catches it.
+const TIME_LIMIT = process.env.CI ? 10_000 : 2_000;
+
+// Vitest stops a test at 5 s unless told otherwise; this lets the limit
+// above be what fails, with the time it measured.
+describe("readXlsxSheet — files built to be slow", { timeout: TIME_LIMIT + 10_000 }, () => {
   async function timed(name: string, options: ReadXlsxOptions = {}) {
     const started = performance.now();
     const sheet = await readXlsxSheet(fixture(name), options);
@@ -700,7 +714,7 @@ describe("readXlsxSheet — files built to be slow", () => {
 
   it("reads 400,000 bare ampersands in one pass: in text, in an attribute, and before a far ';'", async () => {
     const { sheet, milliseconds } = await timed("ampersands.xlsx");
-    expect(milliseconds).toBeLessThan(2000);
+    expect(milliseconds).toBeLessThan(TIME_LIMIT);
     // None of them is an entity, so the text keeps every one as written.
     expect(sheet.rows).toEqual([
       { rowNumber: 1, cells: ["מוצר", "משטחים שנקטפו"] },
@@ -711,7 +725,7 @@ describe("readXlsxSheet — files built to be slow", () => {
 
   it("skips 400,000 '<!x>' declarations in one pass, and still reads the row after them", async () => {
     const { sheet, milliseconds } = await timed("declarations.xlsx");
-    expect(milliseconds).toBeLessThan(2000);
+    expect(milliseconds).toBeLessThan(TIME_LIMIT);
     expect(sheet.rows).toEqual([
       { rowNumber: 1, cells: ["מוצר", "משטחים שנקטפו"] },
       { rowNumber: 2, cells: ["מלפפון", 4] },
@@ -725,7 +739,7 @@ describe("readXlsxSheet — files built to be slow", () => {
     // alone are 4 * 10^10 steps (96 seconds, tried); with a search for "]"
     // from every "[", the brackets are 5 * 10^11 characters searched.
     const { sheet, milliseconds } = await timed("styles-slow.xlsx");
-    expect(milliseconds).toBeLessThan(2000);
+    expect(milliseconds).toBeLessThan(TIME_LIMIT);
     // None of them is a date; the plain date style after them still is.
     expect(sheet.rows.map((row) => [row.rowNumber, row.dateColumns ?? []])).toEqual([
       [1, []],
@@ -741,7 +755,7 @@ describe("readXlsxSheet — files built to be slow", () => {
     // 19 MB of <col min="1" max="16384" hidden="1"/> in a 57 KB file. Each
     // range is marked only as far as the columns read (100 by default).
     const { sheet, milliseconds } = await timed("columns-slow.xlsx");
-    expect(milliseconds).toBeLessThan(2000);
+    expect(milliseconds).toBeLessThan(TIME_LIMIT);
     expect(sheet.hiddenColumns).toEqual(Array.from({ length: 100 }, (_, index) => index));
     expect(sheet.rows).toEqual([
       { rowNumber: 1, cells: ["קוד מוצר", "מוצר", "משטחים שנקטפו"] },

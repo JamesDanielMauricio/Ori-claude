@@ -1,4 +1,5 @@
 import {
+  EmailInUseError,
   RecoveryLinkSendFailedError,
   RecoveryLinkUndeliverableError,
   UserNotFoundError,
@@ -27,6 +28,13 @@ const UNDELIVERABLE_MESSAGE: Record<RecoveryLinkUndeliverableReason, string> = {
 export function toTRPCError(error: unknown): TRPCError {
   if (error instanceof UserNotFoundError) {
     return new TRPCError({ code: "NOT_FOUND", message: "המשתמש לא נמצא.", cause: error });
+  }
+  if (error instanceof EmailInUseError) {
+    return new TRPCError({
+      code: "CONFLICT",
+      message: "כתובת האימייל כבר רשומה למשתמש אחר.",
+      cause: error,
+    });
   }
   if (error instanceof RecoveryLinkUndeliverableError) {
     return new TRPCError({

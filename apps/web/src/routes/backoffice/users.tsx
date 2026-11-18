@@ -1,7 +1,7 @@
 import { saveUserInputSchema, toSaveUserRpcArgs } from "@ori/domain/reference-data";
 import type { UserRole } from "@ori/shared/roles";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { CellChipList } from "@/components/reference-data/cell-popover";
@@ -15,6 +15,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { useAuth } from "@/lib/auth-context";
+import { planEmailChange } from "@/lib/email-input";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
@@ -41,6 +42,11 @@ const CREATED_AT_FORMAT = new Intl.DateTimeFormat("he-IL", { dateStyle: "short" 
 
 interface FormState {
   displayName: string;
+  // The login address, as typed. It lives in Auth, not in profiles, so it is
+  // saved through its own API call. null until the user types in the box —
+  // the box then shows the saved address from the emails query, which may
+  // arrive late or fail, and editing must not depend on it.
+  email: string | null;
   role: UserRole;
   companyId: string;
   phoneNumber: string;
@@ -56,9 +62,10 @@ interface SaveVariables {
   storedPhone: string | null;
 }
 
-function toFormState(row: ProfileRow, blocked: string[]): FormState {
+function toFormState(row: ProfileRow, blocked: string[], email: string | null = null): FormState {
   return {
     displayName: row.display_name,
+    email,
     role: row.role,
     companyId: row.company_id,
     phoneNumber: row.phone_number ?? "",
@@ -99,6 +106,11 @@ export default function UsersPage() {
   // they come from the API's service-role endpoint and get joined onto the
   // profiles rows by id here. See apps/api/src/routers/auth.ts.
   const emailsQuery = trpc.auth.listUserEmails.useQuery();
+  const updateEmail = trpc.auth.updateUserEmail.useMutation();
+  const trpcUtils = trpc.useUtils();
+  // Set when the email was changed during the current save, so a later
+  // failure can say so (the email is already committed by then).
+  const emailChangedRef = useRef(false);
 
   // Every user's blocked-product selection in ONE read (see
   // referenceDataQueries.blockedProducts).
@@ -164,6 +176,11 @@ export default function UsersPage() {
   const saveMutation = useMutation({
     mutationFn: async ({ storedPhone }: SaveVariables): Promise<{ user_id: string }> => {
       if (!editingId || !form) throw new Error("No user selected");
+      emailChangedRef.current = false;
+      // Checked before anything is written, like the phone below — but only
+      // when the user really changed the address (see planEmailChange).
+      const emailPlan = planEmailChange(emailsQuery.data?.[editingId], form.email);
+      if (emailPlan.kind === "invalid") throw new Error("כתובת האימייל אינה תקינה.");
       // One stored form per number — 0501234567, or +12125551234 for a
       // foreign one (migration 0077). Checked before anything is saved, so a
       // refused number leaves the role, company and blocked products
@@ -179,6 +196,13 @@ export default function UsersPage() {
         // for anyone else it is left out, and save_user keeps what is there.
         productCategory: form.role === "customer" ? form.productCategory : undefined,
       });
+      // The email goes first: it is the write most likely to be refused (an
+      // address another user has), and if it is, nothing else has been saved
+      // yet, so the whole edit can simply be corrected and retried.
+      if (emailPlan.kind === "change") {
+        await updateEmail.mutateAsync({ targetUserId: editingId, email: emailPlan.email });
+        emailChangedRef.current = true;
+      }
       const { data, error } = await supabase.rpc("save_user", toSaveUserRpcArgs(input));
       if (error) throw error;
       // Phone number isn't part of save_user's RPC signature — a plain
@@ -205,6 +229,7 @@ export default function UsersPage() {
       setForm(null);
       void queryClient.invalidateQueries({ queryKey: usersQueryKey });
       void queryClient.invalidateQueries({ queryKey: blockedQueryKey });
+      void trpcUtils.auth.listUserEmails.invalidate();
       invalidateProfileReaders();
       // Their own row: the shell shows the name from the auth context, not
       // from this query.
@@ -228,6 +253,11 @@ export default function UsersPage() {
       void queryClient.invalidateQueries({ queryKey: usersQueryKey });
       void queryClient.invalidateQueries({ queryKey: blockedQueryKey });
       invalidateProfileReaders();
+      if (emailChangedRef.current) {
+        void trpcUtils.auth.listUserEmails.invalidate();
+        showToast(`האימייל עודכן, אבל שאר השינויים לא נשמרו: ${errorMessage(error)}`, "error");
+        return;
+      }
       showToast(`השמירה נכשלה: ${errorMessage(error)}`, "error");
     },
   });
@@ -265,9 +295,15 @@ export default function UsersPage() {
   }
 
   const baselineForm = selected
-    ? toFormState(selected, blockedQuery.data?.get(selected.user_id) ?? [])
+    ? // The email is compared separately below, so it is copied from the form here.
+      toFormState(selected, blockedQuery.data?.get(selected.user_id) ?? [], form?.email ?? null)
     : null;
-  const dirty = baselineForm === null || hasChanges(form, baselineForm);
+  // A late-arriving email list cannot flip this: the box only counts as changed
+  // when the user typed an address that differs from a KNOWN saved one.
+  const emailEdited =
+    selected !== null &&
+    planEmailChange(emailsQuery.data?.[selected.user_id], form?.email ?? null).kind !== "none";
+  const dirty = baselineForm === null || emailEdited || hasChanges(form, baselineForm);
 
   function handleSave() {
     setSaving(true);
@@ -311,9 +347,31 @@ export default function UsersPage() {
     {
       key: "email",
       label: "אימייל",
-      // Read-only: the login identity is an Auth record, not a profile
-      // field — changing it is a credential operation, not an edit here.
+      // The login identity is an Auth record, not a profile field, so it is
+      // changed through its own API call (auth.updateUserEmail), not
+      // save_user. That call runs first in the save: an address another user
+      // has is refused, and refusing before anything else is written means
+      // the rest of the edit is not half-saved.
       render: (row) => emailsQuery.data?.[row.user_id] ?? "—",
+      renderEdit: () => {
+        if (!form) return null;
+        // Until the saved address is known the box is locked: the rest of the
+        // edit still saves without it. Once it arrives it shows the address
+        // (form.email stays null until the user types, so nothing is overwritten).
+        const saved = editingId ? emailsQuery.data?.[editingId] : undefined;
+        return (
+          <input
+            type="email"
+            dir="ltr"
+            aria-label="אימייל"
+            className={`${inputClassName} w-full min-w-[12rem]`}
+            disabled={saved === undefined}
+            placeholder={saved === undefined ? "טוען…" : undefined}
+            value={form.email ?? saved ?? ""}
+            onChange={(event) => setForm((current) => current && { ...current, email: event.target.value })}
+          />
+        );
+      },
     },
     {
       key: "role",

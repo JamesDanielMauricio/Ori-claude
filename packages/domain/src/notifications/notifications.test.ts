@@ -195,10 +195,10 @@ describe("notifications module", () => {
     expect(data).toHaveLength(1);
     expect(data![0]!.target).toBe("grp-123");
     expect(data![0]!.is_group).toBe(true);
-    expect(data![0]!.message).toContain(growerCompany.name);
-    expect(data![0]!.message).toContain("בננה — צהובה");
-    expect(data![0]!.message).toContain("2026-07-12");
-    expect(data![0]!.message).toContain("https://example.test/day");
+    // 0102: a grower's lines grouped under each customer in bold, the day as
+    // "<first letter of its name> dd.mm.yy" (12.07.26 is a Sunday, ראשון), and
+    // the link after a blank line — Bubble's way.
+    expect(data![0]!.message).toBe(`${growerCompany.name} - *לקוח א*\n3 בננה\t  צהובה  - ר 12.07.26\nend\n\nhttps://example.test/day`);
   }, 30000);
 
   it("resolve_outbox_dispatch routes to each individual user's phone (972-prefixed, leading 0 stripped) when no group id is set, skipping users with no phone", async () => {

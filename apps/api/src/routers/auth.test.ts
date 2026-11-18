@@ -82,4 +82,61 @@ describe("auth router — role guards", () => {
       trpcCaller.auth.adminResetPassword({ targetUserId: admin.userId }),
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
+
+  it("updateUserEmail refuses a signed-out caller and a grower", async () => {
+    const company = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(company.id));
+    const grower = await createTestProfile({ companyId: company.id, role: "grower" });
+    cleanupFns.push(() => deleteTestUser(grower.userId));
+    const input = { targetUserId: grower.userId, email: `x-${randomUUID()}@example.test` };
+
+    await expect(
+      appRouter.createCaller(contextWithCaller(null)).auth.updateUserEmail(input),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(
+      appRouter
+        .createCaller(
+          contextWithCaller({ userId: grower.userId, email: grower.email, role: "grower" }),
+        )
+        .auth.updateUserEmail(input),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("a backoffice caller changes another user's email", async () => {
+    const company = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(company.id));
+    const admin = await createTestProfile({ companyId: company.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const target = await createTestProfile({ companyId: company.id, role: "grower" });
+    cleanupFns.push(() => deleteTestUser(target.userId));
+    const newEmail = `changed-${randomUUID()}@example.test`;
+
+    const trpcCaller = appRouter.createCaller(
+      contextWithCaller({ userId: admin.userId, email: admin.email, role: "backoffice" }),
+    );
+
+    await expect(
+      trpcCaller.auth.updateUserEmail({ targetUserId: target.userId, email: newEmail }),
+    ).resolves.toEqual({ ok: true, email: newEmail });
+  });
+
+  it("a taken address is CONFLICT with the Hebrew sentence", async () => {
+    const company = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(company.id));
+    const admin = await createTestProfile({ companyId: company.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const target = await createTestProfile({ companyId: company.id, role: "grower" });
+    cleanupFns.push(() => deleteTestUser(target.userId));
+
+    const trpcCaller = appRouter.createCaller(
+      contextWithCaller({ userId: admin.userId, email: admin.email, role: "backoffice" }),
+    );
+
+    await expect(
+      trpcCaller.auth.updateUserEmail({ targetUserId: target.userId, email: admin.email }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: "כתובת האימייל כבר רשומה למשתמש אחר.",
+    });
+  });
 });

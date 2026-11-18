@@ -15,6 +15,9 @@ import { createClient } from "@/lib/supabase/client";
 export interface PickedStock {
   varietyIds: ReadonlySet<string>;
   stockByVariety: ReadonlyMap<string, number>;
+  // variety id -> the ONE pick line that supplies it that day. Present only
+  // while that line's pick is open: it is what the stock popup edits.
+  singleLineByVariety: ReadonlyMap<string, string>;
 }
 
 // A stable empty value for "the day has nothing / we don't know yet", so the
@@ -23,6 +26,7 @@ export interface PickedStock {
 export const NO_PICKED_STOCK: PickedStock = {
   varietyIds: new Set<string>(),
   stockByVariety: new Map<string, number>(),
+  singleLineByVariety: new Map<string, string>(),
 };
 
 // The queryFn returns plain arrays and the Set and Map are built here, in
@@ -30,11 +34,17 @@ export const NO_PICKED_STOCK: PickedStock = {
 // a Set straight from the queryFn would be a new object on every live-update
 // refetch and re-filter the whole table even when nothing changed. A select
 // declared once is re-run only when the shared array itself changes.
-function toPickedStock(entries: ReadonlyArray<readonly [string, number]>): PickedStock {
-  if (entries.length === 0) return NO_PICKED_STOCK;
+interface PickedStockData {
+  stock: Array<[string, number]>;
+  single: Array<[string, string]>;
+}
+
+function toPickedStock({ stock, single }: PickedStockData): PickedStock {
+  if (stock.length === 0) return NO_PICKED_STOCK;
   return {
-    varietyIds: new Set(entries.map(([id]) => id)),
-    stockByVariety: new Map(entries),
+    varietyIds: new Set(stock.map(([id]) => id)),
+    stockByVariety: new Map(stock),
+    singleLineByVariety: new Map(single),
   };
 }
 
@@ -65,6 +75,37 @@ export function sumStockByVariety(lines: ReadonlyArray<PickLine>): ReadonlyMap<s
   return stock;
 }
 
+// The varieties exactly one pick line supplies (picked + leftover > 0), mapped
+// to that line's id: the products the stock popup may edit. EVERY supplying
+// line counts, closed picks included, because "משטחים במלאי" sums them all, so
+// with one open and one closed supplier the number is not one line's stock. A
+// variety whose one line sits on a closed pick is left out, since a closed
+// pick's stock can no longer be changed.
+export function singleSupplyLines(
+  lines: ReadonlyArray<{
+    id: string;
+    daily_pick_id: string;
+    product_variety_id: string;
+    pallets_picked: number | string | null;
+    leftover_pallets: number | string | null;
+  }>,
+  closedPickIds: ReadonlySet<string> = new Set(),
+): ReadonlyMap<string, string> {
+  const suppliers = new Map<string, Array<{ id: string; daily_pick_id: string }>>();
+  for (const line of lines) {
+    if (parsePallets(line.pallets_picked) + parsePallets(line.leftover_pallets) <= 0) continue;
+    const list = suppliers.get(line.product_variety_id) ?? [];
+    list.push(line);
+    suppliers.set(line.product_variety_id, list);
+  }
+  const single = new Map<string, string>();
+  for (const [varietyId, list] of suppliers) {
+    const only = list.length === 1 ? list[0] : undefined;
+    if (only && !closedPickIds.has(only.daily_pick_id)) single.set(varietyId, only.id);
+  }
+  return single;
+}
+
 export const pickedProductsQueries = {
   // Which varieties had supply on a day: a pick line with `pallets_picked >
   // 0` OR `leftover_pallets > 0` (see routes/backoffice/picked-products.tsx
@@ -79,18 +120,25 @@ export const pickedProductsQueries = {
     return queryOptions({
       queryKey: ["picked-products", "varieties", dayId],
       enabled: !!dayId,
-      queryFn: async (): Promise<Array<[string, number]>> => {
+      queryFn: async (): Promise<PickedStockData> => {
         const supabase = createClient();
-        const picks = await supabase.from("daily_picks").select("id").eq("trading_day_id", dayId!);
+        const picks = await supabase
+          .from("daily_picks")
+          .select("id, status")
+          .eq("trading_day_id", dayId!);
         if (picks.error) throw picks.error;
 
         const pickIds = picks.data.map((pick) => pick.id);
-        if (pickIds.length === 0) return [];
+        if (pickIds.length === 0) return { stock: [], single: [] };
+        // A closed pick's stock is final, so its line gets no popup.
+        const closedPickIds = new Set(
+          picks.data.filter((pick) => pick.status === "closed").map((pick) => pick.id),
+        );
 
-        const lines = await fetchAllRows<PickLine>((from, to) =>
+        const lines = await fetchAllRows<PickLine & { id: string; daily_pick_id: string }>((from, to) =>
           supabase
             .from("daily_pick_products")
-            .select("product_variety_id, pallets_picked, leftover_pallets")
+            .select("id, daily_pick_id, product_variety_id, pallets_picked, leftover_pallets")
             // Ordered so paging is stable: without an ORDER BY, Postgres is free
             // to return the same row on two pages and skip another entirely.
             .order("id")
@@ -98,7 +146,10 @@ export const pickedProductsQueries = {
             .range(from, to),
         );
 
-        return [...sumStockByVariety(lines)];
+        return {
+          stock: [...sumStockByVariety(lines)],
+          single: [...singleSupplyLines(lines, closedPickIds)],
+        };
       },
       select: toPickedStock,
     });

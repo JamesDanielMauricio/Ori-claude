@@ -44,3 +44,11 @@ export class RecoveryLinkSendFailedError extends Error {
     this.name = "RecoveryLinkSendFailedError";
   }
 }
+
+// The new login email is already on another account — nothing was changed.
+export class EmailInUseError extends Error {
+  constructor() {
+    super("That email address is already in use.");
+    this.name = "EmailInUseError";
+  }
+}

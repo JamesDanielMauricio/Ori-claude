@@ -1,6 +1,7 @@
 import { numeric, pgTable, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 import { dailyOrders } from "./daily-order";
+import { priceTypeEnum } from "./enums";
 import { productVarieties } from "./product-variety";
 
 // A customer's per-variety order line — created/updated/pruned by
@@ -29,6 +30,18 @@ export const dailyOrderProducts = pgTable(
       .references(() => productVarieties.id),
     palletsOrdered: numeric("pallets_ordered", { precision: 10, scale: 2 }).notNull().default("0"),
     comment: text("comment"),
+    // The price this line was last saved at, as its customer was shown it
+    // (migration 0101) — a record kept for later; no screen shows it.
+    // submit_order writes it on every save, but only when the order's
+    // customer may see prices (their company's can_see_product_prices AND
+    // the day's shop can_see_prices, on a staff save for them too), by the
+    // product's price type: fixed the price, range both ends, a record_*
+    // (תקליט) type the type alone. A save that may not see prices leaves it
+    // as it was. Same column types as product_varieties' four.
+    price: numeric("price", { precision: 10, scale: 2 }),
+    priceRangeFrom: numeric("price_range_from", { precision: 10, scale: 2 }),
+    priceRangeTo: numeric("price_range_to", { precision: 10, scale: 2 }),
+    priceType: priceTypeEnum("price_type"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

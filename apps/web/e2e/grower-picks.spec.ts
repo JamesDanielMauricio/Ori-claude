@@ -28,7 +28,12 @@ test.describe("Grower — daily picking input", () => {
     await runCleanup(cleanupFns);
   });
 
-  async function openTodayFor(growerCompanyId: string): Promise<{ dayId: string; pickId: string }> {
+  async function openTodayFor(growerCompanyId: string): Promise<{
+    dayId: string;
+    pickId: string;
+    admin: { email: string; password: string };
+    adminClient: Awaited<ReturnType<typeof signInTestUser>>;
+  }> {
     const adminCompany = await createTestCompany();
     cleanupFns.push(() => deleteTestCompany(adminCompany.id));
     const admin = await createTestProfile({ companyId: adminCompany.id, role: "backoffice" });
@@ -44,7 +49,7 @@ test.describe("Grower — daily picking input", () => {
 
     const pick = await getDailyPickForGrower(dayId, growerCompanyId);
     if (!pick) throw new Error("grower's pick was not bootstrapped by initiate_business_day");
-    return { dayId, pickId: pick.id };
+    return { dayId, pickId: pick.id, admin, adminClient };
   }
 
   test("a grower edits a pick line's pallets and comment, confirms it in the review popup, and it is saved AND sent", async ({
@@ -229,5 +234,89 @@ test.describe("Grower — daily picking input", () => {
     await expect(page.locator("main").getByText("נשלח", { exact: true })).toBeVisible();
     expect((await getDailyPickForGrower(dayId, grower.companyId))?.status).toBe("submitted");
     await expect(saveButton).toBeDisabled();
+  });
+
+  test("a grower changes the day's pickup time; the office board shows it and sending keeps it", async ({
+    page,
+    browser,
+  }) => {
+    test.slow();
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const { admin } = await openTodayFor(grower.companyId);
+
+    const growerUser = await createTestProfile({ companyId: grower.companyId, role: "grower" });
+    cleanupFns.push(() => deleteTestUser(growerUser.userId));
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(growerUser.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(growerUser.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/grower\/picks$/);
+
+    // The fixture company has no default time, so the strip says so.
+    await page.getByRole("button", { name: "שעת איסוף: לא נקבעה" }).click();
+    const timeDialog = page.locator("dialog[open]");
+    await timeDialog.getByLabel("שעת איסוף").fill("05:45");
+    await timeDialog.getByRole("button", { name: "שמור", exact: true }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "שעת איסוף 05:45" })).toBeVisible();
+
+    // Sending the pick keeps the time the grower chose.
+    await page.getByRole("button", { name: "שמור", exact: true }).click();
+    await page.locator("dialog[open]").getByRole("button", { name: "שמור ושלח" }).click();
+    await expect(page.getByText("הליקוט נשמר ונשלח.")).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(page.locator("main").getByText("נשלח", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "שעת איסוף 05:45" })).toBeVisible();
+
+    // The office's board shows it on the grower's card. A fresh browser
+    // context, so the grower's session is not reused.
+    const officeContext = await browser.newContext({ baseURL: new URL(page.url()).origin });
+    try {
+      const officePage = await officeContext.newPage();
+      await officePage.goto("/login");
+      await officePage.getByLabel("אימייל").fill(admin.email);
+      await officePage.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+      await officePage.getByRole("button", { name: "התחברות" }).click();
+      await expect(officePage).toHaveURL(/\/backoffice\/shop$/);
+      await officePage.goto("/backoffice/arrangement");
+      const growerCard = officePage.locator("li").filter({ hasText: grower.companyName });
+      await expect(growerCard.getByText("05:45")).toBeVisible();
+    } finally {
+      await officeContext.close();
+    }
+  });
+
+  test("a pick closed meanwhile refuses the new time", async ({ page }) => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const { pickId, adminClient } = await openTodayFor(grower.companyId);
+
+    const growerUser = await createTestProfile({ companyId: grower.companyId, role: "grower" });
+    cleanupFns.push(() => deleteTestUser(growerUser.userId));
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(growerUser.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(growerUser.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/grower\/picks$/);
+
+    await page.getByRole("button", { name: "שעת איסוף: לא נקבעה" }).click();
+    const timeDialog = page.locator("dialog[open]");
+    await timeDialog.getByLabel("שעת איסוף").fill("05:45");
+
+    // The office closes the pick while the dialog is open.
+    const closed = await adminClient.rpc("set_pick_closed", { p_daily_pick_id: pickId, p_closed: true });
+    if (closed.error) throw closed.error;
+
+    await timeDialog.getByRole("button", { name: "שמור", exact: true }).click();
+    // The refusal is on the dialog, which stays open.
+    await expect(timeDialog.getByRole("alert")).toHaveText("הליקוט סגור, ואי אפשר לשנות אותו.");
+
+    // Closing it re-reads the pick: it is closed, so nothing offers to change the time.
+    await timeDialog.getByRole("button", { name: "ביטול" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /שעת איסוף/ })).toHaveCount(0);
   });
 });

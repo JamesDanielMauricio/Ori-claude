@@ -671,6 +671,12 @@ export type Database = {
           product_variety_id: string;
           pallets_ordered: number;
           comment: string | null;
+          // The price this line was last saved at, as its customer was shown
+          // it (migration 0101; written by submit_order, shown nowhere).
+          price: number | null;
+          price_range_from: number | null;
+          price_range_to: number | null;
+          price_type: Database["public"]["Enums"]["price_type"] | null;
           created_at: string;
           updated_at: string;
         };
@@ -680,6 +686,10 @@ export type Database = {
           product_variety_id: string;
           pallets_ordered?: number;
           comment?: string | null;
+          price?: number | null;
+          price_range_from?: number | null;
+          price_range_to?: number | null;
+          price_type?: Database["public"]["Enums"]["price_type"] | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -689,6 +699,10 @@ export type Database = {
           product_variety_id?: string;
           pallets_ordered?: number;
           comment?: string | null;
+          price?: number | null;
+          price_range_from?: number | null;
+          price_range_to?: number | null;
+          price_type?: Database["public"]["Enums"]["price_type"] | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -842,6 +856,7 @@ export type Database = {
           skipped_at: string | null;
           retry_requested_at: string | null;
           retry_requested_by: string | null;
+          recipient_user_ids: string[] | null;
         };
         Insert: {
           id?: string;
@@ -862,6 +877,7 @@ export type Database = {
           skipped_at?: string | null;
           retry_requested_at?: string | null;
           retry_requested_by?: string | null;
+          recipient_user_ids?: string[] | null;
         };
         Update: {
           id?: string;
@@ -882,6 +898,7 @@ export type Database = {
           skipped_at?: string | null;
           retry_requested_at?: string | null;
           retry_requested_by?: string | null;
+          recipient_user_ids?: string[] | null;
         };
         Relationships: [
           {
@@ -1389,6 +1406,13 @@ export type Database = {
         };
         Returns: Database["public"]["Tables"]["daily_pick_products"]["Row"][];
       };
+      set_pick_pickup_time: {
+        Args: {
+          p_daily_pick_id: string;
+          p_pickup_time: string;
+        };
+        Returns: Database["public"]["Tables"]["daily_picks"]["Row"];
+      };
       send_pick_reminder: {
         Args: {
           p_daily_pick_id: string;
@@ -1520,6 +1544,7 @@ export type Database = {
       send_order_reminder: {
         Args: {
           p_daily_order_id: string;
+          p_recipient_user_ids?: string[];
         };
         Returns: Database["public"]["Tables"]["daily_orders"]["Row"];
       };
@@ -1606,6 +1631,15 @@ export type Database = {
         Args: {
           p_trading_day_id: string;
           p_allocations: Json;
+        };
+        Returns: number;
+      };
+      // The products grid's one save (migration 0103): all the changed
+      // cells in one transaction. Returns how many cells it changed.
+      save_arrangement_changes: {
+        Args: {
+          p_trading_day_id: string;
+          p_changes: Json;
         };
         Returns: number;
       };

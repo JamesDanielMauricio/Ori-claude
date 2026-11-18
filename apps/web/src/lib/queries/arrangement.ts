@@ -1,12 +1,13 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
-import type {
-  BoardCompany,
-  BoardOrder,
-  BoardPick,
-  BoardRecord,
-  BoardSubmissionLog,
-  BoardSubmissionTime,
+import {
+  parsePallets,
+  type BoardCompany,
+  type BoardOrder,
+  type BoardPick,
+  type BoardRecord,
+  type BoardSubmissionLog,
+  type BoardSubmissionTime,
 } from "@/components/arrangement/board-data";
 import { fetchAllRows, PAGE_SIZE } from "@/lib/fetch-all-rows";
 import { createClient } from "@/lib/supabase/client";
@@ -34,6 +35,17 @@ export const newArrangementKeys = {
   matrixAll: ["new-arrangement", "matrix"] as const,
   matrix: (dayId: string | null) => ["new-arrangement", "matrix", dayId] as const,
 };
+
+// After a pick line's stock is saved (the quick stock popup), re-read every
+// screen that shows it: the grid, both boards, מוצרים שנקטפו, and the grower
+// oversight list. invalidateQueries matches by key prefix, so
+// ["picked-products"] reaches ["picked-products", "varieties", dayId].
+export function invalidateStockReads(queryClient: QueryClient, dayId: string): void {
+  void queryClient.invalidateQueries({ queryKey: newArrangementKeys.matrix(dayId) });
+  void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
+  void queryClient.invalidateQueries({ queryKey: ["picked-products"] });
+  void queryClient.invalidateQueries({ queryKey: ["grower-oversight", "picks-for-day"] });
+}
 
 // One trading day with everything both arrangement screens draw from it, as
 // ONE nested row — see boardData() below for why this is a single shape
@@ -74,6 +86,23 @@ export interface ProductVarietyRow {
   is_seasonal_available: boolean;
   number_of_orders_per_customer: number | null;
   version: number;
+}
+
+/** What the quick stock edit reads of one pick line — see pickLineForEdit. */
+export interface PickLineForEdit {
+  id: string;
+  dailyPickId: string;
+  palletsPicked: number;
+  leftoverPallets: number;
+  comment: string | null;
+  /** The pick's status. "closed" refuses every edit. */
+  status: string;
+  growerName: string;
+  varietyName: string;
+  sizes: string | null;
+  familyName: string;
+  /** Pallets already arranged off this line, to any customer. */
+  arranged: number;
 }
 
 const RECORD_COLUMNS =
@@ -218,6 +247,50 @@ export const arrangementQueries = {
           .in("type", ["grower", "customer"]);
         if (error) throw error;
         return data;
+      },
+    });
+  },
+
+  // One pick line as the quick stock edit needs it, read fresh every time the
+  // popup opens (`staleTime: 0`): the numbers to edit, the comment that
+  // save_pick_lines would otherwise wipe, whether the pick has been closed
+  // meanwhile, and what is already arranged off the line (the floor the two
+  // boxes may not go below).
+  pickLineForEdit(lineId: string | null) {
+    return queryOptions({
+      queryKey: ["arrangement", "pick-line", lineId] as const,
+      enabled: !!lineId,
+      staleTime: 0,
+      // Dropped the moment the popup lets go of it: the boxes start from the
+      // first read of each opening, so a copy kept from the last opening
+      // would put its old numbers in them for the moment before the new read
+      // lands.
+      gcTime: 0,
+      queryFn: async (): Promise<PickLineForEdit> => {
+        const { data, error } = await createClient()
+          .from("daily_pick_products")
+          .select(
+            "id, daily_pick_id, pallets_picked, leftover_pallets, comment, daily_picks(status, companies(name)), product_varieties(name, sizes, product_families(name)), arrangement_records(quantity_pallets)",
+          )
+          .eq("id", lineId!)
+          .single();
+        if (error) throw error;
+        return {
+          id: data.id,
+          dailyPickId: data.daily_pick_id,
+          palletsPicked: parsePallets(data.pallets_picked),
+          leftoverPallets: parsePallets(data.leftover_pallets),
+          comment: data.comment,
+          status: data.daily_picks?.status ?? "closed",
+          growerName: data.daily_picks?.companies?.name ?? "—",
+          varietyName: data.product_varieties?.name ?? "",
+          sizes: data.product_varieties?.sizes ?? null,
+          familyName: data.product_varieties?.product_families?.name ?? "",
+          arranged: data.arrangement_records.reduce(
+            (sum, record) => sum + parsePallets(record.quantity_pallets),
+            0,
+          ),
+        };
       },
     });
   },

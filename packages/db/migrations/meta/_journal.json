@@ -708,6 +708,48 @@
       "when": 1792789200000,
       "tag": "0100_price-type-enum",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1792875600000,
+      "tag": "0101_order-line-prices",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1792962000000,
+      "tag": "0102_bubble-whatsapp-texts",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1793048400000,
+      "tag": "0103_save-arrangement-changes",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1793134800000,
+      "tag": "0104_order-reminder-recipients",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1793221200000,
+      "tag": "0105_grower-sets-pickup-time",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1793307600000,
+      "tag": "0106_whatsapp-schedule-calls-its-own-project",
+      "breakpoints": true
     }
   ]
 }

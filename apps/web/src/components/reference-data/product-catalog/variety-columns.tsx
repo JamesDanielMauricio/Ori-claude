@@ -36,6 +36,10 @@ export interface VarietyColumnsContext {
   saving: boolean;
   // מוצרים שנקטפו only — see ProductCatalogScreen's prop of the same name.
   stockByVariety?: ReadonlyMap<string, number> | undefined;
+  // The stock number becomes a button (the quick stock popup) for a variety in
+  // singleLineByVariety, but only when onEditStock is given (the live day).
+  singleLineByVariety?: ReadonlyMap<string, string> | undefined;
+  onEditStock?: ((pickLineId: string) => void) | undefined;
 }
 
 // The price boxes the chosen type uses (migration 0100): מספר one price,
@@ -114,6 +118,8 @@ export function buildVarietyColumns({
   photo,
   saving,
   stockByVariety,
+  singleLineByVariety,
+  onEditStock,
 }: VarietyColumnsContext): RecordTableColumn<ProductVariety>[] {
   return [
     {
@@ -177,7 +183,22 @@ export function buildVarietyColumns({
           {
             key: "stock",
             label: "משטחים במלאי",
-            render: (row: ProductVariety) => formatPallets(stockByVariety.get(row.id) ?? 0),
+            render: (row: ProductVariety) => {
+              const stock = formatPallets(stockByVariety.get(row.id) ?? 0);
+              const lineId = onEditStock ? singleLineByVariety?.get(row.id) : undefined;
+              if (!onEditStock || !lineId) return stock;
+              // Same look as the number button on the arrangement grid.
+              return (
+                <button
+                  type="button"
+                  onClick={() => onEditStock(lineId)}
+                  aria-label={`עדכון מלאי — ${row.name}`}
+                  className="rounded-sm underline-offset-4 hover:text-accent hover:underline hover:decoration-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-bright"
+                >
+                  {stock}
+                </button>
+              );
+            },
           },
         ]
       : []),

@@ -1,5 +1,4 @@
-import { sendOrderReminderInputSchema, toSendOrderReminderRpcArgs } from "@ori/domain/customer";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { CustomerOrdersDialog } from "@/components/arrangement/customer-orders-dialog";
@@ -8,26 +7,32 @@ import {
   FamilyGroupedLines,
   type FamilyGroupedRow,
 } from "@/components/reference-data/family-grouped-lines";
+import { OrderReminderDialog } from "@/components/reference-data/order-reminder-dialog";
+import { OversightToolbar } from "@/components/reference-data/oversight-toolbar";
 import { TwoColumnRowList } from "@/components/reference-data/two-column-row-list";
 import { StatusPill } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Icon } from "@/components/ui/icon";
 import { PageHeader } from "@/components/ui/page-header";
 import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { groupLinesByFamily } from "@/lib/family-grouping";
-import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
-import { nudgeWhatsAppDispatch } from "@/lib/nudge-whatsapp-dispatch";
+import {
+  CUSTOMER_FILTER_OPTIONS,
+  customerOrderState,
+  matchesFilter,
+  progressCount,
+  type CustomerOrderState,
+  type StatusFilter,
+} from "@/lib/oversight-status";
 import {
   oversightQueries,
   type DailyOrderForDay,
   type OrderLineRow,
   type OversightCustomer,
 } from "@/lib/queries/oversight";
-import { createClient } from "@/lib/supabase/client";
 import { useTradingDayView } from "@/lib/trading-day-view";
+import { useSendOrderReminder } from "@/lib/use-send-order-reminder";
 
 // Same grouping as distributor-grower.tsx (groupLinesByFamily), on the
 // ordered quantity.
@@ -55,11 +60,11 @@ const NO_FAMILIES: FamilyGroupedRow[] = [];
 // customer-at-a-time question. See that file's own comment for the fuller
 // rationale — it applies here unchanged.
 export default function DistributorAsCustomerPage() {
-  const supabase = createClient();
   const queryClient = useQueryClient();
-  const { showToast } = useToast();
 
   const [search, setSearch] = useState("");
+  // Not remembered: every visit starts on "all".
+  const [filter, setFilter] = useState<StatusFilter<CustomerOrderState>>("all");
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [ordersDialogCustomer, setOrdersDialogCustomer] = useState<OversightCustomer | null>(null);
 
@@ -101,52 +106,39 @@ export default function DistributorAsCustomerPage() {
   const sortedCustomers = useMemo(() => {
     const rows = customersQuery.data ?? [];
     const needle = search.trim().toLocaleLowerCase("he");
-    const filtered = needle
-      ? rows.filter((row) => row.name.toLocaleLowerCase("he").includes(needle))
-      : rows;
+    // Search AND status filter: a row must pass both.
+    const filtered = rows.filter(
+      (row) =>
+        (!needle || row.name.toLocaleLowerCase("he").includes(needle)) &&
+        matchesFilter(customerOrderState(orderByCustomerId.get(row.id) ?? null), filter),
+    );
     return [...filtered].sort((a, b) => a.name.localeCompare(b.name, "he"));
-  }, [customersQuery.data, search]);
+  }, [customersQuery.data, search, filter, orderByCustomerId]);
 
-  // One mutation, keyed per call by `dailyOrderId` — see distributor-
-  // grower.tsx's identical reminderMutation for why `variables` is what
-  // lets each row's bell know whether it is the one currently sending.
-  // `reminder_sent_at` is real, persisted state on the order row — patch it
-  // optimistically like any other field, same treatment as
-  // distributor-grower.tsx's identical reminderMutation.
-  const reminderOptimistic = optimisticUpdate<DailyOrderForDay[], string>(
-    queryClient,
-    ordersForDayQueryKey,
-    (orders, dailyOrderId) =>
-      orders?.map((order) =>
-        order.id === dailyOrderId
-          ? { ...order, reminder_sent_at: new Date().toISOString() }
-          : order,
+  // "X מתוך Y" over EVERY active customer, ignoring the search and the
+  // filter. Hidden with no day, while the shop is not open yet, or when no
+  // customer has an order.
+  const counter = useMemo(() => {
+    if (!dayId || dayView.day?.phase === "initiated") return null;
+    const { done, total } = progressCount(
+      (customersQuery.data ?? []).map((row) =>
+        customerOrderState(orderByCustomerId.get(row.id) ?? null),
       ),
-  );
+      ["submitted"],
+    );
+    return total === 0 ? null : { label: "הזמנות הוזנו", done, total };
+  }, [dayId, dayView.day?.phase, customersQuery.data, orderByCustomerId]);
 
-  const reminderMutation = useMutation({
-    mutationFn: async (dailyOrderId: string) => {
-      const input = sendOrderReminderInputSchema.parse({ dailyOrderId });
-      const { error } = await supabase.rpc(
-        "send_order_reminder",
-        toSendOrderReminderRpcArgs(input),
-      );
-      if (error) throw error;
-    },
-    onMutate: reminderOptimistic.onMutate,
-    onSuccess: () => {
-      showToast("התזכורת נשלחה.", "success");
-      void queryClient.invalidateQueries({ queryKey: ordersForDayQueryKey });
-      // The RPC above already queued the WhatsApp send durably — this just
-      // asks the dispatcher to drain it right now instead of waiting for the
-      // next scheduled run. See nudge-whatsapp-dispatch.ts for why this is
-      // fire-and-forget and can never fail this mutation.
-      nudgeWhatsAppDispatch(supabase);
-    },
-    onError: mergeOnError(reminderOptimistic.onError, (error: { message?: string }) => {
-      showToast(`שליחת התזכורת נכשלה: ${errorMessage(error)}`, "error");
-    }),
-  });
+  // The bell opens the reminder window (who gets it); "שלח" there runs this
+  // mutation with the ticked people. `variables` tells each row's bell whether
+  // it is the one currently sending. The optimistic `reminder_sent_at` patch
+  // and the toasts live in the hook, shared with other screens.
+  const [reminderTarget, setReminderTarget] = useState<{
+    dailyOrderId: string;
+    customerId: string;
+    customerName: string;
+  } | null>(null);
+  const reminderMutation = useSendOrderReminder({ ordersForDayQueryKey });
 
   function toggleExpanded(customerId: string) {
     setExpandedIds((current) => {
@@ -179,7 +171,8 @@ export default function DistributorAsCustomerPage() {
         ? `נשלח ב-${new Date(order.submitted_at).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}`
         : null;
     const families = familiesByCustomerId.get(customer.id) ?? NO_FAMILIES;
-    const reminding = reminderMutation.isPending && reminderMutation.variables === order?.id;
+    const reminding =
+      reminderMutation.isPending && reminderMutation.variables?.dailyOrderId === order?.id;
 
     return (
       <ExpandableEntityRow
@@ -191,7 +184,15 @@ export default function DistributorAsCustomerPage() {
         onToggle={() => toggleExpanded(customer.id)}
         onEdit={() => setOrdersDialogCustomer(customer)}
         editLabel={`ערוך את הזמנת ${customer.name}`}
-        onRemind={() => order && reminderMutation.mutate(order.id)}
+        onRemind={() => {
+          if (!order) return;
+          reminderMutation.openWindow();
+          setReminderTarget({
+            dailyOrderId: order.id,
+            customerId: customer.id,
+            customerName: customer.name,
+          });
+        }}
         remindLabel={`שלח תזכורת ל${customer.name}`}
         remindDisabled={
           !dayView.isLive || !order || order.status === "submitted" || reminderMutation.isPending
@@ -222,22 +223,16 @@ export default function DistributorAsCustomerPage() {
         }
       />
 
-      <label className="relative mb-4 block max-w-xs">
-        <span className="sr-only">חיפוש לקוח</span>
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 start-3 flex items-center text-ink-subtle"
-        >
-          <Icon name="search" className="h-4 w-4" />
-        </span>
-        <input
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="חיפוש לקוח…"
-          className="h-10 w-full rounded-md bg-surface ps-9 pe-3 text-sm text-ink shadow-card ring-1 ring-inset ring-border-strong outline-none transition-colors duration-150 placeholder:text-ink-subtle focus:ring-2 focus:ring-accent/40"
-        />
-      </label>
+      <OversightToolbar
+        search={search}
+        onSearchChange={setSearch}
+        searchLabel="חיפוש לקוח"
+        searchPlaceholder="חיפוש לקוח…"
+        filter={filter}
+        onFilterChange={setFilter}
+        filterOptions={CUSTOMER_FILTER_OPTIONS}
+        counter={counter}
+      />
 
       {isLoading ? (
         <div className="space-y-2">
@@ -290,14 +285,42 @@ export default function DistributorAsCustomerPage() {
           hint="פתח את החנות בסרגל הצד כדי שלקוחות יוכלו להזמין, ולנהל הזמנות בשמם."
         />
       ) : rows.length === 0 ? (
-        <EmptyState
-          icon="briefcase"
-          title="אין לקוחות להצגה"
-          hint={search ? "נסה מונח חיפוש אחר." : "אין לקוחות פעילים במערכת."}
-        />
+        filter !== "all" ? (
+          <EmptyState
+            icon="briefcase"
+            title="אין לקוחות בסטטוס הזה"
+            hint={search ? "נסה מונח חיפוש או סטטוס אחר." : "בחר סטטוס אחר."}
+          />
+        ) : (
+          <EmptyState
+            icon="briefcase"
+            title="אין לקוחות להצגה"
+            hint={search ? "נסה מונח חיפוש אחר." : "אין לקוחות פעילים במערכת."}
+          />
+        )
       ) : (
         <TwoColumnRowList rows={rows} />
       )}
+
+      <OrderReminderDialog
+        target={reminderTarget}
+        onClose={() => {
+          reminderMutation.closeWindow();
+          setReminderTarget(null);
+        }}
+        sending={reminderMutation.isPending}
+        error={reminderMutation.error ? errorMessage(reminderMutation.error) : null}
+        onSend={(recipientUserIds) => {
+          if (!reminderTarget) return;
+          // Closes only on success; a refusal leaves the window open with
+          // the mapped message as a line inside it (a refusal that lands after
+          // the window was closed becomes a toast, in the hook).
+          reminderMutation.mutate(
+            { dailyOrderId: reminderTarget.dailyOrderId, recipientUserIds },
+            { onSuccess: () => setReminderTarget(null) },
+          );
+        }}
+      />
 
       <CustomerOrdersDialog
         tradingDayId={dayId ?? ""}

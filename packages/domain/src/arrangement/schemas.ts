@@ -140,12 +140,67 @@ export function toSaveArrangementProposalRpcArgs(input: SaveArrangementProposalI
   };
 }
 
+// "שמור שינויים" on the products grid (סידור לפי מוצרים): every cell the
+// distributor changed, saved by save_arrangement_changes (migration 0103) in
+// one transaction, all or nothing. Unlike the proposal, a cell may already
+// hold a record, so each change carries what the screen last saw there
+// (`expected`): the function refuses the whole save when a cell has moved
+// since, rather than overwrite someone else's work. Quantity 0 clears a cell,
+// which only makes sense when there was a record to clear.
+const gridPalletsSchema = z
+  .number()
+  .nonnegative()
+  .refine(isPalletQuantity, PALLET_QUANTITY_MESSAGE)
+  .transform(roundPallets);
+
+const gridChangeSchema = z
+  .object({
+    dailyPickProductId: z.string().uuid(),
+    customerCompanyId: z.string().uuid(),
+    quantityPallets: gridPalletsSchema,
+    // The cell as the screen last saw it: the record's id (null for an empty
+    // cell) and the pallets it held (0 for an empty cell). That number is the
+    // saved record's own, at any precision: a record imported from history
+    // may hold two decimals (2.65), and it must stay changeable. Only the new
+    // number above keeps to tenths.
+    expected: z.object({
+      recordId: z.string().uuid().nullable(),
+      quantityPallets: z.number().finite().nonnegative(),
+    }),
+    // Same meaning as on a proposal cell.
+    forOrder: z.boolean().optional(),
+  })
+  .refine((change) => change.quantityPallets > 0 || change.expected.recordId !== null, {
+    message: "Clearing an empty cell is no change.",
+  });
+
+export const saveArrangementChangesInputSchema = z.object({
+  tradingDayId: z.string().uuid(),
+  changes: z
+    .array(gridChangeSchema)
+    .refine(
+      (changes) =>
+        new Set(changes.map((cell) => `${cell.dailyPickProductId}|${cell.customerCompanyId}`))
+          .size === changes.length,
+      { message: "A cell appears more than once in the changes." },
+    ),
+});
+export type SaveArrangementChangesInput = z.infer<typeof saveArrangementChangesInputSchema>;
+
+export function toSaveArrangementChangesRpcArgs(input: SaveArrangementChangesInput) {
+  return {
+    p_trading_day_id: input.tradingDayId,
+    // jsonb on the way in, as for the proposal.
+    p_changes: input.changes,
+  };
+}
+
 // See packages/domain/src/lifecycle-engine/schemas.ts's LIFECYCLE_ERROR_CODES
 // for the full convention this mirrors — these are just the subset this
 // module's own functions (0021's create/update/delete_arrangement_record,
 // 0022's populate_arrangement_prices) actually raise.
 export const ARRANGEMENT_ERROR_CODES = {
-  /** No pick line, order line, arrangement record, or daily_arrangements row matched — or, from save_arrangement_proposal, a pick line that is not on the day being saved. */
+  /** No pick line, order line, arrangement record, or daily_arrangements row matched — or, from save_arrangement_proposal, a pick line that is not on the day being saved — or, from save_arrangement_changes (0103), an unknown trading day or arrangement, a pick line not on the day, or (via arrange_to_customer) a customer with no order for the day. */
   NOT_FOUND: "P0002",
   /** current_role() <> 'backoffice'. */
   FORBIDDEN: "42501",
@@ -155,7 +210,7 @@ export const ARRANGEMENT_ERROR_CODES = {
   INVALID_INPUT: "P0008",
   /** The requested quantity would exceed the pick line's pallets_picked plus leftover_pallets, or the order line's pallets_ordered when that is above zero, summed against every other arrangement record referencing it (check_arrangement_allocation, 0050). */
   OVER_ALLOCATION: "P0009",
-  /** save_arrangement_proposal (0068): a cell of the proposal already holds an allocation — filled after the proposal was read. The error's DETAIL lists every such cell. */
+  /** save_arrangement_proposal (0068): a cell of the proposal already holds an allocation — filled after the proposal was read. The error's DETAIL lists every such cell. Also from save_arrangement_changes (0103): a cell that changed since it was typed over. */
   CONFLICT: "P0006",
   /** The allocation is on a line of a closed pick (the truck icon): adding, re-sizing or removing it is refused until the pick is reopened (migration 0089). Its message is Hebrew, shown as it is. */
   PICK_CLOSED: "P0010",

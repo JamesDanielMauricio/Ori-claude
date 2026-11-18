@@ -5,6 +5,7 @@ import {
   createTestProfile,
   deleteTestCompany,
   deleteTestUser,
+  moveTestProfileToCompany,
   runCleanup,
   signInTestUser,
 } from "@ori/domain/auth/testing";
@@ -144,9 +145,10 @@ test.describe("Backoffice — Customer Order Status", () => {
     ).toHaveValue("4");
   });
 
-  test("sending a reminder on an un-submitted order dispatches to the outbox and stamps reminder_sent_at", async ({
-    page,
-  }) => {
+  // One backoffice user, one customer with two people (one with a phone, one
+  // without) and an open shop, signed in on the screen, with the bell's window
+  // open. Shared by the three reminder-window tests below.
+  async function reminderWorld(page: import("@playwright/test").Page) {
     const grower = await createTestGrowerWithProduct();
     cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
 
@@ -161,6 +163,19 @@ test.describe("Backoffice — Customer Order Status", () => {
       "customer",
     );
     cleanupFns.push(() => deleteTestCompany(customerCompany.id));
+    const withPhone = await createTestProfile({
+      companyId: customerCompany.id,
+      role: "customer",
+      displayName: "אבי עם טלפון",
+      phoneNumber: "0501234567",
+    });
+    cleanupFns.push(() => deleteTestUser(withPhone.userId));
+    const withoutPhone = await createTestProfile({
+      companyId: customerCompany.id,
+      role: "customer",
+      displayName: "בני בלי טלפון",
+    });
+    cleanupFns.push(() => deleteTestUser(withoutPhone.userId));
 
     const tradeDate = new Date().toISOString().slice(0, 10);
     const initiate = await adminClient.rpc("initiate_business_day", { p_trade_date: tradeDate });
@@ -178,7 +193,41 @@ test.describe("Backoffice — Customer Order Status", () => {
 
     await page.goto("/backoffice/distributor-customer");
     await page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` }).click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText(`שליחת תזכורת — ${customerCompany.name}`);
+    return { adminClient, customerCompany, dayId, dialog, withPhone, withoutPhone };
+  }
+
+  async function reminderRows(
+    adminClient: Awaited<ReturnType<typeof signInTestUser>>,
+    customerId: string,
+  ) {
+    // Scoped to reminder rows — open_shop's own bootstrap separately enqueues
+    // a shop_open row to the same customer.
+    const outbox = await adminClient
+      .from("notification_outbox")
+      .select("template_key, recipient_company_id, recipient_user_ids")
+      .eq("recipient_company_id", customerId)
+      .eq("template_key", "order_reminder");
+    if (outbox.error) throw outbox.error;
+    return outbox.data;
+  }
+
+  test("sending a reminder on an un-submitted order dispatches to the outbox and stamps reminder_sent_at", async ({
+    page,
+  }) => {
+    const { adminClient, customerCompany, dayId, dialog, withPhone } = await reminderWorld(page);
+
+    // The person without a phone is listed, but unticked and disabled.
+    const noPhoneBox = dialog.getByRole("checkbox", { name: /בני בלי טלפון/ });
+    await expect(noPhoneBox).toBeDisabled();
+    await expect(noPhoneBox).not.toBeChecked();
+    await expect(dialog).toContainText("אין טלפון");
+    await expect(dialog.getByRole("checkbox", { name: /אבי עם טלפון/ })).toBeChecked();
+
+    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
     await expect(page.getByText("התזכורת נשלחה.")).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
 
     const order = await adminClient
       .from("daily_orders")
@@ -188,17 +237,191 @@ test.describe("Backoffice — Customer Order Status", () => {
       .single();
     expect(order.data!.reminder_sent_at).not.toBeNull();
 
-    // Scoped to reminder-specific rows — open_shop's own bootstrap
-    // (id 4, a later prompt) already, separately enqueues a shop_open
-    // row to this same customer, which isn't what this test is about.
-    const outbox = await adminClient
-      .from("notification_outbox")
-      .select("template_key, recipient_company_id")
-      .eq("recipient_company_id", customerCompany.id)
-      .eq("template_key", "order_reminder");
-    expect(outbox.data).toMatchObject([
+    const rows = await reminderRows(adminClient, customerCompany.id);
+    expect(rows).toMatchObject([
       { template_key: "order_reminder", recipient_company_id: customerCompany.id },
     ]);
+    expect(rows[0]!.recipient_user_ids).toEqual([withPhone.userId]);
+  });
+
+  test("the reminder window can untick everyone, and then cannot send", async ({ page }) => {
+    const { adminClient, customerCompany, dialog } = await reminderWorld(page);
+
+    const send = dialog.getByRole("button", { name: "שלח", exact: true });
+    await expect(send).toBeEnabled();
+    await dialog.getByRole("checkbox", { name: /אבי עם טלפון/ }).uncheck();
+    await expect(send).toBeDisabled();
+
+    expect(await reminderRows(adminClient, customerCompany.id)).toHaveLength(0);
+  });
+
+  test("a person moved to another company meanwhile is refused and the window stays open", async ({
+    page,
+  }) => {
+    const { adminClient, customerCompany, dialog, withPhone } = await reminderWorld(page);
+
+    const otherCompany = await createTestCompany(`לקוח אחר ${crypto.randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(otherCompany.id));
+    // Cleanup runs last-in first-out: put the person back before the other
+    // company is deleted (a company with a person cannot be).
+    cleanupFns.push(() => moveTestProfileToCompany(withPhone.userId, customerCompany.id));
+    await moveTestProfileToCompany(withPhone.userId, otherCompany.id);
+
+    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
+    // The refusal is a line inside the still-open window.
+    await expect(
+      page
+        .locator("dialog[open]")
+        .getByRole("alert")
+        .filter({ hasText: "אחד המקבלים כבר לא משויך ללקוח הזה. סגרו את החלון ופתחו אותו שוב." }),
+    ).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(1);
+
+    expect(await reminderRows(adminClient, customerCompany.id)).toHaveLength(0);
+  });
+
+  test("closing the window while a reminder is sending keeps the bell off, and a later failure is a toast", async ({
+    page,
+  }) => {
+    const { customerCompany, dialog } = await reminderWorld(page);
+
+    // Hold the send open so the window can be closed while it is in flight.
+    let releaseSend: (() => void) | undefined;
+    const sendHeld = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    let sends = 0;
+    await page.route("**/rest/v1/rpc/send_order_reminder", async (route) => {
+      sends += 1;
+      await sendHeld;
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "P0007",
+          message:
+            "INVALID_STATE: cannot send a reminder about an order that's already been submitted",
+          details: null,
+          hint: null,
+        }),
+      });
+    });
+
+    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
+    await expect.poll(() => sends).toBe(1);
+    await dialog.getByRole("button", { name: "ביטול" }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+
+    // Closing did not detach the send: the bell stays off until the answer.
+    const bell = page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` });
+    await expect(bell).toBeDisabled();
+
+    releaseSend!();
+    await expect(
+      page.getByText("שליחת התזכורת נכשלה: הלקוח כבר שלח את ההזמנה, ואין צורך בתזכורת."),
+    ).toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    expect(sends).toBe(1);
+  });
+
+  test("filters customers by order status and counts orders sent", async ({ page }) => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+
+    const adminCompany = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(adminCompany.id));
+    const admin = await createTestProfile({ companyId: adminCompany.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const adminClient = await signInTestUser(admin.email, admin.password);
+
+    const sentCustomer = await createTestCompany(`לקוח בדיקה נשלח ${crypto.randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(sentCustomer.id));
+    const openCustomer = await createTestCompany(`לקוח בדיקה פתוח ${crypto.randomUUID()}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(openCustomer.id));
+
+    const tradeDate = new Date().toISOString().slice(0, 10);
+    const initiate = await adminClient.rpc("initiate_business_day", { p_trade_date: tradeDate });
+    if (initiate.error) throw initiate.error;
+    const dayId = initiate.data!.id;
+    cleanupFns.push(() => deleteTestTradingDay(dayId));
+    const openShop = await adminClient.rpc("open_shop", { p_can_see_prices: true });
+    if (openShop.error) throw openShop.error;
+
+    // Send one customer's order (an empty one, as the office may); the other
+    // stays open. submit_order records the order for the customer named.
+    const orderRow = await adminClient
+      .from("daily_orders")
+      .select("id")
+      .eq("trading_day_id", dayId)
+      .eq("customer_company_id", sentCustomer.id)
+      .single();
+    if (orderRow.error) throw orderRow.error;
+    const markSent = await adminClient
+      .from("daily_orders")
+      .update({ status: "submitted", submitted_at: new Date().toISOString() })
+      .eq("id", orderRow.data.id);
+    if (markSent.error) throw markSent.error;
+
+    // The counter's two numbers from the database, not hard-coded: X =
+    // submitted orders, Y = orders, both of active customers only.
+    const activeCustomers = await adminClient
+      .from("companies")
+      .select("id")
+      .eq("type", "customer")
+      .eq("status", "active");
+    if (activeCustomers.error) throw activeCustomers.error;
+    const activeIds = new Set(activeCustomers.data.map((row) => row.id));
+    const orders = await adminClient
+      .from("daily_orders")
+      .select("customer_company_id, status")
+      .eq("trading_day_id", dayId);
+    if (orders.error) throw orders.error;
+    const ofActive = orders.data.filter((order) => activeIds.has(order.customer_company_id));
+    const expectedDone = ofActive.filter((order) => order.status === "submitted").length;
+    const expectedTotal = ofActive.length;
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+    await page.goto("/backoffice/distributor-customer");
+
+    const sentEdit = page.getByRole("button", { name: `ערוך את הזמנת ${sentCustomer.name}` });
+    const openEdit = page.getByRole("button", { name: `ערוך את הזמנת ${openCustomer.name}` });
+    const statusFilter = page.getByRole("combobox", { name: "סינון לפי סטטוס" });
+    const pickStatus = async (label: string) => {
+      await statusFilter.click();
+      await page.getByRole("option", { name: label, exact: true }).click();
+    };
+
+    await expect(page.getByText(`הזמנות הוזנו: ${expectedDone} מתוך ${expectedTotal}`)).toBeVisible();
+    await expect(sentEdit).toBeVisible();
+    await expect(openEdit).toBeVisible();
+
+    // Phone width: the filter and counter stay on screen (wrapped under the
+    // search box) and the page does not scroll sideways.
+    await page.setViewportSize({ width: 375, height: 800 });
+    await expect(statusFilter).toBeVisible();
+    await expect(page.getByText(`הזמנות הוזנו: ${expectedDone} מתוך ${expectedTotal}`)).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+    // Screenshots only on request, so CI writes no files.
+    if (process.env.ORI_SHOTS) await page.screenshot({ path: `${process.env.ORI_SHOTS}/customer-375.png` });
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    await pickStatus("נשלחה");
+    await expect(sentEdit).toBeVisible();
+    await expect(openEdit).toHaveCount(0);
+    await expect(page.getByText(`הזמנות הוזנו: ${expectedDone} מתוך ${expectedTotal}`)).toBeVisible();
+
+    await pickStatus("פתוחה");
+    await expect(openEdit).toBeVisible();
+    await expect(sentEdit).toHaveCount(0);
+
+    // An impossible combination: the sent customer, filtered to open orders.
+    await page.getByRole("searchbox").fill(sentCustomer.name);
+    await expect(page.getByText("אין לקוחות בסטטוס הזה")).toBeVisible();
+    await expect(page.getByText("נסה מונח חיפוש או סטטוס אחר.")).toBeVisible();
   });
 
   test("reopening a previously-viewed customer's dialog fires no new catalog query", async ({

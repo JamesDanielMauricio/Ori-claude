@@ -246,6 +246,27 @@ export const oversightQueries = {
     });
   },
 
+  // The people of one customer, for the reminder window. staleTime 0 so each
+  // opening re-reads: a phone number added or a person moved a minute ago
+  // must show.
+  customerPeople(customerId: string | null) {
+    return queryOptions({
+      queryKey: ["customer-oversight", "people", customerId],
+      enabled: !!customerId,
+      staleTime: 0,
+      queryFn: async (): Promise<
+        Array<{ user_id: string; display_name: string; phone_number: string | null }>
+      > => {
+        const { data, error } = await createClient()
+          .from("profiles")
+          .select("user_id, display_name, phone_number")
+          .eq("company_id", customerId!);
+        if (error) throw error;
+        return data;
+      },
+    });
+  },
+
   // Orders AND their lines in one request — same reasoning as picksForDay():
   // embedding daily_order_products is what makes expanding any row free.
   ordersForDay(dayId: string | undefined) {

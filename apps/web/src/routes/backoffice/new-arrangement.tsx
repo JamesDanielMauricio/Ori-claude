@@ -1,42 +1,37 @@
 import {
   ARRANGEMENT_ERROR_CODES,
-  arrangeToCustomerInputSchema,
-  saveArrangementProposalInputSchema,
-  toArrangeToCustomerRpcArgs,
-  toDeleteArrangementRecordRpcArgs,
-  toSaveArrangementProposalRpcArgs,
+  saveArrangementChangesInputSchema,
+  toSaveArrangementChangesRpcArgs,
 } from "@ori/domain/arrangement";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
-import {
-  ArrangementMatrix,
-  type MatrixWrite,
-} from "@/components/arrangement/arrangement-matrix";
+import { ArrangementMatrix, type MatrixWrite } from "@/components/arrangement/arrangement-matrix";
 import { ArrangementMatrixMobile } from "@/components/arrangement/arrangement-matrix-mobile";
 import { proposeForDay } from "@/components/arrangement/arrangement-engine-input";
 import { readEngineHistory } from "@/components/arrangement/arrangement-history-query";
 import {
+  dropCells,
+  pruneSaved,
+  refusedCells,
   resolveProposal,
   saveRefusalMessage,
-  typeIntoProposal,
+  typeIntoUnsaved,
   type ProposalLine,
 } from "@/components/arrangement/arrangement-proposal";
-import {
-  formatPallets,
-  OPTIMISTIC_RECORD_PREFIX,
-  settleOptimisticRecord,
-  type BoardRecord,
-} from "@/components/arrangement/board-data";
+import { formatPallets } from "@/components/arrangement/board-data";
 import {
   buildMatrix,
   filterMatrixRows,
   orderedOnly,
   type ProposedAllocation,
 } from "@/components/arrangement/matrix-data";
+import { StockEditDialog } from "@/components/arrangement/stock-edit-dialog";
+import { EMPTY_UNSAVED_DAY, useUnsavedChanges } from "@/components/arrangement/unsaved-changes";
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/card";
+import { Dialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { PageHeader } from "@/components/ui/page-header";
@@ -44,10 +39,10 @@ import { QueryError } from "@/components/ui/query-error";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
-import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
 import {
   arrangementKeys,
   arrangementQueries,
+  invalidateStockReads,
   newArrangementKeys,
   type MatrixDay,
 } from "@/lib/queries/arrangement";
@@ -55,9 +50,10 @@ import { createClient } from "@/lib/supabase/client";
 import { useTradingDayView } from "@/lib/trading-day-view";
 import { useWide } from "@/lib/use-wide";
 
-// One key for the save of a whole proposal, so "is one running?" can be asked
-// of the mutation cache from any mount of this screen — see savingProposal.
-const SAVE_PROPOSAL_KEY = ["new-arrangement", "save-proposal"] as const;
+// One key for the save of the grid's unsaved changes, so "is one running?"
+// can be asked of the mutation cache from any mount of this screen — see
+// savingChanges.
+const SAVE_CHANGES_KEY = ["new-arrangement", "save-changes"] as const;
 
 // "סידור לפי מוצרים" — the day's whole arrangement as one spreadsheet:
 // products down the side, customers across the top, and the pallets going
@@ -69,8 +65,9 @@ const SAVE_PROPOSAL_KEY = ["new-arrangement", "save-proposal"] as const;
 // day is not creating a record, they are working across a customer's whole
 // column or down a product's whole row, and doing that through a form meant
 // re-selecting the variety and the grower for every single pallet decision.
-// The matrix makes the same write — one arrangement record, one grower's lot
-// to one customer — the cost of typing a number.
+// The matrix makes the same decision — one arrangement record, one grower's
+// lot to one customer — the cost of typing a number, and the day's numbers
+// are then saved together (see below).
 //
 // Two row shapes, which is the part worth understanding before reading
 // matrix-data.ts: a product supplied by ONE grower is typed into directly,
@@ -79,11 +76,16 @@ const SAVE_PROPOSAL_KEY = ["new-arrangement", "save-proposal"] as const;
 // specific daily_pick_products row, so "3 pallets of lemons" is not a
 // writable fact until it says whose lemons.
 //
-// Every write is arrange_to_customer (migration 0040), the same idempotent
-// RPC the arrangement board's ✓ uses: it upserts the record, and creates the
-// customer's order line at zero pallets when they never ordered the product
-// — which is what makes the un-highlighted cells in this grid writable at
-// all. Emptying a cell is delete_arrangement_record instead.
+// Nothing is written while typing. A number typed into a cell, a cell
+// emptied, a suggestion from "הצע סידור" — each is an unsaved change, drawn
+// as one and kept above this screen (unsaved-changes.tsx), until "שמור
+// שינויים" saves every change of the day in ONE call: save_arrangement_changes
+// (migration 0103), all or nothing, refusing — rather than overwriting — a
+// cell that somebody changed since it was changed here. Inside it each cell
+// still goes through arrange_to_customer, the RPC the arrangement board's ✓
+// uses, which creates the customer's order line at zero pallets when they
+// never ordered the product — what makes the un-highlighted cells in this
+// grid writable at all — and an emptied one through delete_arrangement_record.
 export default function NewArrangementPage() {
   const supabase = createClient();
   const queryClient = useQueryClient();
@@ -104,25 +106,25 @@ export default function NewArrangementPage() {
   // drill-down card list; the underlying `visible` data (below) is identical
   // either way.
   const wide = useWide("(min-width: 1024px)");
-  // A suggestion on preview: offered, shown in the grid, corrected there by
-  // the distributor (see commitCell), not saved. Held as lines — whose lot,
-  // which product, which customer — rather than as the cells they land in,
-  // and with the day it was offered for: so the cells are worked out afresh
-  // from every read of that day (see `proposal` below), and a suggestion for
-  // one day can never be shown, or saved, on another.
-  const [suggestion, setSuggestion] = useState<{
-    tradingDayId: string;
-    lines: ProposalLine[];
-    /** What the last attempt to save it could not write, until the next one. */
-    refusal: string | null;
-  } | null>(null);
+  // The unsaved changes — numbers typed, cells emptied, suggestions from "הצע
+  // סידור" — held as lines (whose lot, which product, which customer) rather
+  // than as the cells they land in, and per trading day: so the cells are
+  // worked out afresh from every read of that day (see `proposal` below), and
+  // a change made on one day can never be shown, or saved, on another. They
+  // live in the backoffice layout, above this screen, so leaving the grid and
+  // coming back finds them; unsaved-changes.tsx says what empties them.
+  const { dayOf, updateDay } = useUnsavedChanges();
   // "הצע סידור" is reading the history and working the proposal out.
   const [proposing, setProposing] = useState(false);
+  // "בטל שינויים" is asking before it throws the unsaved changes away.
+  const [discarding, setDiscarding] = useState(false);
+  // The pick line whose stock popup ("עדכון מלאי") is open, if any.
+  const [stockLineId, setStockLineId] = useState<string | null>(null);
   // Asked of the mutation cache, not of this component's own state: a save
   // outlives the screen that started it, and a distributor who leaves and
   // comes straight back must find the grid still held, not editable
-  // underneath writes that are still landing.
-  const savingProposal = useIsMutating({ mutationKey: SAVE_PROPOSAL_KEY }) > 0;
+  // underneath a save that is still landing.
+  const savingChanges = useIsMutating({ mutationKey: SAVE_CHANGES_KEY }) > 0;
 
   // The day this grid shows: the live open day, or whatever the sidebar's
   // picker has pinned. Same resolution every date-aware backoffice screen
@@ -148,41 +150,48 @@ export default function NewArrangementPage() {
   // phase, and a closed arrangement is read-only regardless of the picker.
   const editable = dayView.isLive && arrangement?.status === "open";
 
-  // What of the suggestion is still unsaved, on the day as last read. Derived,
-  // not stored: the day is re-read after a save and whenever anyone else
-  // changes it (lib/live-updates.ts), and a cell has to drop out of the
-  // preview the moment its record is there rather than be shown — and
-  // counted — twice. Nothing is on preview on a day that cannot be edited.
+  // This day's unsaved changes. A day with none, or still loading, reads as
+  // EMPTY_UNSAVED_DAY.
+  const unsaved = boardDay ? dayOf(boardDay.id) : EMPTY_UNSAVED_DAY;
+
+  // The unsaved changes landed on the day as last read. Derived, not stored:
+  // the day is re-read after a save and whenever anyone else changes it
+  // (lib/live-updates.ts): a suggestion has to drop out the moment its cell
+  // is filled rather than be shown — and counted — twice, and a change whose
+  // cell already holds its number has nothing left to save. No read drops a
+  // number typed: the save judges it (see resolveProposal). Nothing is
+  // unsaved on a day that cannot be edited.
   const proposal = useMemo(
     () =>
-      suggestion && boardDay && editable && suggestion.tradingDayId === boardDay.id
+      boardDay && editable && unsaved.lines.length > 0
         ? resolveProposal({
-            lines: suggestion.lines,
+            lines: unsaved.lines,
             picks: boardDay.daily_picks,
             orders: boardDay.daily_orders,
             records: arrangement?.arrangement_records ?? [],
           })
         : null,
-    [suggestion, boardDay, arrangement, editable],
+    [boardDay, arrangement, editable, unsaved.lines],
   );
 
-  // A suggestion is finished with once the day it was for is no longer the
-  // one on screen, or that day can no longer be edited. Dropped here rather
-  // than left in state, where it would come back to life the next time one of
-  // those stopped being true. Not while it is being saved, though: the save
-  // decides what becomes of it then. Tracked in render, not synced in an
-  // effect, for the reason MatrixMobileInput gives: the stale preview never
-  // paints.
-  //
-  // NOT when every cell of it has been emptied: the banner stays, with
-  // nothing to save, so that the next number typed still goes into the
-  // proposal — a preview that vanished under the distributor's hands would
-  // turn their next keystroke into a write without a word.
-  const forAnotherDay = suggestion?.tradingDayId !== day?.id;
-  const noLongerEditable = boardDay?.id === suggestion?.tradingDayId && !editable;
-  if (suggestion && !savingProposal && (forAnotherDay || noLongerEditable)) {
-    setSuggestion(null);
-  }
+  // What the distributor sees as unsaved: the cells "שמור שינויים" will
+  // change, on the day as last read. Never the lines in the store, some of
+  // which may land nowhere (see resolveProposal) and so show, and save,
+  // nothing. The bar's count, and what holds "הצע סידור" back.
+  const unsavedCount = proposal?.allocations.length ?? 0;
+
+  // A day that can no longer be edited — its arrangement closed, say — has
+  // nothing to save into, and loses its unsaved changes (spec §4.4), the bar
+  // and the unsaved marks with them. Not while they are being saved, though:
+  // the save decides what becomes of them then. An effect, not a render-time
+  // update: the store lives in a parent component, and React warns against
+  // updating one component while rendering another.
+  const hasUnsaved = unsaved.lines.length > 0 || unsaved.refusal !== null;
+  useEffect(() => {
+    if (boardDay && !editable && !savingChanges && hasUnsaved) {
+      updateDay(boardDay.id, () => EMPTY_UNSAVED_DAY);
+    }
+  }, [boardDay, editable, savingChanges, hasUnsaved, updateDay]);
 
   // One derivation for the whole grid, memoised on the query results only —
   // so typing in a cell, expanding a row or searching does not re-total the
@@ -213,276 +222,184 @@ export default function NewArrangementPage() {
     [shown, search],
   );
 
-  // Same "patch the one cached tree's records array" shape as the
-  // arrangement board next door — buildMatrix's useMemo recomputes every
-  // row/cell total (זמין, סה"כ חולק) from this array, so nothing here needs
-  // to know how to total pallets.
-  function recordsOptimistic<TVariables>(
-    updater: (records: BoardRecord[], variables: TVariables, current: MatrixDay) => BoardRecord[],
-  ) {
-    return optimisticUpdate<MatrixDay | null, TVariables>(
-      queryClient,
-      boardDataQueryKey,
-      (current, variables) =>
-        current?.daily_arrangements
-          ? {
-              ...current,
-              daily_arrangements: {
-                ...current.daily_arrangements,
-                arrangement_records: updater(
-                  current.daily_arrangements.arrangement_records,
-                  variables,
-                  current,
-                ),
-              },
-            }
-          : current,
-    );
-  }
-
-  const arrangeOptimistic = recordsOptimistic<MatrixWrite>((records, write, current) => {
-    if (write.recordId) {
-      return records.map((record) =>
-        record.id === write.recordId
-          ? {
-              ...record,
-              quantity_pallets: write.quantity,
-              price: write.price,
-              price_type: write.priceType,
-            }
-          : record,
-      );
-    }
-    // A brand-new record. Only constructible when the customer already has
-    // an order line for this cell's variety — arrange_to_customer creates
-    // that line itself otherwise, and its id isn't knowable client-side
-    // before that happens; that case falls back to the existing
-    // invalidate-on-settle refetch instead of being faked here.
-    const varietyId = current.daily_picks
-      .flatMap((pick) => pick.daily_pick_products)
-      .find((line) => line.id === write.pickLineId)?.product_variety_id;
-    const orderLineId = varietyId
-      ? current.daily_orders
-          .find((order) => order.customer_company_id === write.customerId)
-          ?.daily_order_products.find((line) => line.product_variety_id === varietyId)?.id
-      : undefined;
-    if (!orderLineId) return records;
-    return [
-      ...records,
-      {
-        id: `${OPTIMISTIC_RECORD_PREFIX}${crypto.randomUUID()}`,
-        daily_pick_product_id: write.pickLineId,
-        daily_order_product_id: orderLineId,
-        customer_company_id: write.customerId,
-        quantity_pallets: write.quantity,
-        price: write.price,
-        price_type: write.priceType,
-      },
-    ];
-  });
-
-  const arrangeMutation = useMutation({
-    mutationFn: async (write: MatrixWrite) => {
-      const parsed = arrangeToCustomerInputSchema.parse({
-        dailyPickProductId: write.pickLineId,
-        customerCompanyId: write.customerId,
-        quantityPallets: write.quantity,
-        // Handed back so the RPC has something to COALESCE onto an existing
-        // record; null on a fresh one leaves pricing to close_arrangement,
-        // exactly as the wizard this screen replaced did.
-        price: write.price,
-        priceType: write.priceType,
-      });
-      const { data, error } = await supabase.rpc(
-        "arrange_to_customer",
-        toArrangeToCustomerRpcArgs(parsed),
-      );
-      if (error) throw error;
-      return data;
-    },
-    onMutate: arrangeOptimistic.onMutate,
-    onSuccess: (saved) => {
-      // Before the refetch, which the next cell's write cancels: through a
-      // burst of typing, clearing a cell just filled must not send the
-      // placeholder's id.
-      queryClient.setQueryData<MatrixDay | null>(
-        boardDataQueryKey,
-        (current) => current && settleOptimisticRecord(current, saved),
-      );
-      invalidateBoards();
-    },
-    onError: mergeOnError(arrangeOptimistic.onError, (error: RpcError) => {
-      showToast(`שמירת הסידור נכשלה: ${describeRpcError(error)}`, "error");
-      // Refetch on failure too: a refusal usually means this screen's copy of
-      // the day is behind whatever caused it, so the grid should re-read
-      // rather than argue with the server.
-      invalidateBoards();
-    }),
-  });
-
-  const deleteOptimistic = recordsOptimistic<string>((records, recordId) =>
-    records.filter((record) => record.id !== recordId),
-  );
-
-  const deleteMutation = useMutation({
-    mutationFn: async (recordId: string) => {
-      const { error } = await supabase.rpc(
-        "delete_arrangement_record",
-        toDeleteArrangementRecordRpcArgs({ id: recordId }),
-      );
-      if (error) throw error;
-    },
-    onMutate: deleteOptimistic.onMutate,
-    onSuccess: invalidateBoards,
-    onError: mergeOnError(deleteOptimistic.onError, (error: RpcError) => {
-      showToast(`מחיקת השיוך נכשלה: ${describeRpcError(error)}`, "error");
-      invalidateBoards();
-    }),
-  });
-
-  function invalidateBoards() {
-    void queryClient.invalidateQueries({ queryKey: newArrangementKeys.matrixAll });
-    // The sibling board reads the same records out of its own cache entry,
-    // so a cell typed here has to land there too.
-    void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
-  }
-
   /**
-   * One cell, committed.
+   * One cell, committed — into the unsaved changes. Nothing is written to the
+   * database here, whatever the cell held: the number becomes the cell's
+   * unsaved change (typed over what the day as read has saved there, see
+   * typeIntoUnsaved), replaces the one it had, or — typed back to the saved
+   * number — takes it away. Every change waits for "שמור שינויים", which
+   * saves them all through save_arrangement_changes (0103).
    *
-   * Deliberately silent on success. Every other write in this app raises a
-   * toast, but a distributor filling a row types across a dozen cells in a
-   * few seconds and a dozen confirmations would bury the screen — and the
-   * confirmation is already on screen anyway, in the זמין and סה״כ חולק
-   * columns updating beside the number they just typed. Failures still toast,
-   * because those are the ones with nothing else to show for them.
+   * Silent, as filling a row should be: a distributor types across a dozen
+   * cells in a few seconds, and the confirmation is already on screen — the
+   * box drawn as unsaved, the bar's count, the זמין and סה״כ חולק columns
+   * moving beside the number just typed.
    *
-   * Resolves to whether the write landed, never rejects: the grid puts the
-   * cell back to the server's value on false.
-   *
-   * While a proposal is on preview, a cell with nothing saved in it is the
-   * proposal's, and a number typed there is a correction to it — changed,
-   * added or, when the box is emptied, taken out — that waits for "שמור
-   * לסידור" with the rest. Nothing is written for it here. A cell that
-   * already holds a saved allocation is never the proposal's, so it is
-   * written at once, as it always is — see typeIntoProposal.
+   * Resolves to whether the number was taken, never rejects: the phone list
+   * puts its box back on false. Only a cell whose lot cannot be named is
+   * refused — a pick line no longer on the day, or one whose product did not
+   * come back: it has no row to have been typed into (see lotOfPickLine).
    */
   const commitCell = async (write: MatrixWrite): Promise<boolean> => {
-    if (suggestion && proposal && boardDay) {
-      const day = { picks: boardDay.daily_picks, orders: boardDay.daily_orders };
-      // Where the number goes does not depend on the lines, only on the cell.
-      const typed = typeIntoProposal(suggestion.lines, day, write);
-      if (!typed) return false;
-      // Applied to the lines as they stand when this runs, not as they were
-      // when the cell was drawn: two corrections in a row must both land.
-      setSuggestion(
-        (current) =>
-          current && {
-            ...current,
-            lines: typeIntoProposal(current.lines, day, write)?.lines ?? current.lines,
-          },
-      );
-      if (!typed.saveNow) return true;
-    }
-
-    try {
-      if (write.quantity === 0) {
-        // Clearing a cell that never had a record is not an error, it is a
-        // distributor tabbing through an empty row.
-        if (!write.recordId) return true;
-        await deleteMutation.mutateAsync(write.recordId);
-      } else {
-        await arrangeMutation.mutateAsync(write);
-      }
-      return true;
-    } catch {
-      return false;
-    }
+    if (!boardDay) return false;
+    const rows = {
+      picks: boardDay.daily_picks,
+      orders: boardDay.daily_orders,
+      records: arrangement?.arrangement_records ?? [],
+    };
+    // Where the number goes does not depend on the lines, only on the cell.
+    if (!typeIntoUnsaved(unsaved.lines, rows, write)) return false;
+    // Applied to the lines as they stand when the update runs, not as they
+    // were when the cell was drawn: two quick commits must both land.
+    updateDay(boardDay.id, (current) => ({
+      ...current,
+      lines: typeIntoUnsaved(current.lines, rows, write) ?? current.lines,
+    }));
+    return true;
   };
 
   /**
-   * The whole proposal on preview, saved in ONE call: save_arrangement_proposal
-   * (migration 0075) writes every cell in one transaction, through the same
-   * arrange_to_customer a typed cell uses, and only into cells still empty —
-   * a refusal anywhere saves nothing, and a cell filled since the proposal was
-   * read is refused, never overwritten.
+   * Every unsaved change of the day, saved in ONE call:
+   * save_arrangement_changes (migration 0103) writes every cell in one
+   * transaction — a refusal anywhere saves nothing — and refuses, never
+   * overwrites, a cell that no longer holds what its change was typed over
+   * (`expected`), or whose order went meanwhile.
    *
    * A mutation, like every other write in the app, because that is what
    * lib/live-updates.ts looks at: it will not re-read this device's screens
    * while one is in flight. The callbacks sit on the hook, not on the mutate()
-   * call, so they still run if the screen is left mid-save.
+   * call, so they still run if the screen is left mid-save — and they only
+   * reach for what outlives it: the query cache, and the store, by the day
+   * the save was for.
    */
-  const saveProposalMutation = useMutation({
-    mutationKey: SAVE_PROPOSAL_KEY,
+  const saveChangesMutation = useMutation({
+    mutationKey: SAVE_CHANGES_KEY,
     mutationFn: async ({
       tradingDayId,
       allocations,
     }: {
       tradingDayId: string;
       allocations: ProposedAllocation[];
+      /** The lines the allocations were landed from: what a save that lands lets go of. */
+      sent: readonly ProposalLine[];
     }) => {
-      const parsed = saveArrangementProposalInputSchema.parse({
+      const parsed = saveArrangementChangesInputSchema.parse({
         tradingDayId,
-        allocations: allocations.map((allocation) => ({
+        changes: allocations.map((allocation) => ({
           dailyPickProductId: allocation.pickLineId,
           customerCompanyId: allocation.customerId,
           quantityPallets: allocation.quantity,
+          // What the cell held when it was changed here, so the database can
+          // refuse a cell somebody has changed since.
+          expected: {
+            recordId: allocation.expected.recordId,
+            quantityPallets: allocation.expected.quantity,
+          },
           // So the database can refuse a cell whose order went meanwhile.
           ...(allocation.forOrder ? { forOrder: true } : {}),
         })),
       });
       const { data, error } = await supabase.rpc(
-        "save_arrangement_proposal",
-        toSaveArrangementProposalRpcArgs(parsed),
+        "save_arrangement_changes",
+        toSaveArrangementChangesRpcArgs(parsed),
       );
       if (error) throw error;
       return data;
     },
-    onSuccess: async (saved) => {
-      // Re-read BEFORE the preview is let go, and wait for it — the mutation
-      // stays pending meanwhile, so the grid stays held. Dropping the
-      // suggestion first would show every cell just saved as empty for the
-      // moment between the two.
+    onSuccess: async (saved, { tradingDayId, sent }) => {
+      // Re-read BEFORE the changes are let go, and wait for it — the mutation
+      // stays pending meanwhile, so the grid stays held. Letting them go first
+      // would show every cell just saved as it stood before, for the moment
+      // between the two. The saved day's grid whether or not it is on screen
+      // (refetchType "all"): a grid left mid-save is read again too, so
+      // coming back to it shows the saved numbers, not its copy from before
+      // the save. That day's only: the save changed no other, and re-reading
+      // every day still cached would keep the grid held for downloads it
+      // cannot need.
       void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
-      await queryClient.invalidateQueries({ queryKey: newArrangementKeys.matrixAll });
-      setSuggestion(null);
+      await queryClient.invalidateQueries({
+        queryKey: newArrangementKeys.matrix(tradingDayId),
+        refetchType: "all",
+      });
+      // The lines that were sent, not whatever the day holds by now: what
+      // this save did not carry, it did not save. Lines that landed nowhere
+      // (already saved, a suggestion left out) go with them.
+      updateDay(tradingDayId, (current) => ({
+        lines: current.lines.filter((line) => !sent.includes(line)),
+        refusal: null,
+      }));
       showToast(`הסידור נשמר: ${saved} תאים.`, "success");
     },
-    onError: async (error: RpcError) => {
-      // Nothing was saved. Re-read anyway: a refusal usually means this
-      // screen's copy of the day is behind — and a cell somebody filled
-      // meanwhile drops out of the preview on that read by itself.
+    onError: async (error: RpcError, { tradingDayId }) => {
+      // Nothing was saved. Re-read anyway, and wait for it: a refusal usually
+      // means this screen's copy of the day is behind, and what is said and
+      // let go below is worked out from the day as it is now. That day's
+      // grid, on screen or not, as on success: with the screen left mid-save,
+      // nothing else would read it again before it is shown.
       void queryClient.invalidateQueries({ queryKey: arrangementKeys.boardDataAll });
-      await queryClient.invalidateQueries({ queryKey: newArrangementKeys.matrixAll });
-      const reason = describeSaveRefusal(error);
-      // Kept on the banner: a toast is gone in four seconds, and the cells
-      // it is about are still sitting in the grid to be corrected.
-      setSuggestion((current) => current && { ...current, refusal: reason });
+      await queryClient.invalidateQueries({
+        queryKey: newArrangementKeys.matrix(tradingDayId),
+        refetchType: "all",
+      });
+      const fresh = queryClient.getQueryData<MatrixDay | null>(
+        arrangementQueries.matrix(tradingDayId).queryKey,
+      );
+      const reason = saveRefusalMessage({
+        error,
+        picks: fresh?.daily_picks ?? [],
+        names: new Map((companiesQuery.data ?? []).map((company) => [company.id, company.name])),
+        reason: describeRpcError(error, "0103"),
+      });
+      updateDay(tradingDayId, (current) => {
+        let lines = current.lines;
+        if (fresh) {
+          // A conflict mends itself: the cells it names changed since they
+          // were changed here, so the numbers typed in them go, and those
+          // cells show what is saved. Every other refusal keeps every number,
+          // to be corrected and saved again.
+          if (error.code === ARRANGEMENT_ERROR_CODES.CONFLICT) {
+            lines = dropCells(lines, fresh.daily_picks, refusedCells(error.details));
+          }
+          // A change whose cell already holds its number has nothing left to
+          // save — the answer to an earlier save that landed may have been
+          // lost on the way — and sent again it would be refused as a
+          // conflict with itself.
+          lines = pruneSaved(lines, {
+            picks: fresh.daily_picks,
+            orders: fresh.daily_orders,
+            records: fresh.daily_arrangements?.arrangement_records ?? [],
+          });
+        }
+        // Kept on the bar: a toast is gone in four seconds, and the cells it
+        // is about are still sitting in the grid to be corrected.
+        return { lines, refusal: reason };
+      });
       showToast(reason, "error");
     },
   });
 
-  /** Why a save was refused, naming the cells the refusal named. */
-  function describeSaveRefusal(error: RpcError): string {
-    return saveRefusalMessage({
-      error,
-      picks: boardDay?.daily_picks ?? [],
-      names: new Map((companiesQuery.data ?? []).map((company) => [company.id, company.name])),
-      reason: describeRpcError(error, "0075"),
-    });
-  }
-
   /**
-   * "הצע סידור": works out a proposal for the day and puts it on preview.
+   * "הצע סידור": works out a proposal for the day and adds it to the unsaved
+   * changes, to be corrected in the grid and saved with "שמור שינויים".
    * Writes nothing.
    *
    * The day on screen as it stands — orders, what is free on each lot, what
    * is already arranged — plus the last HISTORY_DAYS days, read now; the rules
    * are arrangement-engine.ts's (see proposeForDay). Cells already arranged
    * are never proposed over.
+   *
+   * Only while nothing unsaved is on the grid (unsavedCount): the engine
+   * plans against what is saved, and beside unsaved numbers it could plan the
+   * same pallets twice. Lines that land nowhere — a suggestion whose cells
+   * were filled meanwhile, one held to an order since withdrawn — show
+   * nothing and save nothing, so they do not hold it back; the suggestion
+   * replaces them. The grid is held on this screen while it is worked out
+   * (gridEditable — `proposing` is this screen's own state), so nothing can
+   * be typed on it in the meantime for the suggestion to replace.
    */
   const suggestArrangement = async () => {
-    if (!boardDay || !arrangement || savingProposal || proposing) return;
+    if (!boardDay || !arrangement || savingChanges || proposing) return;
+    if (unsavedCount > 0) return;
     setProposing(true);
     try {
       const learnedFrom = await readEngineHistory(supabase, boardDay.trade_date);
@@ -514,7 +431,11 @@ export default function NewArrangementPage() {
         showToast("אין מה להציע: כל מה שהוזמן ויש לו מלאי כבר משובץ.");
         return;
       }
-      setSuggestion({ tradingDayId: today.id, lines, refusal: null });
+      // Into the store, under the day it was worked out for, in place of
+      // whatever lines it held: none of them was on the grid when the
+      // suggestion was asked for (the guard above). A leftover refusal
+      // message goes too: the suggestion starts afresh.
+      updateDay(today.id, () => ({ lines, refusal: null }));
     } catch (error) {
       showToast(`חישוב הצעת הסידור נכשל: ${errorMessage(error)}`, "error");
     } finally {
@@ -524,17 +445,18 @@ export default function NewArrangementPage() {
 
   // Set the moment a save is asked for, before the next render can show the
   // mutation as running: two clicks inside one frame would otherwise both get
-  // through, and the second be refused for cells the first had just filled.
+  // through, and the second be refused for cells the first had just changed.
   const saveRequested = useRef(false);
 
-  /** "שמור לסידור": saves what is on preview. */
-  const saveSuggestion = () => {
-    if (!proposal || !suggestion || savingProposal || saveRequested.current) return;
+  /** "שמור שינויים": saves every unsaved change of the day on screen. */
+  const saveChanges = () => {
+    if (!boardDay || !proposal || savingChanges || saveRequested.current) return;
     if (proposal.allocations.length === 0) return;
     saveRequested.current = true;
-    setSuggestion((current) => current && { ...current, refusal: null });
-    saveProposalMutation.mutate(
-      { tradingDayId: suggestion.tradingDayId, allocations: proposal.allocations },
+    // The last refusal is about the last attempt; this one gets its own.
+    updateDay(boardDay.id, (current) => ({ ...current, refusal: null }));
+    saveChangesMutation.mutate(
+      { tradingDayId: boardDay.id, allocations: proposal.allocations, sent: unsaved.lines },
       {
         onSettled: () => {
           saveRequested.current = false;
@@ -590,21 +512,29 @@ export default function NewArrangementPage() {
     );
   }
 
-  // A proposal on preview leaves the grid open: its numbers are there to be
-  // corrected before they are saved, and which of a cell's numbers are not in
-  // the database yet is told by how the box is drawn, not by locking it (see
-  // commitCell for where a typed number goes meanwhile). A save of one that is
-  // still running does hold every cell, whichever mount of this screen began
-  // it: the cells are landing one by one, and a number typed over one of them
-  // would race its own save.
-  const gridEditable = editable && !savingProposal;
-  const proposedPallets =
-    proposal?.allocations.reduce((sum, allocation) => sum + allocation.quantity, 0) ?? 0;
+  // Unsaved changes leave the grid open: they are there to be corrected
+  // before they are saved, and which numbers are not in the database yet is
+  // told by how the box is drawn, not by locking it (see commitCell for where
+  // a typed number goes). A save that is still running does hold every cell,
+  // whichever mount of this screen began it: a number typed into a cell while
+  // its change is being saved would race the save. So does "הצע סידור" while
+  // it works a suggestion out: the engine plans against what is saved only,
+  // so a number typed meanwhile would be planned over — and then thrown away,
+  // since the suggestion takes the day's lines (see suggestArrangement).
+  const gridEditable = editable && !savingChanges && !proposing;
+  // A refusal stays on the bar even once there is nothing left to save: a
+  // conflict can let go of every change it was about.
+  const showBar = editable && (unsavedCount > 0 || unsaved.refusal !== null);
+  // What "הצע סידור" put among the changes, once its suggestions are held to
+  // the orders (see resolveProposal).
+  const suggestedCells = proposal?.suggestedCells ?? 0;
+  const suggestedPallets = proposal?.suggestedPallets ?? 0;
   // Counted on every read of the day, not once when offered: lines drop out
-  // as cells are filled and orders change while the proposal is on preview.
+  // as cells are filled and orders change while the suggestion is unsaved.
   // Two counts, because they have different causes: a cell the day has no
-  // room for, against a line held to what the customer has on order.
-  const leftOut = proposal ? proposal.alreadyArranged + proposal.unplaceable : 0;
+  // room for, against a line held to what the customer has on order. Lines
+  // of the suggestion only: a number typed that lands nowhere was never one.
+  const leftOut = proposal ? proposal.alreadyArranged + proposal.unplaceableSuggestions : 0;
   const heldToOrder = proposal?.heldToOrder ?? 0;
   // Why the grid is empty, when the cut-down view is why: its own message
   // assumes a search that matched nothing.
@@ -629,16 +559,11 @@ export default function NewArrangementPage() {
                 {dayView.isLive ? "הסידור נסגר — קריאה בלבד" : "צפייה בעבר — לא ניתן לערוך"}
               </StatusPill>
             )}
-            {/* A save still landing with no preview above it: this screen was
-                left mid-save and come back to. */}
-            {savingProposal && !proposal && (
-              <StatusPill tone="accent" dot>
-                שומר הצעת סידור…
-              </StatusPill>
-            )}
-            {/* Not while one is already open: asking again would replace the
-                distributor's corrections with the suggestion they corrected. */}
-            {gridEditable && !proposal && (
+            {/* Only while nothing unsaved is on the grid — see
+                suggestArrangement. Gated on `editable`, not gridEditable:
+                that is false while the suggestion is being worked out, and
+                the button stays then, disabled, saying so. */}
+            {editable && !savingChanges && unsavedCount === 0 && (
               <Button onClick={() => void suggestArrangement()} disabled={proposing}>
                 {proposing ? "מחשב הצעה…" : "הצע סידור"}
               </Button>
@@ -653,38 +578,40 @@ export default function NewArrangementPage() {
         }
       />
 
-      {/* A proposal on preview. Says what it is before it says what to do
-          with it: the numbers it put in the grid look like any others at a
-          glance, and nothing about them is in the database yet. */}
-      {proposal && suggestion && (
+      {/* The unsaved changes. Says what they are before it says what to do
+          with them: a number not saved yet looks like any other at a glance
+          but for its dashed box, and nothing about it is in the database. */}
+      {showBar && (
         <div
           role="status"
           className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md bg-accent-soft px-4 py-3 ring-1 ring-inset ring-accent/30"
         >
           <p className="text-sm text-ink">
-            <span className="font-semibold">הצעת סידור — עדיין לא נשמרה.</span>{" "}
-            {formatPallets(proposedPallets)} משטחים ב-{proposal.allocations.length} תאים.
+            {unsavedCount > 0 && (
+              <span className="font-semibold">
+                {unsavedCount === 1 ? "שינוי אחד שלא נשמר." : `${unsavedCount} שינויים שלא נשמרו.`}
+              </span>
+            )}
+            {suggestedCells > 0 &&
+              ` הצעת סידור: ${formatPallets(suggestedPallets)} משטחים ב-${suggestedCells} תאים.`}
             {leftOut > 0 &&
               ` ${leftOut} שורות מההצעה לא נכללו: כבר משובצות, או שאין להן מקום ביום זה.`}
             {heldToOrder > 0 &&
               ` ${heldToOrder} שורות קוצצו או ירדו כדי לא לעבור את מה שהלקוח הזמין.`}
-            {suggestion.refusal && (
-              <span className="block font-semibold text-danger">{suggestion.refusal}</span>
+            {unsaved.refusal && (
+              <span className="block font-semibold text-danger">{unsaved.refusal}</span>
             )}
           </p>
           <div className="ms-auto flex items-center gap-2">
-            <Button
-              onClick={saveSuggestion}
-              disabled={savingProposal || proposal.allocations.length === 0}
-            >
-              {savingProposal ? "שומר…" : "שמור לסידור"}
+            <Button onClick={saveChanges} disabled={savingChanges || unsavedCount === 0}>
+              {savingChanges ? "שומר…" : "שמור שינויים"}
             </Button>
             <Button
               variant="secondary"
-              onClick={() => setSuggestion(null)}
-              disabled={savingProposal}
+              onClick={() => setDiscarding(true)}
+              disabled={savingChanges}
             >
-              בטל הצעה
+              בטל שינויים
             </Button>
           </div>
         </div>
@@ -745,22 +672,26 @@ export default function NewArrangementPage() {
           שובץ
         </p>
 
-        {proposal && (
+        {showBar && (
           <p className="flex items-center gap-2 text-xs text-ink-muted">
             <span
               aria-hidden
               className="h-3 w-3 rounded-sm border border-dashed border-accent bg-accent-soft"
             />
-            מספר בתא כזה = הצעה שעדיין לא נשמרה
+            מספר בתא כזה = עדיין לא נשמר
           </p>
         )}
 
         {/* The keyboard hint only describes the desktop grid's own arrow-key
             navigation — meaningless on the mobile card list below, which has
-            no cell-to-cell navigation at all (see arrangement-matrix-mobile.tsx). */}
+            no cell-to-cell navigation at all (see arrangement-matrix-mobile.tsx).
+            It also says where saving happens: Enter and Tab only accept the
+            number into its box. */}
         {gridEditable && wide && (
           <p className="text-xs text-ink-subtle">
-            הקלד כמות ולחץ Enter או Tab. חיצים לניווט בין תאים.
+            {
+              'הקלד כמות ולחץ Enter או Tab. חיצים לניווט בין תאים. השינויים נשמרים רק בלחיצה על "שמור שינויים".'
+            }
           </p>
         )}
       </div>
@@ -778,6 +709,7 @@ export default function NewArrangementPage() {
           }
           editable={gridEditable}
           onCommit={commitCell}
+          {...(gridEditable ? { onEditStock: setStockLineId } : {})}
           {...(emptyLabel ? { emptyLabel } : {})}
         />
       ) : (
@@ -793,9 +725,48 @@ export default function NewArrangementPage() {
           }
           editable={gridEditable}
           onCommit={commitCell}
+          {...(gridEditable ? { onEditStock: setStockLineId } : {})}
           {...(emptyLabel ? { emptyLabel } : {})}
         />
       )}
+
+      {/* The quick stock edit. Saving it re-reads everything that shows a
+          pick line's stock; the grid's unsaved changes are held apart (see
+          useUnsavedChanges) and are laid over each fresh read, so they stay. */}
+      <StockEditDialog
+        pickLineId={stockLineId}
+        onClose={() => setStockLineId(null)}
+        onSaved={() => {
+          invalidateStockReads(queryClient, boardDay.id);
+          setStockLineId(null);
+        }}
+      />
+
+      {/* Asked first: one slip onto "בטל שינויים" would otherwise throw away
+          everything typed since the last save, with no way back. */}
+      <Dialog
+        open={discarding}
+        onClose={() => setDiscarding(false)}
+        title="לבטל את כל השינויים שלא נשמרו?"
+      >
+        <p className="mb-4 text-sm">השינויים שלא נשמרו יימחקו.</p>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setDiscarding(false)}>
+            המשך לערוך
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              // The whole day emptied, not just its lines: a refusal left on
+              // the bar goes with the changes it was about.
+              updateDay(boardDay.id, () => EMPTY_UNSAVED_DAY);
+              setDiscarding(false);
+            }}
+          >
+            בטל שינויים
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }
@@ -803,16 +774,16 @@ export default function NewArrangementPage() {
 interface RpcError {
   code?: string;
   message?: string;
-  /** PostgREST's copy of the error's DETAIL — where save_arrangement_proposal names the cell. */
+  /** PostgREST's copy of the error's DETAIL — where save_arrangement_changes names the cells. */
   details?: string | null;
 }
 
 // The arrangement functions raise named SQLSTATEs (packages/domain's
 // ARRANGEMENT_ERROR_CODES). Same translation the board does — kept as its own
 // copy here rather than shared because the two screens can reasonably word
-// the same refusal differently, and this one is typed into far faster: an
-// over-allocation is a routine keystroke on a grid, not an exception.
-function describeRpcError(error: RpcError, migration = "0040"): string {
+// the same refusal differently: here it is read on the bar, after the cells
+// it names (see saveRefusalMessage), once a save has written nothing.
+function describeRpcError(error: RpcError, migration: string): string {
   switch (error.code) {
     case ARRANGEMENT_ERROR_CODES.OVER_ALLOCATION:
       return "הכמות חורגת ממה שנקטף בשורת הליקוט או ממה שהלקוח הזמין.";
@@ -830,10 +801,9 @@ function describeRpcError(error: RpcError, migration = "0040"): string {
     case "40P01":
       return "השמירה התנגשה בשינוי אחר שנעשה באותו רגע. נסה שוב.";
     // PostgREST's "no function matches". Worth naming because migrations here
-    // are applied by hand: every cell in this grid calls arrange_to_customer,
-    // which does not exist until 0040 is run (and a whole proposal
-    // save_arrangement_proposal, 0075), and the raw message reads as a bug
-    // rather than as a pending migration.
+    // are applied by hand: the grid's one save calls save_arrangement_changes,
+    // which does not exist until 0103 is run, and the raw message reads as a
+    // bug rather than as a pending migration.
     case "PGRST202":
       return `פעולה זו דורשת מיגרציה שטרם הורצה (${migration}). הרץ pnpm db:migrate.`;
     default:
