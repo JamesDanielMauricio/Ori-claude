@@ -40,9 +40,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # SECURITY: the live database's address (LIVE_DATABASE_URL, with its
-    # password) is stored in this environment, which GitHub lets only the main
-    # branch use. It ALLOWS this job, on main, to read it. It PROTECTS AGAINST
-    # any other branch or workflow reading the live password.
+    # password) is stored in this environment. It ALLOWS a job that names
+    # live-database, like this one, to read it. It PROTECTS AGAINST every other
+    # job (ci.yml included) reading it, and against pull requests from copies
+    # of this repository (forks): GitHub never gives them secrets. It is NOT
+    # limited to the main branch (James's choice, 2026-11-18): a branch pushed
+    # to this repository could name it too, and only collaborators — today
+    # James alone — can push branches.
     environment: live-database
     steps:
       - uses: actions/checkout@v4
