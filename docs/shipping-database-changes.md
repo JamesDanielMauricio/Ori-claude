@@ -44,8 +44,8 @@ Claude before the next merge.
    who checks it read-only.
 2. **Give GitHub the live address.** On GitHub: the repository → Settings →
    Environments → New environment, named `live-database`.
-   - Under *Deployment branches and tags*, choose *Selected branches and tags*
-     and add `main`.
+   - Leave *Deployment branches and tags* as it is: no branch limit (James's
+     choice, 2026-11-18; only collaborators can push branches).
    - Add no required reviewers: no Approve click.
    - Under *Environment secrets*, add `LIVE_DATABASE_URL`. Its value is live's
      session pooler address, the same as the `DATABASE_URL` line in
@@ -55,9 +55,12 @@ Claude before the next merge.
    run, the job should go green and print "Live already has every migration
    file: nothing new to run."
 4. **Make Vercel wait for it.** In Vercel: the project → Settings → Build and
-   Deployment → Deployment Checks → Add Checks → GitHub → choose `migrate-live`.
-   - Vercel also needs automatic aliasing of production deployments to be on.
-     That is its default: Settings → Environments → Production.
+   Deployment → Deployment Checks → Add Checks → GitHub → *Select checks to
+   add* → choose `migrate-live`. (Not *Send workflow updates to Vercel*: that
+   one needs a change to the job.)
+   - Vercel also needs *Auto-assign Custom Production Domains* to be on. That
+     is its default: Settings → Environments → click *Production* → *Branch
+     Tracking*.
    - If there is no *Deployment Checks* section on your plan, tell Claude:
      there is a fallback.
 5. **Make merging wait for the checks.** On GitHub: the repository → Settings →
