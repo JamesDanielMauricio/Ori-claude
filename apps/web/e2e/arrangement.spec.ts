@@ -474,7 +474,9 @@ test.describe("Backoffice — arrangement workspace", () => {
     await expect(page.getByRole("heading", { name: "אין יום מסחר פתוח" })).toBeVisible();
   });
 
-  test("a customer card's bell sends a reminder to the ticked people", async ({ page }) => {
+  // A day with one customer whose order is open and un-submitted, signed in on
+  // the board with a grower's product selected — the state the bell is for.
+  async function startReminderDay(page: Page) {
     const adminCompany = await createTestCompany();
     cleanupFns.push(() => deleteTestCompany(adminCompany.id));
     const admin = await createTestProfile({ companyId: adminCompany.id, role: "backoffice" });
@@ -539,16 +541,47 @@ test.describe("Backoffice — arrangement workspace", () => {
     await selectGrowerProduct(page, grower.companyName);
     const bell = page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` });
     await expect(bell).toBeEnabled();
-    await bell.click();
+    return { adminClient, bell, customerCompany, dayId, grower };
+  }
 
+  test("a customer card's bell asks first, then sends the reminder to the group or everyone", async ({
+    page,
+  }) => {
+    const { adminClient, bell, customerCompany, dayId, grower } = await startReminderDay(page);
+
+    // Every reminder request the page makes, to prove cancelling sends none
+    // and to read the body of the one that is sent.
+    const reminderBodies: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/rpc/send_order_reminder")) {
+        reminderBodies.push(request.postData() ?? "");
+      }
+    });
+
+    await bell.click();
     const dialog = page.locator("dialog[open]");
-    await expect(dialog).toContainText(`שליחת תזכורת — ${customerCompany.name}`);
-    await expect(dialog.getByRole("checkbox", { name: /אבי עם טלפון/ })).toBeChecked();
-    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
+    await expect(dialog).toContainText("שליחת תזכורת");
+    await expect(dialog).toContainText(`לשלוח ל${customerCompany.name} תזכורת לשלוח הזמנה?`);
+    // Bubble's board does not let you choose people: no checkboxes here.
+    await expect(dialog.getByRole("checkbox")).toHaveCount(0);
+
+    await dialog.getByRole("button", { name: "ביטול", exact: true }).click();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    expect(reminderBodies).toHaveLength(0);
+
+    await bell.click();
+    await page.locator("dialog[open]").getByRole("button", { name: "שלח", exact: true }).click();
     await expect(page.getByText("התזכורת נשלחה.")).toBeVisible();
     await expect(page.locator("dialog[open]")).toHaveCount(0);
 
-    // The outbox row, read from the database: addressed to the ticked user.
+    // The request carries the order and no list of people.
+    expect(reminderBodies).toHaveLength(1);
+    const body = JSON.parse(reminderBodies[0]!) as Record<string, unknown>;
+    expect(body).toHaveProperty("p_daily_order_id");
+    expect(body).not.toHaveProperty("p_recipient_user_ids");
+
+    // The outbox row, read from the database: no list, so the server's
+    // routing rule (the group, else each person) decides who gets it.
     const outbox = await adminClient
       .from("notification_outbox")
       .select("recipient_company_id, recipient_user_ids")
@@ -556,7 +589,7 @@ test.describe("Backoffice — arrangement workspace", () => {
       .eq("template_key", "order_reminder");
     if (outbox.error) throw outbox.error;
     expect(outbox.data).toHaveLength(1);
-    expect(outbox.data[0]!.recipient_user_ids).toEqual([withPhone.userId]);
+    expect(outbox.data[0]!.recipient_user_ids).toBeNull();
 
     // Once the order is submitted there is nothing to remind about.
     const markSent = await adminClient
@@ -570,6 +603,28 @@ test.describe("Backoffice — arrangement workspace", () => {
     await expect(
       page.getByRole("button", { name: `שלח תזכורת ל${customerCompany.name}` }),
     ).toBeDisabled();
+  });
+
+  test("a refusal after confirming shows as a toast", async ({ page }) => {
+    const { adminClient, bell, customerCompany, dayId } = await startReminderDay(page);
+
+    await bell.click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText(`לשלוח ל${customerCompany.name} תזכורת לשלוח הזמנה?`);
+
+    // The customer sends the order after the board loaded and before the
+    // button is pressed — the page still shows the bell enabled.
+    const markSent = await adminClient
+      .from("daily_orders")
+      .update({ status: "submitted", submitted_at: new Date().toISOString() })
+      .eq("trading_day_id", dayId)
+      .eq("customer_company_id", customerCompany.id);
+    if (markSent.error) throw markSent.error;
+
+    await dialog.getByRole("button", { name: "שלח", exact: true }).click();
+    await expect(
+      page.getByText("שליחת התזכורת נכשלה: הלקוח כבר שלח את ההזמנה, ואין צורך בתזכורת."),
+    ).toBeVisible();
   });
 
   // --- The quick stock edit on סידור לפי מוצרים ---

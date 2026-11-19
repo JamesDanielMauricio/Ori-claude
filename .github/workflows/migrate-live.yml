@@ -1,0 +1,80 @@
+name: Migrate live
+
+# Runs every new migration file on the LIVE Supabase project after a merge into
+# main. Vercel's Deployment Checks wait for this job (check name: migrate-live)
+# before serving the new site, so the website never goes live ahead of its
+# database. The routine and the setup clicks: docs/shipping-database-changes.md.
+#
+# It runs on EVERY push to main, with no path filter, on purpose: Vercel holds
+# each production deployment until this check reports, so the check must exist
+# for website-only merges too (there, it prints "nothing new to run").
+#
+# If it fails, nothing changed: the checks refuse before anything runs, and
+# Drizzle applies all pending files in one transaction, so a failing file
+# undoes the whole run. Vercel keeps serving the previous deployment.
+
+on:
+  # SECURITY: only a push to main, i.e. a merged pull request, starts this.
+  # It ALLOWS reviewed, merged code to update live. It PROTECTS AGAINST a pull
+  # request (anyone can open one: the repository is public) running code while
+  # holding the live database's address. That is why there is deliberately no
+  # pull_request trigger here.
+  push:
+    branches: [main]
+
+# One run at a time, and never cancel one halfway through: two quick merges run
+# in order, and the second sees what the first applied.
+concurrency:
+  group: migrate-live
+  cancel-in-progress: false
+
+# SECURITY: the job's GitHub token can only read the repository. It ALLOWS the
+# checkout. It PROTECTS AGAINST a compromised package in the install step using
+# the token to push code or change the repository's settings.
+permissions:
+  contents: read
+
+jobs:
+  migrate-live:
+    name: migrate-live
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # SECURITY: the live database's address (LIVE_DATABASE_URL, with its
+    # password) is stored in this environment. It ALLOWS a job that names
+    # live-database, like this one, to read it. It PROTECTS AGAINST every other
+    # job (ci.yml included) reading it, and against pull requests from copies
+    # of this repository (forks): GitHub never gives them secrets. It is NOT
+    # limited to the main branch (James's choice, 2026-11-18): a branch pushed
+    # to this repository could name it too, and only collaborators — today
+    # James alone — can push branches.
+    environment: live-database
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
+
+      # Only the database package and what it depends on: all this job needs.
+      - run: pnpm install --frozen-lockfile --filter @ori/db...
+
+      # One script, one encrypted connection (packages/db/scripts/migrate-live.ts):
+      # it refuses unless the address is live's and live's migration log agrees
+      # with this checkout, runs the new files with Drizzle's own migrator, then
+      # checks live recorded every one. It is used instead of `drizzle-kit
+      # migrate`, which prints a failing statement's whole error, and Postgres
+      # errors can quote live customers' data into this public log.
+      #
+      # SECURITY: the secret is handed to this one step only, never to the
+      # whole job. It ALLOWS this step to reach live. It PROTECTS AGAINST the
+      # earlier steps (actions written by others, package install scripts)
+      # reading the live password from their environment.
+      - name: Migrate live (guarded)
+        run: pnpm --filter @ori/db db:migrate-live
+        env:
+          DATABASE_URL: ${{ secrets.LIVE_DATABASE_URL }}
