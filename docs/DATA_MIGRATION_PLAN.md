@@ -130,10 +130,10 @@ triggers, not Ori's wording.
 | id | Content (paraphrased) | Status |
 | --- | --- | --- |
 | 1, 2 | Grower pick reminder ("please update your pick estimate") — identical duplicate rows, one shared trigger | **Closed.** `send_pick_reminder` (0029) writes a `notification_outbox` row (`template_key = 'pick_reminder'`). |
-| 3 | "COMPANY updated their pick estimate" (to backoffice) | **Closed.** `update_pick_product_pallets` (0031) enqueues `pick_updated` — only when the grower made the edit. |
+| 3 | "COMPANY updated their pick estimate" (to the grower's own group) | **Closed.** `update_pick_product_pallets` (0031) enqueues `pick_updated` — only when the grower made the edit. |
 | 4 | "The shop is now open for orders" (to customers) | **Closed.** `open_shop` (0031) enqueues `shop_open`. |
 | 5 | "This is a reminder to send an order for day X" (to a customer) | **Closed.** `send_order_reminder` (0028). |
-| 6 | "COMPANY sent an order via USER — here's their current status" (to backoffice) | **Closed.** `submit_order` (0031/0032) enqueues `order_submitted` — direct customer submissions only. |
+| 6 | "COMPANY sent an order via USER — here's their current status" (to backoffice, plus a private copy to the customer who sent it) | **Closed.** `submit_order` (0031/0032) enqueues `order_submitted` — direct customer submissions only. |
 | 7, 9 | Arrangement summary to a grower / customer | **Functionally closed, differently.** `close_arrangement_grower`/`close_arrangement_customer` templates. |
 | 8 | Arrangement summary to a grower, "also sent to the transporter" | **Closed.** `build_notification_outbox` (0031) cc's the grower's `transporter_company_id`. |
 | 10 | "All picked pallets for PRODUCT ordered — N more pallets of overbooking room remain" | **Closed.** `submit_order` computes it live — `stock_overbooking_reached`. |

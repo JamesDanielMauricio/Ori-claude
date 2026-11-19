@@ -884,7 +884,7 @@ describe("lifecycle engine", () => {
     expect(inactiveRows).toHaveLength(0);
   }, 30000);
 
-  it("update_pick_product_pallets enqueues pick_updated to backoffice only when the grower themselves edits, not on the backoffice-on-behalf-of path — id 3", async () => {
+  it("update_pick_product_pallets queues pick_updated for the grower's own company only when the grower edits — id 3", async () => {
     const admin = await createTestBackofficeAdmin();
     cleanupFns.push(() => deleteTestBackofficeAdmin(admin));
     const backoffice = await signInTestUser(admin.email, admin.password);
@@ -914,7 +914,8 @@ describe("lifecycle engine", () => {
       .where(eq(notificationOutbox.recipientCompanyId, admin.companyId));
     expect(afterBackofficeEdit).toHaveLength(0);
 
-    // The grower editing their own line does notify backoffice.
+    // The grower editing their own line queues one pick_updated row for the
+    // grower's own company (0107) — and none for the office.
     const growerClient = await signedInGrowerFor(grower.companyId);
     const growerEdit = await growerClient.rpc(
       "update_pick_product_pallets",
@@ -925,13 +926,20 @@ describe("lifecycle engine", () => {
     const afterGrowerEdit = await db
       .select()
       .from(notificationOutbox)
-      .where(eq(notificationOutbox.recipientCompanyId, admin.companyId));
-    expect(afterGrowerEdit).toHaveLength(1);
-    expect(afterGrowerEdit[0]).toMatchObject({
+      .where(eq(notificationOutbox.recipientCompanyId, grower.companyId));
+    const growerPickUpdated = afterGrowerEdit.filter((r) => r.templateKey === "pick_updated");
+    expect(growerPickUpdated).toHaveLength(1);
+    expect(growerPickUpdated[0]).toMatchObject({
       templateKey: "pick_updated",
-      recipientType: "backoffice",
+      recipientType: "grower",
+      recipientCompanyId: grower.companyId,
       tradingDayId: day.id,
     });
+    const officeAfterGrowerEdit = await db
+      .select()
+      .from(notificationOutbox)
+      .where(eq(notificationOutbox.recipientCompanyId, admin.companyId));
+    expect(officeAfterGrowerEdit).toHaveLength(0);
   }, 30000);
 });
 

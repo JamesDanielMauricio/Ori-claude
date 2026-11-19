@@ -104,8 +104,6 @@ describe("message content and phone numbers (0077)", () => {
   }
 
   it.each([
-    // 0102: Bubble's wording (main alert 3), the day as "<letter> dd.mm.yy".
-    ["pick_updated", { companyName: "משק הבדיקה" }, ["שלום. משק הבדיקה עדכן את הערכת הקטיף ליום ר 08.11.26 "]],
     ["order_submitted", { companyName: "שוק הבדיקה" }, ["שוק הבדיקה שלחו הזמנה"]],
     ["stock_overbooking_reached", { productName: "בננה גדולה", productOverbooking: "3" }, ["עבור בננה גדולה הוזמנו", "לעוד 3 משטחים"]],
     ["stock_fully_exhausted", { productName: "בננה קטנה" }, ["עבור בננה קטנה הוזמנו"]],
@@ -120,15 +118,49 @@ describe("message content and phone numbers (0077)", () => {
       expect(message).not.toMatch(/%[A-Z_]+%/);
       if (how === "people") {
         expect(resolved.data![0]).toMatchObject({ target: "972527654321", is_group: false });
-        // Each person by their first name, the Bubble way ("שלום רונית.") —
-        // except main alert 3, which greets nobody by name.
-        const greeting = templateKey === "pick_updated" ? "שלום. משק הבדיקה" : "שלום רונית.";
-        expect(message.startsWith(greeting), message).toBe(true);
+        // Each person by their first name, the Bubble way ("שלום רונית.").
+        expect(message.startsWith("שלום רונית."), message).toBe(true);
       }
       const preview = await admin.rpc("resolve_outbox_preview", { p_outbox_id: id });
       expect(preview.error).toBeNull();
       for (const text of expected) expect(preview.data).toContain(text);
     }
+  }, 60000);
+
+  // 0107: Bubble posts "the grower updated the pick estimate" in that grower's
+  // own group only (0102 wording: main alert 3, the day as "<letter> dd.mm.yy").
+  it("pick_updated names the grower — to the grower's group only", async () => {
+    const text = "שלום. משק הבדיקה עדכן את הערכת הקטיף ליום ר 08.11.26 ";
+    const grower = await createTestCompany(`משק בדיקה ${randomUUID()}`, "grower");
+    cleanupFns.push(() => deleteTestCompany(grower.id));
+    await db.update(companies).set({ whatsappGroupId: `grp-${randomUUID()}` }).where(eq(companies.id, grower.id));
+    const person = await createTestProfile({ companyId: grower.id, role: "grower", displayName: "דנה כהן", phoneNumber: "052-765 4321" });
+    cleanupFns.push(() => deleteTestUser(person.userId));
+
+    const row = await createTestOutboxRow({
+      tradingDayId: dayId,
+      recipientType: "grower",
+      recipientCompanyId: grower.id,
+      templateKey: "pick_updated",
+      payload: { tradeDate: "2026-11-08", lines: [], companyName: "משק הבדיקה" },
+    });
+    cleanupFns.push(async () => {
+      await db.delete(notificationOutbox).where(eq(notificationOutbox.id, row.id));
+    });
+    const grouped = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: row.id });
+    expect(grouped.error).toBeNull();
+    expect(grouped.data).toHaveLength(1);
+    expect(grouped.data![0]).toMatchObject({ is_group: true });
+    expect(grouped.data![0]!.message).toContain(text);
+    const preview = await admin.rpc("resolve_outbox_preview", { p_outbox_id: row.id });
+    expect(preview.error).toBeNull();
+    expect(preview.data).toContain(text);
+
+    // A grower without a group is not messaged person by person.
+    await db.update(companies).set({ whatsappGroupId: null }).where(eq(companies.id, grower.id));
+    const none = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: row.id });
+    expect(none.error).toBeNull();
+    expect(none.data).toEqual([]);
   }, 60000);
 
   it("the SQL phone rule agrees with packages/shared/src/phone-cases.json, and so does the password-reset sender", async () => {
@@ -273,13 +305,19 @@ describe("message content and phone numbers (0077)", () => {
   const BUBBLE: Record<string, { text: string; link: string | null }> = {
     business_day_open_grower: { text: "שלום %FIRST_NAME%. אנא עדכנו הערכת קטיף ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/grower/picks` }, // main alert 1
     pick_reminder: { text: "שלום %FIRST_NAME%. אנא עדכנו הערכת קטיף ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/grower/picks` }, // 2
-    pick_updated: { text: "שלום. %COMPANY% עדכן את הערכת הקטיף ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/backoffice/distributor-grower` }, // 3
+    pick_updated: { text: "שלום. %COMPANY% עדכן את הערכת הקטיף ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/grower/picks` }, // 3
     shop_open: { text: "שלום %FIRST_NAME%. החנות כעת פתוחה להזמנות.", link: `${ORI}/customer/order` }, // 4
     order_reminder: { text: "שלום %FIRST_NAME%. זוהי תזכורת לשלוח הזמנה ליום %CURRENT_OPEN_BUSINESS_DAY% ", link: `${ORI}/customer/order` }, // 5
     order_submitted: {
       text: "שלום %FIRST_NAME%. \n%COMPANY% שלחו הזמנה על ידי %COMPANY_USER_FULL_NAME%.\nלהלן מצב ההזמנה הנוכחי שלהם:\n\n%ORDER_DETAILS%",
       link: `${ORI}/backoffice/distributor-customer`,
     }, // 6
+    // 0107: the customer's own private copy of main alert 6 — the same text,
+    // linked to the customer's own order screen.
+    order_submitted_copy: {
+      text: "שלום %FIRST_NAME%. \n%COMPANY% שלחו הזמנה על ידי %COMPANY_USER_FULL_NAME%.\nלהלן מצב ההזמנה הנוכחי שלהם:\n\n%ORDER_DETAILS%",
+      link: `${ORI}/customer/order`,
+    },
     close_arrangement_grower_transporter: {
       text: "היי, %NL%\nלהלן הסידור של %COMPANY% לתאריך %CURRENT_OPEN_BUSINESS_DAY%.  %NL%\n%ORDER_DETAILS% %NL%\nהמשטחים יהיו מוכנים לאיסוף ב %PICKUP_TIME%",
       link: null,
@@ -386,6 +424,44 @@ describe("message content and phone numbers (0077)", () => {
         `\n\n${ORI}/backoffice/distributor-customer`,
     );
   }, 60000);
+
+  it("order_submitted_copy lists the order like the office message", async () => {
+    const tag = randomUUID().slice(0, 8);
+    const customer = await createTestCompany(`לקוח בדיקה ${tag}`, "customer");
+    cleanupFns.push(() => deleteTestCompany(customer.id));
+    const [family] = await db.insert(productFamilies).values({ name: `עגבניה ${tag}` }).returning();
+    cleanupFns.push(async () => {
+      await db.delete(productFamilies).where(eq(productFamilies.id, family!.id));
+    });
+    const [variety] = await db.insert(productVarieties).values({ familyId: family!.id, name: "אשכולות", sizes: "XL" }).returning();
+    cleanupFns.push(async () => {
+      await db.delete(productVarieties).where(eq(productVarieties.id, variety!.id));
+    });
+    const [order] = await db.insert(dailyOrders).values({ tradingDayId: dayId, customerCompanyId: customer.id }).returning();
+    cleanupFns.push(async () => {
+      await db.delete(dailyOrders).where(eq(dailyOrders.id, order!.id));
+    });
+    await db.insert(dailyOrderProducts).values({ dailyOrderId: order!.id, productVarietyId: variety!.id, palletsOrdered: "2" });
+
+    const recipient = await officeRecipient("people");
+    const payload = { companyName: "שוק הבדיקה", dailyOrderId: order!.id, submittedByName: "דודו אטיאס" };
+    const officeId = await queued("order_submitted", recipient, payload);
+    const copyId = await queued("order_submitted_copy", recipient, payload);
+    const office = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: officeId });
+    const copy = await admin.rpc("resolve_outbox_dispatch", { p_outbox_id: copyId });
+    expect(office.error).toBeNull();
+    expect(copy.error).toBeNull();
+
+    const details = `${family!.name} אשכולות XL  |  כמות: 2 \n`;
+    expect(office.data![0]!.message).toContain(details);
+    expect(copy.data![0]!.message).toContain(details);
+    // Same text, different link: the copy opens the customer's own order screen.
+    expect(copy.data![0]!.message).toBe(
+      office.data![0]!.message.replace("/backoffice/distributor-customer", "/customer/order"),
+    );
+    expect(copy.data![0]!.message.endsWith("\n\nhttps://ori-claude-web.vercel.app/customer/order")).toBe(true);
+  }, 60000);
+
 
   it("an order message queued before 0102 (no order on it) still goes out: named, without the lines", async () => {
     const id = await queued("order_submitted", await officeRecipient("people"), { companyName: "שוק הבדיקה" });

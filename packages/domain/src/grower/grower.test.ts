@@ -888,4 +888,94 @@ describe("grower picking module", () => {
     expect(secondPage.error).toBeNull();
     expect(secondPage.data).toHaveLength(100);
   }, 60000);
+
+  // 0107: Bubble posts "the grower updated the pick estimate" in the grower's
+  // own group, not the office. A quantity change queues it; a comment-only save
+  // and a backoffice save do not.
+  it("save_pick_lines by the grower queues pick_updated for the grower, not the office", async () => {
+    const { client: backoffice, userId: adminId } = await signedInBackoffice();
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const { day } = await createClosedTestDay(adminId);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+    const bootstrap = await backoffice.rpc(
+      "bootstrap_grower_pick",
+      toBootstrapGrowerPickRpcArgs({ tradingDayId: day.id, growerCompanyId: grower.companyId }),
+    );
+    const pickId = bootstrap.data!.id;
+    const line = await getPickProductLine(pickId, grower.varietyId);
+    const growerClient = await signedInGrowerFor(grower.companyId);
+    const save = (client: typeof growerClient, palletsPicked: number, comment: string | null) =>
+      client.rpc(
+        "save_pick_lines",
+        toSavePickLinesRpcArgs({
+          dailyPickId: pickId,
+          lines: [{ dailyPickProductId: line!.id, palletsPicked, leftoverPallets: 0, comment }],
+        }),
+      );
+    const pickUpdatedRows = async () =>
+      (await db.select().from(notificationOutbox).where(eq(notificationOutbox.tradingDayId, day.id))).filter(
+        (r) => r.templateKey === "pick_updated",
+      );
+
+    // A quantity change: one row, to the grower's own company and nobody else.
+    expect((await save(growerClient, 12, null)).error).toBeNull();
+    const rows = await pickUpdatedRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ recipientType: "grower", recipientCompanyId: grower.companyId });
+
+    // A comment-only change: still one row.
+    expect((await save(growerClient, 12, "טרי")).error).toBeNull();
+    expect(await pickUpdatedRows()).toHaveLength(1);
+
+    // A backoffice save on the grower's behalf: still one row.
+    expect((await save(backoffice, 15, "טרי")).error).toBeNull();
+    expect(await pickUpdatedRows()).toHaveLength(1);
+  }, 30000);
+
+  it("pick_updated is capped at 5 per grower per 10 minutes", async () => {
+    const { client: backoffice, userId: adminId } = await signedInBackoffice();
+    const growerA = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(growerA));
+    const growerB = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(growerB));
+    const { day } = await createClosedTestDay(adminId);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    async function setUpPick(growerCompanyId: string, varietyId: string) {
+      const bootstrap = await backoffice.rpc(
+        "bootstrap_grower_pick",
+        toBootstrapGrowerPickRpcArgs({ tradingDayId: day.id, growerCompanyId }),
+      );
+      const pickId = bootstrap.data!.id;
+      const line = await getPickProductLine(pickId, varietyId);
+      const client = await signedInGrowerFor(growerCompanyId);
+      return (palletsPicked: number) =>
+        client.rpc(
+          "save_pick_lines",
+          toSavePickLinesRpcArgs({
+            dailyPickId: pickId,
+            lines: [{ dailyPickProductId: line!.id, palletsPicked, leftoverPallets: 0, comment: null }],
+          }),
+        );
+    }
+    const saveA = await setUpPick(growerA.companyId, growerA.varietyId);
+    const saveB = await setUpPick(growerB.companyId, growerB.varietyId);
+    const countFor = async (companyId: string) =>
+      (await db.select().from(notificationOutbox).where(eq(notificationOutbox.recipientCompanyId, companyId))).filter(
+        (r) => r.templateKey === "pick_updated",
+      ).length;
+
+    // Six saves that each change the quantity: only 5 messages are queued, and
+    // the sixth save still succeeds.
+    for (let i = 1; i <= 6; i += 1) {
+      expect((await saveA(20 + i)).error).toBeNull();
+    }
+    expect(await countFor(growerA.companyId)).toBe(5);
+
+    // The cap is per grower: another grower's save still queues its message.
+    expect((await saveB(30)).error).toBeNull();
+    expect(await countFor(growerB.companyId)).toBe(1);
+    expect(await countFor(growerA.companyId)).toBe(5);
+  }, 60000);
 });

@@ -929,6 +929,150 @@ describe("customer ordering module", () => {
     );
   }, 30000);
 
+  // Migration 0107 (design 2026-11-16, row 6): in Bubble the customer user who
+  // sends an order gets the same text privately, as well as the office. The
+  // copy is its own message type (order_submitted_copy) so the office log can
+  // name it, and its row lists the one person it is for (0104).
+  async function customerWithPhone(customerCompanyId: string, phoneNumber?: string) {
+    const person = await createTestProfile({
+      companyId: customerCompanyId,
+      role: "customer",
+      displayName: "אילנה כהן",
+      ...(phoneNumber === undefined ? {} : { phoneNumber }),
+    });
+    cleanupFns.push(() => deleteTestUser(person.userId));
+    const client = await signInTestUser(person.email, person.password);
+    return { client, userId: person.userId };
+  }
+
+  async function customerRows(dayId: string, customerCompanyId: string) {
+    return db
+      .select()
+      .from(notificationOutbox)
+      .where(and(eq(notificationOutbox.tradingDayId, dayId), eq(notificationOutbox.recipientCompanyId, customerCompanyId)));
+  }
+
+  it("a customer's own submit also queues a private copy for that customer user — id 6", async () => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const day = await createOpenTestDay(admin.userId);
+    await pickLine(day.id, grower.companyId, grower.varietyId, 10);
+    const customer = await createTestCustomer(day.id);
+    // A group on the customer company: the copy must still go to the person only.
+    await db.update(companies).set({ whatsappGroupId: `grp-${randomUUID()}` }).where(eq(companies.id, customer.companyId));
+    const orderer = await customerWithPhone(customer.companyId, "050-111 1111");
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    const submit = await orderer.client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({
+        tradingDayId: day.id,
+        lines: [{ productVarietyId: grower.varietyId, palletsOrdered: 3, comment: null }],
+      }),
+    );
+    expect(submit.error).toBeNull();
+
+    const office = await db
+      .select()
+      .from(notificationOutbox)
+      .where(and(eq(notificationOutbox.recipientCompanyId, admin.companyId), eq(notificationOutbox.templateKey, "order_submitted")));
+    expect(office).toHaveLength(1);
+    const copies = await customerRows(day.id, customer.companyId);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toMatchObject({
+      templateKey: "order_submitted_copy",
+      recipientType: "customer",
+      recipientCompanyId: customer.companyId,
+      recipientUserIds: [orderer.userId],
+    });
+    expect(copies[0]!.payload).toEqual(office[0]!.payload);
+
+    const resolved = await admin.client.rpc("resolve_outbox_dispatch", { p_outbox_id: copies[0]!.id });
+    expect(resolved.error).toBeNull();
+    expect((resolved.data ?? []).map((t) => ({ target: t.target, is_group: t.is_group }))).toEqual([
+      { target: "972501111111", is_group: false },
+    ]);
+  }, 30000);
+
+  it("the office ordering for a customer queues no copy", async () => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const day = await createOpenTestDay(admin.userId);
+    await pickLine(day.id, grower.companyId, grower.varietyId, 10);
+    const customer = await createTestCustomer(day.id);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    const submit = await admin.client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({
+        tradingDayId: day.id,
+        lines: [{ productVarietyId: grower.varietyId, palletsOrdered: 2, comment: null }],
+        customerCompanyId: customer.companyId,
+      }),
+    );
+    expect(submit.error).toBeNull();
+
+    const rows = await db.select().from(notificationOutbox).where(eq(notificationOutbox.tradingDayId, day.id));
+    expect(rows.filter((row) => row.templateKey === "order_submitted_copy")).toHaveLength(0);
+    expect(rows.filter((row) => row.templateKey === "order_submitted")).toHaveLength(0);
+  }, 30000);
+
+  it("copies are capped like the office message", async () => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const day = await createOpenTestDay(admin.userId);
+    await pickLine(day.id, grower.companyId, grower.varietyId, 10);
+    const customer = await createTestCustomer(day.id);
+    const orderer = await customerWithPhone(customer.companyId, "050-111 1111");
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    for (const pallets of [1, 2, 3, 4, 5, 6]) {
+      const submit = await orderer.client.rpc(
+        "submit_order",
+        toSubmitOrderRpcArgs({
+          tradingDayId: day.id,
+          lines: [{ productVarietyId: grower.varietyId, palletsOrdered: pallets, comment: null }],
+        }),
+      );
+      expect(submit.error).toBeNull();
+    }
+
+    const copies = (await customerRows(day.id, customer.companyId)).filter((row) => row.templateKey === "order_submitted_copy");
+    expect(copies).toHaveLength(5);
+  }, 60000);
+
+  it("a copy for an orderer with no usable phone reaches nobody", async () => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const day = await createOpenTestDay(admin.userId);
+    await pickLine(day.id, grower.companyId, grower.varietyId, 10);
+    const customer = await createTestCustomer(day.id);
+    const orderer = await customerWithPhone(customer.companyId);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    const submit = await orderer.client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({
+        tradingDayId: day.id,
+        lines: [{ productVarietyId: grower.varietyId, palletsOrdered: 3, comment: null }],
+      }),
+    );
+    expect(submit.error).toBeNull();
+
+    const copies = await customerRows(day.id, customer.companyId);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]!.templateKey).toBe("order_submitted_copy");
+    const resolved = await admin.client.rpc("resolve_outbox_dispatch", { p_outbox_id: copies[0]!.id });
+    expect(resolved.error).toBeNull();
+    expect(resolved.data).toEqual([]);
+
+    const office = await db
+      .select()
+      .from(notificationOutbox)
+      .where(and(eq(notificationOutbox.recipientCompanyId, admin.companyId), eq(notificationOutbox.templateKey, "order_submitted")));
+    expect(office).toHaveLength(1);
+  }, 30000);
+
   it("submit_order enqueues stock_overbooking_reached exactly when demand crosses from under-supply to at-or-over-supply while overbooking room remains — id 10", async () => {
     const grower = await createTestGrowerWithProduct();
     cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
