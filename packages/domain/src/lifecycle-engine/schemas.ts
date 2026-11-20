@@ -1,3 +1,4 @@
+import { MAX_PICKED_PALLETS, PICKED_PALLETS_MESSAGE } from "@ori/shared/limits";
 import { z } from "zod";
 
 // One schema + `toRpcArgs` mapper per lifecycle Postgres function
@@ -83,7 +84,13 @@ export function toSetPickClosedRpcArgs(input: SetPickClosedInput) {
 
 export const updatePickProductPalletsInputSchema = z.object({
   dailyPickProductId: z.string().uuid(),
-  palletsPicked: z.number().nonnegative(),
+  // The same rule as save_pick_lines' lines (grower/schemas.ts): whole
+  // pallets, 0 to 9,999 — the database's own limit (migration 0109).
+  palletsPicked: z
+    .number()
+    .int(PICKED_PALLETS_MESSAGE)
+    .min(0, PICKED_PALLETS_MESSAGE)
+    .max(MAX_PICKED_PALLETS, PICKED_PALLETS_MESSAGE),
 });
 export type UpdatePickProductPalletsInput = z.infer<typeof updatePickProductPalletsInputSchema>;
 

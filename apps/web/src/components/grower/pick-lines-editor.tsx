@@ -1,4 +1,5 @@
 import { savePickLinesInputSchema, toSavePickLinesRpcArgs } from "@ori/domain/grower";
+import { MAX_COMMENT_LENGTH } from "@ori/shared/limits";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -212,6 +213,9 @@ const PickVarietyRow = memo(function PickVarietyRow({
           type="text"
           disabled={locked}
           placeholder="הערה"
+          // The database's own limit on a comment (migration 0109): the box
+          // stops at it, so nothing typed can be refused by the save.
+          maxLength={MAX_COMMENT_LENGTH}
           aria-label={`הערה — ${variety.varietyName}`}
           className={`${inputClassName} w-full`}
           value={variety.comment}

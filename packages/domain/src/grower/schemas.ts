@@ -1,3 +1,11 @@
+import {
+  COMMENT_LENGTH_MESSAGE,
+  LEFTOVER_PALLETS_MESSAGE,
+  MAX_COMMENT_LENGTH,
+  MAX_LEFTOVER_PALLETS,
+  MAX_PICKED_PALLETS,
+  PICKED_PALLETS_MESSAGE,
+} from "@ori/shared/limits";
 import { z } from "zod";
 
 // One schema + `toRpcArgs` mapper per grower-picking Postgres function
@@ -33,7 +41,7 @@ export function toCloseOutPickLeftoversRpcArgs(input: CloseOutPickLeftoversInput
 // function edits only the comment.
 export const updatePickProductDetailsInputSchema = z.object({
   dailyPickProductId: z.string().uuid(),
-  comment: z.string().nullable(),
+  comment: z.string().max(MAX_COMMENT_LENGTH, COMMENT_LENGTH_MESSAGE).nullable(),
 });
 export type UpdatePickProductDetailsInput = z.infer<typeof updatePickProductDetailsInputSchema>;
 
@@ -49,15 +57,28 @@ export function toUpdatePickProductDetailsRpcArgs(input: UpdatePickProductDetail
 // caller to have worked out what changed — which is what keeps the
 // pick_updated notification firing on a real quantity change and not on a
 // no-op save.
+// The numbers are held to the database's own limits (migration 0109,
+// packages/shared/src/limits.ts), checked here first so the screen says in
+// Hebrew what is wrong instead of sending what the database will refuse.
 export const pickLineInputSchema = z.object({
   dailyPickProductId: z.string().uuid(),
-  palletsPicked: z.number().nonnegative(),
+  // Whole pallets, 0 to 9,999 (decision D18).
+  palletsPicked: z
+    .number()
+    .int(PICKED_PALLETS_MESSAGE)
+    .min(0, PICKED_PALLETS_MESSAGE)
+    .max(MAX_PICKED_PALLETS, PICKED_PALLETS_MESSAGE),
   // Carried forward from the grower's most recent prior line for this
   // variety by bootstrap_grower_pick/sync_grower_picks (migration 0050),
   // then independently editable here — the arrangement floor below applies
-  // to palletsPicked + leftoverPallets combined, not either alone.
-  leftoverPallets: z.number().nonnegative(),
-  comment: z.string().nullable(),
+  // to palletsPicked + leftoverPallets combined, not either alone. Not held
+  // to whole numbers: a carried-over leftover can be a tenth, when tenths
+  // were arranged from it (migration 0109's comment).
+  leftoverPallets: z
+    .number()
+    .min(0, LEFTOVER_PALLETS_MESSAGE)
+    .max(MAX_LEFTOVER_PALLETS, LEFTOVER_PALLETS_MESSAGE),
+  comment: z.string().max(MAX_COMMENT_LENGTH, COMMENT_LENGTH_MESSAGE).nullable(),
 });
 export type PickLineInput = z.infer<typeof pickLineInputSchema>;
 
