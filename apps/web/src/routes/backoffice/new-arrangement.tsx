@@ -328,7 +328,8 @@ export default function NewArrangementPage() {
         lines: current.lines.filter((line) => !sent.includes(line)),
         refusal: null,
       }));
-      showToast(`הסידור נשמר: ${saved} תאים.`, "success");
+      // "תא אחד" for one, as the unsaved count below says "שינוי אחד".
+      showToast(`הסידור נשמר: ${saved === 1 ? "תא אחד" : `${saved} תאים`}.`, "success");
     },
     onError: async (error: RpcError, { tradingDayId }) => {
       // Nothing was saved. Re-read anyway, and wait for it: a refusal usually
@@ -592,12 +593,18 @@ export default function NewArrangementPage() {
                 {unsavedCount === 1 ? "שינוי אחד שלא נשמר." : `${unsavedCount} שינויים שלא נשמרו.`}
               </span>
             )}
+            {/* Each count in the singular when it is one ("משטח אחד", "בתא
+                אחד", "שורה אחת"), as the unsaved count above is. */}
             {suggestedCells > 0 &&
-              ` הצעת סידור: ${formatPallets(suggestedPallets)} משטחים ב-${suggestedCells} תאים.`}
+              ` הצעת סידור: ${suggestedPallets === 1 ? "משטח אחד" : `${formatPallets(suggestedPallets)} משטחים`} ${suggestedCells === 1 ? "בתא אחד" : `ב-${suggestedCells} תאים`}.`}
             {leftOut > 0 &&
-              ` ${leftOut} שורות מההצעה לא נכללו: כבר משובצות, או שאין להן מקום ביום זה.`}
+              (leftOut === 1
+                ? " שורה אחת מההצעה לא נכללה: כבר משובצת, או שאין לה מקום ביום זה."
+                : ` ${leftOut} שורות מההצעה לא נכללו: כבר משובצות, או שאין להן מקום ביום זה.`)}
             {heldToOrder > 0 &&
-              ` ${heldToOrder} שורות קוצצו או ירדו כדי לא לעבור את מה שהלקוח הזמין.`}
+              (heldToOrder === 1
+                ? " שורה אחת קוצצה או ירדה כדי לא לעבור את מה שהלקוח הזמין."
+                : ` ${heldToOrder} שורות קוצצו או ירדו כדי לא לעבור את מה שהלקוח הזמין.`)}
             {unsaved.refusal && (
               <span className="block font-semibold text-danger">{unsaved.refusal}</span>
             )}

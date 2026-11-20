@@ -95,6 +95,14 @@ export function SubmissionConfirmationDialog({
                           <span className="text-xs text-ink-subtle">פלטות</span>
                         </span>
                       </span>
+                      {/* The line's comment goes out with it, so it is read
+                          over with it too — as in the pick dialog. `w-full`
+                          gives it a line of its own under the figures. */}
+                      {variety.comment && (
+                        <p className="w-full break-words text-xs text-ink-muted">
+                          הערה: {variety.comment}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>

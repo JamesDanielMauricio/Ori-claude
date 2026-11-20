@@ -25,7 +25,10 @@ export default function LoginPage() {
   // Signing out when there is no session left does nothing.
   const arrivedInactive = searchParams.get("inactive") === "1";
   useEffect(() => {
-    if (arrivedInactive) void createClient().auth.signOut();
+    // This device only, like every sign-out (sign-out-button.tsx). Another
+    // device of the same account is stopped by the same check when it next
+    // loads: the database already refuses an inactive company everything.
+    if (arrivedInactive) void createClient().auth.signOut({ scope: "local" });
   }, [arrivedInactive]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
