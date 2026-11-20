@@ -1,32 +1,61 @@
-import type { KeyboardEvent } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { blockDecimalKey, stripDecimal } from "./integer-input";
+import { stripDecimal, wholeNumberKey } from "./integer-input";
 
-function keydown(key: string, modifiers: { ctrlKey?: boolean; metaKey?: boolean } = {}) {
-  const event = { key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false };
-  const preventDefault = vi.fn();
-  blockDecimalKey({
-    ...event,
-    ...modifiers,
-    preventDefault,
-  } as unknown as KeyboardEvent<HTMLInputElement>);
-  return preventDefault.mock.calls.length > 0;
+// Types `keys` into an empty whole-pallet box the way a browser would once
+// wholeNumberKey has had its say: a key it lets through types its digit (or,
+// for Backspace, deletes one); a key it stops types nothing. Returns what the
+// box ends up holding.
+function typeKeys(keys: string[], modified = false): string {
+  let text = "";
+  let cutting = false;
+  for (const key of keys) {
+    const result = wholeNumberKey(key, modified, cutting);
+    cutting = result.cutting;
+    if (result.action !== "allow") continue;
+    if (/^\d$/.test(key)) text += key;
+    if (key === "Backspace") text = text.slice(0, -1);
+  }
+  return text;
 }
 
-describe("blockDecimalKey", () => {
-  it("blocks the keys that would type a non-digit", () => {
-    for (const key of [".", ",", "-", "+", "e", "E"]) expect(keydown(key)).toBe(true);
+// Found in testing (2026-11-20): the point was swallowed but the digits after
+// it were not, so a grower typing 2.5 saved 25 — ten times the stock.
+describe("wholeNumberKey", () => {
+  it("ends the number at a point or comma: the digits after it are not typed", () => {
+    expect(typeKeys([..."2.5"])).toBe("2");
+    expect(typeKeys([..."3,75"])).toBe("3");
+    expect(typeKeys([..."12.0"])).toBe("12");
   });
 
-  it("lets digits through", () => {
-    expect(keydown("5")).toBe(false);
+  it("ends the number at an exponent too, so 1e3 is not 13", () => {
+    expect(typeKeys([..."1e3"])).toBe("1");
+    expect(typeKeys([..."1E3"])).toBe("1");
+  });
+
+  it("says when a key ended the number, so the box can tell the person why", () => {
+    expect(wholeNumberKey(".", false, false)).toEqual({ action: "cut", cutting: true });
+    expect(wholeNumberKey("5", false, true)).toEqual({ action: "block", cutting: true });
+  });
+
+  it("goes back to normal typing after any other key", () => {
+    expect(typeKeys(["2", ".", "5", "Backspace", "4"])).toBe("4");
+    expect(typeKeys(["2", ".", "ArrowLeft", "1"])).toBe("21");
+  });
+
+  it("never types a sign, and keeps the digits after it", () => {
+    expect(typeKeys([..."-5"])).toBe("5");
+    expect(typeKeys([..."+3"])).toBe("3");
+  });
+
+  it("types whole numbers as they are", () => {
+    expect(typeKeys([..."120"])).toBe("120");
   });
 
   it("leaves the browser's Ctrl/Cmd shortcuts alone, zoom included", () => {
-    expect(keydown("-", { ctrlKey: true })).toBe(false);
-    expect(keydown("+", { metaKey: true })).toBe(false);
-    expect(keydown("e", { metaKey: true })).toBe(false);
+    for (const key of ["-", "+", "e", "."]) {
+      expect(wholeNumberKey(key, true, false)).toEqual({ action: "allow", cutting: false });
+    }
   });
 });
 

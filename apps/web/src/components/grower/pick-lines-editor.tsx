@@ -1,6 +1,6 @@
 import { savePickLinesInputSchema, toSavePickLinesRpcArgs } from "@ori/domain/grower";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { PickConfirmationDialog, type PickReviewFamily } from "@/components/grower/pick-confirmation-dialog";
 import {
@@ -19,7 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
-import { blockDecimalKey, blockWheel, stripDecimal } from "@/lib/integer-input";
+import { blockWheel, useWholeNumberInput } from "@/lib/integer-input";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
 import { growerQueries, type PickProductLineRow } from "@/lib/queries/grower";
 import { submitPickIfStillDraft } from "@/lib/submit-pick-if-draft";
@@ -106,6 +106,10 @@ function NumberCell({
   disabled: boolean;
   onChange: (next: string) => void;
 }) {
+  // Whole pallets only: a point or comma ends the number, and the note under
+  // the box says why the rest wasn't typed (lib/integer-input.ts).
+  const whole = useWholeNumberInput(onChange);
+  const noteId = useId();
   return (
     <div className="flex w-24 shrink-0 flex-col gap-1">
       <span aria-hidden className="text-[11px] font-medium text-ink-subtle @2xl:hidden">
@@ -117,12 +121,19 @@ function NumberCell({
         step="1"
         disabled={disabled}
         aria-label={ariaLabel}
+        aria-describedby={whole.cutNote ? noteId : undefined}
         className={`${inputClassName} w-full`}
         value={value}
-        onKeyDown={blockDecimalKey}
+        onKeyDown={whole.onKeyDown}
+        onBlur={whole.onBlur}
         onWheel={blockWheel}
-        onChange={(event) => onChange(stripDecimal(event.target.value))}
+        onChange={whole.onChange}
       />
+      {whole.cutNote && (
+        <span id={noteId} role="alert" className="text-[11px] font-medium text-danger">
+          מספר שלם בלבד
+        </span>
+      )}
     </div>
   );
 }
