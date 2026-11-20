@@ -792,8 +792,9 @@ interface RpcError {
 // it names (see saveRefusalMessage), once a save has written nothing.
 function describeRpcError(error: RpcError, migration: string): string {
   switch (error.code) {
+    // Only the grower's line limits an arrangement now (migration 0110).
     case ARRANGEMENT_ERROR_CODES.OVER_ALLOCATION:
-      return "הכמות חורגת ממה שנקטף בשורת הליקוט או ממה שהלקוח הזמין.";
+      return "הכמות חורגת ממה שנקטף בשורת הליקוט (כולל העודף).";
     case ARRANGEMENT_ERROR_CODES.INVALID_STATE:
       return "הסידור כבר סגור.";
     case ARRANGEMENT_ERROR_CODES.NOT_FOUND:

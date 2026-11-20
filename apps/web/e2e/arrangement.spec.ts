@@ -376,8 +376,8 @@ test.describe("Backoffice — arrangement workspace", () => {
     await expect(page.getByLabel("כמות משטחים", { exact: true })).toHaveValue("4");
     await expect(recordPrice).toHaveValue("12.5");
 
-    // A refused quantity must not be left sitting in the box. לקוח בדיקה
-    // ordered 6, so 99 over-allocates and the RPC raises P0009; the row has
+    // A refused quantity must not be left sitting in the box. Only 10 were
+    // picked, so 99 over-allocates and the RPC raises P0009; the row has
     // to put the stored value back, because a rejected write leaves that
     // value unchanged and so the re-seed-on-server-change guard never fires.
     await page.getByRole("button", { name: "ערוך סידור עבור לקוח בדיקה" }).click();
