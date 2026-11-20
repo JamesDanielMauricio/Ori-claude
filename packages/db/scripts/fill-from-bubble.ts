@@ -38,6 +38,7 @@ import {
 } from "./lib/bubble-extras";
 import { FILL_FIELDS, planFill, type FieldReport, type FillExport, type FillField, type IdMaps, type OriSnapshot } from "./lib/fill-plan";
 import { fillStatements, type FillStatement, type FillWrites } from "./lib/fill-sql";
+import { targetProject } from "./lib/target-project";
 
 const EXPORT_TYPES = ["company", "productvarieties", "productfamily", "dailyorder"] as const;
 const NEW_COLUMNS: ReadonlyArray<[string, string]> = [
@@ -252,8 +253,11 @@ async function main() {
     throw new Error("DATABASE_URL, SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set (root .env).");
   }
 
-  // The host only — never the password in the URL.
-  console.log(`${commit ? "COMMIT RUN" : "DRY RUN (writes nothing — pass --commit to fill for real)"} against database host ${new URL(DATABASE_URL).hostname}\n`);
+  // The project both addresses name — refused if they name two (a shell that
+  // set only some variables, over the root .env that is dev's). Named, not
+  // the host: dev and live share one pooler host. Never the password.
+  const target = targetProject(DATABASE_URL, SUPABASE_URL);
+  console.log(`${commit ? "COMMIT RUN" : "DRY RUN (writes nothing — pass --commit to fill for real)"} against the ${target.label.toUpperCase()} project (${target.ref})\n`);
   const sql = postgres(DATABASE_URL, { max: 1, prepare: false, idle_timeout: 20, onnotice: () => undefined });
   const client = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { autoRefreshToken: false, persistSession: false } });
   try {
