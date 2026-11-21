@@ -1,3 +1,4 @@
+import { COMMENT_LENGTH_MESSAGE, ORDERED_PALLETS_MESSAGE } from "@ori/shared/limits";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,6 +9,31 @@ import {
 } from "./schemas";
 
 const tradingDayId = "00000000-0000-4000-8000-000000000001";
+
+// The database's own limits on an order (migration 0109), checked by the
+// schema every order save goes through — the customer's screen and staff's.
+describe("submitOrderInputSchema: the database's limits, told first", () => {
+  const varietyId = "00000000-0000-4000-8000-000000000002";
+  const messages = (input: { pallets?: number; lineComment?: string | null; comment?: string }) => {
+    const result = submitOrderInputSchema.safeParse({
+      tradingDayId,
+      lines: [{ productVarietyId: varietyId, palletsOrdered: input.pallets ?? 1, comment: input.lineComment ?? null }],
+      ...(input.comment === undefined ? {} : { comment: input.comment }),
+    });
+    return result.success ? [] : result.error.issues.map((issue) => issue.message);
+  };
+
+  it("takes up to 9,999 pallets on a line, and refuses more", () => {
+    expect(messages({ pallets: 9999 })).toEqual([]);
+    expect(messages({ pallets: 10000 })).toContain(ORDERED_PALLETS_MESSAGE);
+  });
+
+  it("takes line and order comments of 500 characters, and refuses 501", () => {
+    expect(messages({ lineComment: "א".repeat(500), comment: "ב".repeat(500) })).toEqual([]);
+    expect(messages({ lineComment: "א".repeat(501) })).toContain(COMMENT_LENGTH_MESSAGE);
+    expect(messages({ comment: "ב".repeat(501) })).toContain(COMMENT_LENGTH_MESSAGE);
+  });
+});
 
 // The order comment, "הערה כללית" (migration 0093). submit_order keeps the
 // stored comment when p_comment is left out and clears it when sent empty,

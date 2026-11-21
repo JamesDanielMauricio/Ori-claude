@@ -139,22 +139,32 @@ export const PRICE_RANGE_MISSING_MESSAGE = 'לסוג המחיר "טווח" יש 
 /** What a person is told when a range starts above where it ends. */
 export const PRICE_RANGE_ORDER_MESSAGE = 'בטווח המחירים, "מ-" לא יכול להיות גבוה מ"עד".';
 
-/** The three messages above, for the screens' error toasts (apps/web lib/error-message.ts). */
+/** What a person is told when a price below zero is saved. */
+export const PRICE_NEGATIVE_MESSAGE = "מחיר לא יכול להיות שלילי.";
+
+/** The messages above, for the screens' error toasts (apps/web lib/error-message.ts). */
 export const PRICE_TYPE_MESSAGES: readonly string[] = [
   PRICE_MISSING_MESSAGE,
   PRICE_RANGE_MISSING_MESSAGE,
   PRICE_RANGE_ORDER_MESSAGE,
+  PRICE_NEGATIVE_MESSAGE,
 ];
 
 /**
  * Why a product's price cannot be saved with this type, or null when it can:
- * מספר needs a price, טווח both ends with "from" no higher than "to". The
- * תקליט types, and no type, need no number.
+ * מספר needs a price, טווח both ends with "from" no higher than "to", and
+ * neither may be below zero. The תקליט types, and no type, need no number.
+ * Only the numbers the type uses are checked — the others are never saved
+ * (pricesForType).
  */
 export function priceTypeProblem(priceType: PriceType | null, prices: Prices): string | null {
-  if (priceType === "fixed" && prices.price == null) return PRICE_MISSING_MESSAGE;
+  if (priceType === "fixed") {
+    if (prices.price == null) return PRICE_MISSING_MESSAGE;
+    if (prices.price < 0) return PRICE_NEGATIVE_MESSAGE;
+  }
   if (priceType === "range") {
     if (prices.priceRangeFrom == null || prices.priceRangeTo == null) return PRICE_RANGE_MISSING_MESSAGE;
+    if (prices.priceRangeFrom < 0 || prices.priceRangeTo < 0) return PRICE_NEGATIVE_MESSAGE;
     if (prices.priceRangeFrom > prices.priceRangeTo) return PRICE_RANGE_ORDER_MESSAGE;
   }
   return null;

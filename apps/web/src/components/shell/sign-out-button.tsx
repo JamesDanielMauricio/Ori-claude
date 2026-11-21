@@ -10,7 +10,10 @@ export function SignOutButton({ className = "" }: { className?: string }) {
   async function handleSignOut() {
     setIsSigningOut(true);
     const supabase = createClient();
-    await supabase.auth.signOut();
+    // This device only. Supabase's default ("global") ends the account's
+    // session on every device — and the office shares one login across
+    // several, so one person signing out signed everyone else out too.
+    await supabase.auth.signOut({ scope: "local" });
     navigate("/login");
   }
 

@@ -1253,6 +1253,12 @@ export type Database = {
         };
         Returns: void;
       };
+      delete_grower: {
+        Args: {
+          p_grower_company_id: string;
+        };
+        Returns: void;
+      };
       save_transporter: {
         Args: {
           p_id: string | null;

@@ -1,3 +1,4 @@
+import { MAX_COMMENT_LENGTH } from "@ori/shared/limits";
 import { useEffect, useState } from "react";
 
 import { inputClassName } from "@/components/reference-data/form-field";
@@ -41,6 +42,9 @@ export function CommentPopup({
           value={value}
           onChange={(event) => setValue(event.target.value)}
           placeholder="הוסף הערה…"
+          // The database's own limit on a comment (migration 0109) — a line's
+          // and the whole order's alike: the box stops at it.
+          maxLength={MAX_COMMENT_LENGTH}
           autoFocus
         />
         <div className="flex justify-end gap-2">

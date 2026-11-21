@@ -26,6 +26,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { StatusPill } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import { activeNameTaken } from "@/lib/company-name";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
@@ -205,6 +206,17 @@ export default function GrowersPage() {
 
   const saveMutation = useMutation({
     mutationFn: async (): Promise<GrowerCompany> => {
+      // Two active growers with one name can't be told apart in any list
+      // (lib/company-name.ts). Checked before anything is written.
+      if (
+        activeNameTaken(growersQuery.data ?? [], {
+          id: editingRowId,
+          name: form.name,
+          status: form.status,
+        })
+      ) {
+        throw new Error("כבר יש מגדל פעיל בשם הזה. בחרו שם אחר.");
+      }
       const input = saveGrowerInputSchema.parse({
         id: editingRowId,
         name: form.name,
@@ -263,7 +275,13 @@ export default function GrowersPage() {
   const deleteMutation = useMutation({
     mutationFn: async () => {
       if (!deleteTargetId) return;
-      const { error } = await supabase.from("companies").delete().eq("id", deleteTargetId);
+      // delete_grower (0108): the grower's picks that were never used (the
+      // empty pick a grower added while a day is open gets) and its queued
+      // messages go with it. A grower that really traded is refused as
+      // before: "in use, make it inactive instead".
+      const { error } = await supabase.rpc("delete_grower", {
+        p_grower_company_id: deleteTargetId,
+      });
       if (error) throw error;
     },
     onMutate: deleteOptimistic.onMutate,

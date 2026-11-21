@@ -361,8 +361,9 @@ export function resolveProposal({
   // it was typed — and the suggestions get what is left, in the order they
   // came. A number typed over a saved allocation REPLACES it, and what is
   // saved is off the order already, so the number takes only what it changes
-  // the cell by. Without all that, the save would carry more than the order,
-  // and be refused for it until someone found the cell.
+  // the cell by. A suggestion fills an order and no more: giving a customer
+  // more than they ordered is allowed (migration 0110), but it is the
+  // office's own choice, typed by hand — never something "הצע סידור" adds.
   for (const entry of landed) {
     if (entry.line.forOrder !== "suggested") {
       owed.set(

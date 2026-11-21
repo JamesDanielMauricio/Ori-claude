@@ -7,8 +7,10 @@ import {
   orderCommentChanged,
   orderCommentToSend,
   orderLimit,
+  rememberRows,
   toDraft,
   toSubmittedLines,
+  withVanishedTypedLines,
 } from "./order-draft";
 
 // The situation behind these tests: a customer has their order screen open
@@ -122,6 +124,66 @@ describe("linesOverLimit", () => {
   it("holds a saved line above the stock to what was saved", () => {
     const draft = { ...toDraft(rows), Y: { pallets: "3.1", comment: "" } };
     expect(linesOverLimit(rows, draft).map((r) => r.variety_id)).toEqual(["Y"]);
+  });
+});
+
+// The race found in testing (2026-11-13 and again 2026-11-20): a customer
+// types a quantity for a product without saving yet, another customer buys
+// the rest of it, and the live update drops that product from the first
+// customer's shop. The typed line used to vanish from the screen, the
+// confirmation and the send, and "ההזמנה נשלחה." reported the rest as sent.
+describe("withVanishedTypedLines", () => {
+  const seen = [row("X", 0), row("Y", 0)];
+  const known = rememberRows(new Map(), seen);
+  // The shop after another customer bought the rest of X.
+  const fresh = [row("Y", 0)];
+
+  it("keeps a typed line whose product left the shop, as sold out with nothing left to order", () => {
+    const draft = { ...toDraft(fresh), X: { pallets: "5", comment: "" } };
+    const x = withVanishedTypedLines(fresh, draft, known).find((r) => r.variety_id === "X");
+    expect(x).toMatchObject({
+      variety_id: "X",
+      is_orderable: false,
+      max_orderable_for_customer: 0,
+      pallets_ordered: 0,
+    });
+  });
+
+  it("so the customer's send stops on it instead of leaving it out", () => {
+    const draft = { ...toDraft(fresh), X: { pallets: "5", comment: "" } };
+    const rows = withVanishedTypedLines(fresh, draft, known);
+    expect(linesOverLimit(rows, draft).map((r) => r.variety_id)).toEqual(["X"]);
+    expect(toSubmittedLines(rows, draft)).toContainEqual({
+      productVarietyId: "X",
+      palletsOrdered: 5,
+      comment: null,
+    });
+  });
+
+  it("lets the row go once its quantity is cleared", () => {
+    for (const pallets of ["", "0"]) {
+      const draft = { ...toDraft(fresh), X: { pallets, comment: "" } };
+      expect(withVanishedTypedLines(fresh, draft, known).map((r) => r.variety_id)).toEqual(["Y"]);
+    }
+  });
+
+  it("adds nothing for a product this screen never showed", () => {
+    const draft = { ...toDraft(fresh), Q: { pallets: "2", comment: "" } };
+    expect(withVanishedTypedLines(fresh, draft, known).map((r) => r.variety_id)).toEqual(["Y"]);
+  });
+
+  it("hands back the shop's own rows, untouched, when nothing typed has left it", () => {
+    const draft = { ...toDraft(fresh), Y: { pallets: "1", comment: "" } };
+    expect(withVanishedTypedLines(fresh, draft, known)).toBe(fresh);
+  });
+});
+
+describe("rememberRows", () => {
+  it("keeps the latest row seen for every variety, including ones that later left the shop", () => {
+    const first = rememberRows(new Map(), [row("X", 0), row("Y", 0)]);
+    const second = rememberRows(first, [row("Y", 3)]);
+    expect(second.get("X")).toEqual(row("X", 0));
+    expect(second.get("Y")).toEqual(row("Y", 3));
   });
 });
 

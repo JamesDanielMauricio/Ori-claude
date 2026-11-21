@@ -15,6 +15,7 @@ import {
   WhatsAppGroupsError,
   whatsAppGroupsErrorKind,
   whatsAppGroupsQueries,
+  whatsAppGroupsRetryDelay,
   whatsAppGroupsStaleTime,
   type WhatsAppGroupList,
 } from "./whatsapp-groups";
@@ -184,13 +185,28 @@ describe("how often the list is asked for", () => {
     expect(whatsAppGroupsStaleTime(answered(at(0), at(3)), at(7))).toBe("static");
   });
 
-  it("tries once more only for an error that may pass", () => {
+  it("tries twice more only for an error that may pass", () => {
     expect(retryWhatsAppGroups(0, new WhatsAppGroupsError("unavailable", "x"))).toBe(true);
-    expect(retryWhatsAppGroups(1, new WhatsAppGroupsError("unavailable", "x"))).toBe(false);
+    expect(retryWhatsAppGroups(1, new WhatsAppGroupsError("unavailable", "x"))).toBe(true);
+    expect(retryWhatsAppGroups(2, new WhatsAppGroupsError("unavailable", "x"))).toBe(false);
     for (const kind of ["not_configured", "channel", "refused", "not_deployed"] as const) {
       expect(retryWhatsAppGroups(0, new WhatsAppGroupsError(kind, "x")), kind).toBe(false);
     }
     expect(retryWhatsAppGroups(0, new TypeError("x"))).toBe(false);
+  });
+
+  // Green API answers one getContacts a second per number, and refuses the
+  // rest (429). Screens opened together were refused together and, a fixed
+  // second later, tried again together (found in testing, 2026-11-20).
+  it("waits one to three seconds before a try, at random, so screens refused together try apart", () => {
+    const random = vi.spyOn(Math, "random");
+    random.mockReturnValue(0);
+    expect(whatsAppGroupsRetryDelay()).toBe(1_000);
+    random.mockReturnValue(0.5);
+    expect(whatsAppGroupsRetryDelay()).toBe(2_000);
+    random.mockReturnValue(0.999);
+    expect(whatsAppGroupsRetryDelay()).toBeLessThan(3_000);
+    random.mockRestore();
   });
 
   it("is one cache entry, with that policy", () => {
@@ -198,6 +214,7 @@ describe("how often the list is asked for", () => {
     expect(options.queryKey).toEqual(["whatsapp-groups"]);
     expect(options.staleTime).toBe(whatsAppGroupsStaleTime);
     expect(options.retry).toBe(retryWhatsAppGroups);
+    expect(options.retryDelay).toBe(whatsAppGroupsRetryDelay);
   });
 
   // What lib/live-updates.ts and lib/refresh-on-return.ts do on every save
@@ -236,7 +253,7 @@ describe("how often the list is asked for", () => {
     unsubscribe();
   });
 
-  it("after an error: one more try if it may pass, then the same hold — and a screen with no list yet still asks", async () => {
+  it("after an error: two more tries if it may pass, then the same hold — and a screen with no list yet still asks", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(at(0));
     const passing = vi.fn(async (): Promise<WhatsAppGroupList> => {
@@ -244,9 +261,9 @@ describe("how often the list is asked for", () => {
     });
     const first = await watch(passing);
     expect(first.observer.getCurrentResult().isError).toBe(true);
-    expect(passing).toHaveBeenCalledTimes(2);
+    expect(passing).toHaveBeenCalledTimes(3);
     await everything(first.client);
-    expect(passing).toHaveBeenCalledTimes(2);
+    expect(passing).toHaveBeenCalledTimes(3);
 
     // The picker opening (a new observer of a query with no list) asks again.
     const second = new QueryObserver(first.client, {
@@ -255,7 +272,7 @@ describe("how often the list is asked for", () => {
       retryDelay: 0,
     });
     const stop = second.subscribe(() => undefined);
-    await vi.waitFor(() => expect(passing).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(passing).toHaveBeenCalledTimes(6));
     stop();
     first.unsubscribe();
 

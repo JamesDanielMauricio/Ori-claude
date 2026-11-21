@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
 import { errorMessage } from "@/lib/error-message";
-import { blockDecimalKey, blockWheel, stripDecimal } from "@/lib/integer-input";
+import { blockWheel, useWholeNumberInput } from "@/lib/integer-input";
 import { arrangementQueries, type PickLineForEdit } from "@/lib/queries/arrangement";
 import { stockEditCheck } from "@/lib/stock-edit";
 import { createClient } from "@/lib/supabase/client";
@@ -151,6 +151,10 @@ function StockBox({
   value: string;
   onChange: (next: string) => void;
 }) {
+  // Whole pallets only, as in the grower's own boxes: a point or comma ends
+  // the number, and the note says why (lib/integer-input.ts).
+  const whole = useWholeNumberInput(onChange);
+  const noteId = `${id}-whole`;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
       <label htmlFor={id} className="text-xs font-semibold text-ink">
@@ -161,12 +165,19 @@ function StockBox({
         type="number"
         min="0"
         step="1"
+        aria-describedby={whole.cutNote ? noteId : undefined}
         className={`${inputClassName} w-full`}
         value={value}
-        onKeyDown={blockDecimalKey}
+        onKeyDown={whole.onKeyDown}
+        onBlur={whole.onBlur}
         onWheel={blockWheel}
-        onChange={(event) => onChange(stripDecimal(event.target.value))}
+        onChange={whole.onChange}
       />
+      {whole.cutNote && (
+        <span id={noteId} role="alert" className="text-xs font-medium text-danger">
+          מספר שלם בלבד
+        </span>
+      )}
     </div>
   );
 }

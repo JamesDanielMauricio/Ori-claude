@@ -149,11 +149,25 @@ export function whatsAppGroupsStaleTime(
   return now - answeredAt < WHATSAPP_GROUPS_FRESH_MS ? "static" : 0;
 }
 
-// One more try, a second later, for an error that may pass. A list that is not
-// configured, refused or missing will not be there a second later either, and
-// the picker has its own retry button.
+// Two more tries for an error that may pass. A list that is not configured,
+// refused or missing will not be there a moment later either, and the picker
+// has its own retry button.
+//
+// Two, not one, because of Green API's rate limit: it answers one getContacts
+// a second for the number and refuses the rest (429, which the function
+// reports as "unavailable"). Several screens opened at once — the Growers,
+// Customers and Transporters screens each in its own tab — were refused
+// together, and their one retry could collide again (found in testing,
+// 2026-11-20).
 export function retryWhatsAppGroups(failureCount: number, error: unknown): boolean {
-  return failureCount < 1 && error instanceof WhatsAppGroupsError && error.kind === "unavailable";
+  return failureCount < 2 && error instanceof WhatsAppGroupsError && error.kind === "unavailable";
+}
+
+// How long to wait before each of those tries: one to three seconds, at
+// random. React Query's own wait is a fixed second, so screens refused
+// together asked again together; spread out, they land in different seconds.
+export function whatsAppGroupsRetryDelay(): number {
+  return 1_000 + Math.floor(Math.random() * 2_000);
 }
 
 export const whatsAppGroupsQueries = {
@@ -163,6 +177,7 @@ export const whatsAppGroupsQueries = {
       queryFn: ({ signal }) => fetchWhatsAppGroups(createClient(), signal),
       staleTime: whatsAppGroupsStaleTime,
       retry: retryWhatsAppGroups,
+      retryDelay: whatsAppGroupsRetryDelay,
     });
   },
 };

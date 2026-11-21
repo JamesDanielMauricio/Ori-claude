@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 
 import { db } from "@ori/db";
-import { companies, dailyOrderProducts, dailyOrders, notificationOutbox, productVarieties } from "@ori/db/schema";
+import {
+  companies,
+  dailyOrderProducts,
+  dailyOrders,
+  dailyPickProducts,
+  dailyPicks,
+  notificationOutbox,
+  productVarieties,
+} from "@ori/db/schema";
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -535,6 +543,137 @@ describe("reference-data save functions", () => {
     expect(refused.error?.code).toBe("42501");
     expect(await db.select({ id: companies.id }).from(companies).where(eq(companies.id, other.id))).toHaveLength(1);
     expect(await db.select({ id: companies.id }).from(companies).where(eq(companies.id, grower.id))).toHaveLength(1);
+  });
+
+  // delete_grower (migration 0108), the growers' copy of delete_customer. A
+  // grower added while a day is open gets an empty pick for it (save_grower
+  // calls sync_grower_picks, 0037), which the end of the day closes as it is;
+  // with nothing else, the grower can be deleted, and its empty picks and
+  // messages go with it. A grower that picked, or sent its pick, stays.
+  async function growerWithPick(options: { palletsPicked: number; sent: boolean }) {
+    const { client, userId } = await signedInBackofficeWithId();
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    // Pushed last, so it runs first: the day's picks and messages go before
+    // the grower and the variety they point at.
+    const day = await createTestTradingDay({ initiatedByUserId: userId, phase: "closed" });
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+    const [pick] = await db
+      .insert(dailyPicks)
+      .values({
+        tradingDayId: day.id,
+        growerCompanyId: grower.companyId,
+        status: options.sent ? "submitted" : "closed",
+        submittedAt: options.sent ? new Date() : null,
+      })
+      .returning();
+    const [line] = await db
+      .insert(dailyPickProducts)
+      .values({
+        dailyPickId: pick!.id,
+        productVarietyId: grower.varietyId,
+        palletsPicked: options.palletsPicked.toString(),
+      })
+      .returning();
+    await db.insert(notificationOutbox).values({
+      tradingDayId: day.id,
+      recipientType: "grower",
+      recipientCompanyId: grower.companyId,
+      templateKey: "pick_reminder",
+      payload: {},
+    });
+    return { client, grower, pick: pick!, line: line! };
+  }
+
+  it("delete_grower: a grower with only a never-used pick and a queued message is deleted with both", async () => {
+    const { client, grower, pick, line } = await growerWithPick({ palletsPicked: 0, sent: false });
+
+    const removal = await client.rpc("delete_grower", { p_grower_company_id: grower.companyId });
+    expect(removal.error).toBeNull();
+
+    expect(
+      await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(eq(companies.id, grower.companyId)),
+    ).toEqual([]);
+    expect(
+      await db.select({ id: dailyPicks.id }).from(dailyPicks).where(eq(dailyPicks.id, pick.id)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select({ id: dailyPickProducts.id })
+        .from(dailyPickProducts)
+        .where(eq(dailyPickProducts.id, line.id)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select({ id: notificationOutbox.id })
+        .from(notificationOutbox)
+        .where(eq(notificationOutbox.recipientCompanyId, grower.companyId)),
+    ).toEqual([]);
+  });
+
+  for (const [what, options] of [
+    ["picked", { palletsPicked: 3, sent: false }],
+    ["sent an empty pick", { palletsPicked: 0, sent: true }],
+  ] as const) {
+    it(`delete_grower: a grower that ${what} is refused as in use, and nothing of it is deleted`, async () => {
+      const { client, grower, pick, line } = await growerWithPick(options);
+
+      const removal = await client.rpc("delete_grower", { p_grower_company_id: grower.companyId });
+      // Postgres's foreign-key refusal, which the screen shows as "in use".
+      expect(removal.error?.code).toBe("23503");
+      expect(removal.error?.message).toMatch(/^update or delete on table/);
+
+      // The whole call rolled back: the company, its pick, the pick's line and its message are all still there.
+      expect(
+        await db
+          .select({ id: companies.id })
+          .from(companies)
+          .where(eq(companies.id, grower.companyId)),
+      ).toHaveLength(1);
+      expect(
+        await db.select({ id: dailyPicks.id }).from(dailyPicks).where(eq(dailyPicks.id, pick.id)),
+      ).toHaveLength(1);
+      expect(
+        await db
+          .select({ id: dailyPickProducts.id })
+          .from(dailyPickProducts)
+          .where(eq(dailyPickProducts.id, line.id)),
+      ).toHaveLength(1);
+      expect(
+        await db
+          .select({ id: notificationOutbox.id })
+          .from(notificationOutbox)
+          .where(eq(notificationOutbox.recipientCompanyId, grower.companyId)),
+      ).toHaveLength(1);
+    });
+  }
+
+  it("delete_grower: refuses a non-backoffice caller and a company that is not a grower", async () => {
+    const client = await signedInBackofficeClient();
+    const customer = await createTestCustomerCompany();
+    cleanupFns.push(() => deleteTestCompanyById(customer.id));
+    const notGrower = await client.rpc("delete_grower", { p_grower_company_id: customer.id });
+    expect(notGrower.error?.code).toBe("P0002");
+
+    const ownCompany = await createTestGrowerCompany();
+    cleanupFns.push(() => deleteTestCompanyById(ownCompany.id));
+    const growerUser = await createTestProfile({ companyId: ownCompany.id, role: "grower" });
+    cleanupFns.push(() => deleteTestUser(growerUser.userId));
+    const growerClient = await signInTestUser(growerUser.email, growerUser.password);
+    const other = await createTestGrowerCompany();
+    cleanupFns.push(() => deleteTestCompanyById(other.id));
+
+    const refused = await growerClient.rpc("delete_grower", { p_grower_company_id: other.id });
+    expect(refused.error?.code).toBe("42501");
+    expect(
+      await db.select({ id: companies.id }).from(companies).where(eq(companies.id, other.id)),
+    ).toHaveLength(1);
+    expect(
+      await db.select({ id: companies.id }).from(companies).where(eq(companies.id, customer.id)),
+    ).toHaveLength(1);
   });
 
   it("save_customer/save_grower (migration 0082): a WhatsApp group id another company already has is refused, naming that company", async () => {

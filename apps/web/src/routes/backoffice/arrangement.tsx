@@ -755,8 +755,10 @@ interface RpcError {
 // said in the terms they were thinking in.
 function describeRpcError(error: RpcError): string {
   switch (error.code) {
+    // Only the grower's line limits an arrangement now (migration 0110): a
+    // customer may receive more than they ordered, up to the line's stock.
     case ARRANGEMENT_ERROR_CODES.OVER_ALLOCATION:
-      return "הכמות חורגת ממה שנקטף בשורת הליקוט או ממה שהלקוח הזמין.";
+      return "הכמות חורגת ממה שנקטף בשורת הליקוט (כולל העודף).";
     case ARRANGEMENT_ERROR_CODES.INVALID_STATE:
       return "הסידור כבר סגור.";
     case ARRANGEMENT_ERROR_CODES.NOT_FOUND:

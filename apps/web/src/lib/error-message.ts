@@ -8,6 +8,13 @@
 // recognised by `name` rather than `instanceof` because apps/web doesn't
 // depend on zod directly.
 
+import {
+  COMMENT_LENGTH_MESSAGE,
+  LEFTOVER_PALLETS_MESSAGE,
+  LIMIT_MESSAGES,
+  ORDERED_PALLETS_MESSAGE,
+  PICKED_PALLETS_MESSAGE,
+} from "@ori/shared/limits";
 import { PALLET_QUANTITY_MESSAGE } from "@ori/shared/pallets";
 import { PRICE_TYPE_MESSAGES } from "@ori/shared/price-type";
 
@@ -20,6 +27,10 @@ interface ValidationIssue {
 }
 
 function validationMessage(issue: ValidationIssue | undefined): string {
+  // A pick or order past the database's limits (migration 0109) — a half
+  // pallet, 10,000 pallets, a 501-character comment: the schemas' own Hebrew
+  // message, which names the limit.
+  if (typeof issue?.message === "string" && LIMIT_MESSAGES.includes(issue.message)) return issue.message;
   // A quantity with a second decimal place (workbook Task 35) — the order and
   // arrangement schemas' own Hebrew message.
   if (issue?.code === "custom" && issue.message === PALLET_QUANTITY_MESSAGE) return PALLET_QUANTITY_MESSAGE;
@@ -35,6 +46,27 @@ function validationMessage(issue: ValidationIssue | undefined): string {
   if (issue?.code === "too_small" && issue.type === "number") return "המספר שהוזן קטן מדי.";
   if (issue?.code === "too_big" && issue.type === "number") return "המספר שהוזן גדול מדי.";
   return "הנתונים שהוזנו אינם תקינים — בדוק את השדות ונסה שוב.";
+}
+
+// The database's own refusal of a limit (migration 0109) — Postgres's English
+// "violates check constraint …", which names the rule. The screens check the
+// same limits first, so this is only reached by a value the schema let through;
+// it reads the same as the schema's message either way.
+const LIMIT_BY_CONSTRAINT: Record<string, string> = {
+  daily_pick_products_pallets_picked_whole: PICKED_PALLETS_MESSAGE,
+  daily_pick_products_pallets_picked_range: PICKED_PALLETS_MESSAGE,
+  // A trigger, not a CHECK, that words its refusal the same way (0109).
+  daily_pick_products_leftover_range: LEFTOVER_PALLETS_MESSAGE,
+  daily_order_products_pallets_ordered_range: ORDERED_PALLETS_MESSAGE,
+  daily_pick_products_comment_length: COMMENT_LENGTH_MESSAGE,
+  daily_order_products_comment_length: COMMENT_LENGTH_MESSAGE,
+  daily_orders_comment_length: COMMENT_LENGTH_MESSAGE,
+};
+
+function limitRefusal(code: unknown, message: string): string | null {
+  if (code !== "23514") return null;
+  const constraint = /violates check constraint "([^"]+)"/.exec(message)?.[1];
+  return (constraint && LIMIT_BY_CONSTRAINT[constraint]) || null;
 }
 
 // Deleting a record that other records still point to (a customer with
@@ -117,6 +149,8 @@ export function errorMessage(error: unknown): string {
       return IN_USE_ON_DELETE;
     }
     if (typeof message === "string") {
+      const limit = limitRefusal(code, message);
+      if (limit) return limit;
       const refusal = pickSaveRefusal(code, message);
       if (refusal) return refusal;
       const recipientRefusal = reminderRecipientRefusal(code, message);
