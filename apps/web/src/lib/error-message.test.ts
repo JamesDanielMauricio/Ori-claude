@@ -69,6 +69,10 @@ describe("errorMessage", () => {
     expect(
       errorMessage(thrownBy(() => saveProductInputSchema.parse({ ...validProduct, noOverbooking: 1.5 }))),
     ).toBe("יש להזין מספר שלם.");
+    // A negative overbooking allowance (found 2026-11-22: −2 was saved).
+    expect(
+      errorMessage(thrownBy(() => saveProductInputSchema.parse({ ...validProduct, noOverbooking: -2 }))),
+    ).toBe("המספר שהוזן קטן מדי.");
     expect(
       errorMessage(
         thrownBy(() => saveProductInputSchema.parse({ ...validProduct, numberOfOrdersPerCustomer: 0 })),
@@ -170,6 +174,26 @@ describe("errorMessage", () => {
     ).toBe("אחד המקבלים כבר לא משויך ללקוח הזה. סגרו את החלון ופתחו אותו שוב.");
     const other = "INVALID_INPUT: something else";
     expect(errorMessage({ code: "P0008", message: other })).toBe(other);
+  });
+
+  // submit_order's refusal of a line over what is left for this customer
+  // (migration 0042; 0107 today). The order screen checks the same limit
+  // first, so this is reached only when the stock changed after it did:
+  // another customer took the last pallets while the confirmation was open,
+  // or both pressed send at once. Found in a real browser on 2026-11-22: the
+  // toast showed this English, scrambled by the right-to-left page.
+  it("explains an order refused because the stock changed meanwhile", () => {
+    const overLimit = (limit: string) => ({
+      code: "P0008",
+      message: `INVALID_INPUT: 13 pallets requested exceeds the ${limit} pallet limit available for this product`,
+    });
+    expect(errorMessage(overLimit("12.00"))).toBe(
+      "המלאי השתנה בינתיים, ומאחד המוצרים אפשר להזמין עכשיו עד 12. תקנו את הכמות ושלחו שוב.",
+    );
+    expect(errorMessage(overLimit("2.50"))).toBe(
+      "המלאי השתנה בינתיים, ומאחד המוצרים אפשר להזמין עכשיו עד 2.5. תקנו את הכמות ושלחו שוב.",
+    );
+    expect(errorMessage(overLimit("0.00"))).toBe("המלאי השתנה בינתיים, ואחד המוצרים אזל. תקנו את הכמות ושלחו שוב.");
   });
 
   it("maps the reminder refusal for an order the customer already sent, and only that one", () => {

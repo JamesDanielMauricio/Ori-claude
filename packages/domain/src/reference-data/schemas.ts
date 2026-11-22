@@ -166,8 +166,13 @@ export const saveProductInputSchema = z.object({
   // price, טווח the range, a תקליט type none. Checked below; the numbers the
   // type does not use are not sent (toSaveProductRpcArgs).
   priceType: priceTypeSchema.nullable(),
-  // Pallets are always whole units — never a fractional pallet.
-  noOverbooking: z.number().int(),
+  // Pallets are always whole units — never a fractional pallet. And never
+  // below 0: the allowance is added to the stock customers may order
+  // against, so a negative one took stock away instead (found 2026-11-22:
+  // −2 saved, and 13 pallets in stock let customers order only 11). Both
+  // screens that save a product parse it here: the Products screen, and the
+  // arrangement board's price dialog, which sends the stored value back.
+  noOverbooking: z.number().int().min(0),
   highlightPriceFluctuations: z.boolean(),
   isSeasonalAvailable: z.boolean(),
   // The customer order screen's per-line ceiling (migration 0042). Null

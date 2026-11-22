@@ -215,3 +215,38 @@ describe("save_product args: the price type (migration 0100)", () => {
     expect(sent(null)).toEqual([null, null, null, null]);
   });
 });
+
+// The overbooking allowance (הזמנת יתר) is added to the stock customers may
+// order against, so a negative one takes stock away instead. Found in a real
+// browser on 2026-11-22: the Products screen saved −2, and with 13 pallets in
+// stock customers could order only 11.
+describe("save_product: the overbooking allowance", () => {
+  const product = {
+    id: null,
+    familyId: "00000000-0000-4000-8000-000000000201",
+    name: "קוונדיש",
+    sizes: null,
+    packType: null,
+    price: null,
+    priceRangeFrom: null,
+    priceRangeTo: null,
+    priceType: null,
+    highlightPriceFluctuations: false,
+    isSeasonalAvailable: true,
+    numberOfOrdersPerCustomer: null,
+    expectedVersion: null,
+  };
+  const accepts = (noOverbooking: number) =>
+    saveProductInputSchema.safeParse({ ...product, noOverbooking }).success;
+
+  it("accepts none, or a whole number of pallets", () => {
+    expect(accepts(0)).toBe(true);
+    expect(accepts(3)).toBe(true);
+    expect(accepts(1.5)).toBe(false);
+  });
+
+  it("refuses a negative allowance", () => {
+    expect(accepts(-1)).toBe(false);
+    expect(accepts(-2)).toBe(false);
+  });
+});

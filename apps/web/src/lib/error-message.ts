@@ -126,6 +126,25 @@ function reminderRecipientRefusal(code: unknown, message: string): string | null
   return null;
 }
 
+// submit_order's refusal of a line over what is left for this customer (P0008
+// again — hence the message check). The order screen checks the same limit
+// before sending, so this is reached only when the stock changed after it did:
+// another customer took the last pallets while the confirmation was open, or
+// both pressed send at once (found 2026-11-22: the toast showed the English,
+// scrambled by the right-to-left page). The number is what this customer may
+// order now, written without a unit: some products are counted in crates.
+const ORDER_OVER_LIMIT = /^INVALID_INPUT: \S+ pallets requested exceeds the ([\d.]+) pallet limit available/;
+
+function orderOverLimitRefusal(code: unknown, message: string): string | null {
+  if (code !== "P0008") return null;
+  const limit = ORDER_OVER_LIMIT.exec(message)?.[1];
+  if (limit === undefined) return null;
+  const left = Number(limit);
+  return left > 0
+    ? `המלאי השתנה בינתיים, ומאחד המוצרים אפשר להזמין עכשיו עד ${left}. תקנו את הכמות ושלחו שוב.`
+    : "המלאי השתנה בינתיים, ואחד המוצרים אזל. תקנו את הכמות ושלחו שוב.";
+}
+
 // send_order_reminder when the customer submitted while the window was open
 // (P0007). Matched on the message too: other P0007 refusals mean other things
 // and keep showing as they are.
@@ -157,6 +176,8 @@ export function errorMessage(error: unknown): string {
       if (recipientRefusal) return recipientRefusal;
       const submittedRefusal = reminderAlreadySubmittedRefusal(code, message);
       if (submittedRefusal) return submittedRefusal;
+      const overLimit = orderOverLimitRefusal(code, message);
+      if (overLimit) return overLimit;
     }
     if (typeof message === "string" && message) return message;
   }
