@@ -1,4 +1,5 @@
 import type { PickLineInput } from "@ori/domain/grower";
+import { MAX_PICKED_PALLETS } from "@ori/shared/limits";
 import { roundPallets } from "@ori/shared/pallets";
 
 import type { PickProductLineRow } from "@/lib/queries/grower";
@@ -87,10 +88,9 @@ export const PICK_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
 // and a few rows of notes above it should not make the file unreadable.
 const HEADER_SEARCH_ROWS = 10;
 
-// daily_pick_products.pallets_picked is numeric(10, 2): anything from 10^8 up
-// would be refused by the database as an overflow, so it is refused here, in
-// words, first.
-const MAX_PALLETS = 99_999_999;
+// The most pallets one pick line may hold: the database's own limit
+// (migration 0109, @ori/shared/limits), refused here first, per row, in words
+// — the whole upload would otherwise be refused by the save.
 
 // --------------------------------------------------------------- matching
 
@@ -385,7 +385,14 @@ function parseQuantity(cell: XlsxCellValue, shownAsDate: boolean): Quantity {
   if (!Number.isFinite(value)) return invalid(`"${isolate(written)}" אינו מספר.`);
   if (value < 0) return invalid(`${isolate(written)} הוא מספר שלילי.`);
   if (!Number.isInteger(value)) return invalid(`${isolate(written)} אינו מספר שלם — הליקוט נקלט במשטחים שלמים.`);
-  if (value > MAX_PALLETS) return invalid(`${isolate(written)} גדול מדי.`);
+  // Its own sentence, not QUANTITY_RULE: the template's "0 ומעלה" would not
+  // say what is wrong with a number that big.
+  if (value > MAX_PICKED_PALLETS) {
+    return {
+      kind: "invalid",
+      message: `${isolate(written)} גדול מדי — אפשר לכל היותר ${MAX_PICKED_PALLETS.toLocaleString("en-US")} משטחים בשורה.`,
+    };
+  }
   // -0 (typed as "-0") is just 0.
   return { kind: "value", value: value === 0 ? 0 : value };
 }

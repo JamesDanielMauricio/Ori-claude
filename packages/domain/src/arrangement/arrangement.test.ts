@@ -164,10 +164,27 @@ describe("arrangement module", () => {
     });
   }, 30000);
 
-  it("create_arrangement_record blocks over-allocation against the order line's own pallets_ordered ceiling", async () => {
+  // Migration 0110 (James, 2026-11-21: "Extra for ordering customers too"):
+  // what a customer ordered no longer limits what the office may give them —
+  // only the grower's line does, as it always did for a customer who had not
+  // ordered the product.
+  it("create_arrangement_record lets a customer who ordered receive more than they ordered, up to the line's stock", async () => {
     const { pickProductId, orderProductId } = await setUpDayWithSupplyAndDemand(10, 4);
 
-    const overDemand = await admin.client.rpc(
+    // Past the line's 10: still refused, and nothing is written.
+    const overSupply = await admin.client.rpc(
+      "create_arrangement_record",
+      toCreateArrangementRecordRpcArgs({
+        dailyPickProductId: pickProductId,
+        dailyOrderProductId: orderProductId,
+        quantityPallets: 11,
+      }),
+    );
+    expect(overSupply.error?.code).toBe(ARRANGEMENT_ERROR_CODES.OVER_ALLOCATION);
+    expect(overSupply.error?.message).toContain("pallets picked + leftover");
+
+    // 6 against an order of 4, within the line's 10: given.
+    const beyondOrder = await admin.client.rpc(
       "create_arrangement_record",
       toCreateArrangementRecordRpcArgs({
         dailyPickProductId: pickProductId,
@@ -175,18 +192,8 @@ describe("arrangement module", () => {
         quantityPallets: 6,
       }),
     );
-    expect(overDemand.error).not.toBeNull();
-    expect(overDemand.error?.code).toBe(ARRANGEMENT_ERROR_CODES.OVER_ALLOCATION);
-
-    const atCeiling = await admin.client.rpc(
-      "create_arrangement_record",
-      toCreateArrangementRecordRpcArgs({
-        dailyPickProductId: pickProductId,
-        dailyOrderProductId: orderProductId,
-        quantityPallets: 4,
-      }),
-    );
-    expect(atCeiling.error).toBeNull();
+    expect(beyondOrder.error).toBeNull();
+    expect(Number(beyondOrder.data?.quantity_pallets)).toBe(6);
   }, 30000);
 
   it("create_arrangement_record rejects a genuinely concurrent double-call that would jointly over-allocate the same pick line — two real rpc() calls racing via Promise.all", async () => {
@@ -556,7 +563,9 @@ describe("arrangement module", () => {
     expect(await recordsOn(pickProductId)).toEqual([]);
   }, 30000);
 
-  it("save_arrangement_proposal holds one customer to their order across two lots of the same product, saves nothing, and names the second cell", async () => {
+  // Migration 0110: the order no longer caps what a customer may be given —
+  // each lot's own stock does.
+  it("save_arrangement_proposal gives one customer more than their order across two lots of the same product, each within its lot", async () => {
     const secondGrower = await anotherGrower();
     const {
       day,
@@ -566,8 +575,8 @@ describe("arrangement module", () => {
     } = await setUpDayWithSupplyAndDemand(5, 6);
     const secondLot = await addLotOfSameProduct(day.id, secondGrower, grower.varietyId, 5);
 
-    // 4 + 4 against an order of 6: each cell fits its lot and the order on its
-    // own, the two together do not.
+    // 4 + 4 against an order of 6: each cell fits its own lot of 5, so both are
+    // saved — 8 for an order of 6.
     const saved = await admin.client.rpc(
       "save_arrangement_proposal",
       toSaveArrangementProposalRpcArgs({
@@ -579,16 +588,10 @@ describe("arrangement module", () => {
       }),
     );
 
-    expect(saved.error?.code).toBe(ARRANGEMENT_ERROR_CODES.OVER_ALLOCATION);
-    expect(saved.error?.message).toContain("pallets ordered");
-    expect(JSON.parse(saved.error?.details ?? "{}")).toEqual({
-      index: 1,
-      dailyPickProductId: secondLot,
-      customerCompanyId: customer.id,
-      quantityPallets: 4,
-    });
-    expect(await recordsOn(firstLot)).toEqual([]);
-    expect(await recordsOn(secondLot)).toEqual([]);
+    expect(saved.error).toBeNull();
+    expect(saved.data).toBe(2);
+    expect((await recordsOn(firstLot)).map((record) => Number(record.quantity_pallets))).toEqual([4]);
+    expect((await recordsOn(secondLot)).map((record) => Number(record.quantity_pallets))).toEqual([4]);
   }, 30000);
 
   it("save_arrangement_proposal refuses a push to a customer with no order for the day, saves nothing, and names that cell", async () => {

@@ -1,3 +1,9 @@
+import {
+  COMMENT_LENGTH_MESSAGE,
+  MAX_COMMENT_LENGTH,
+  MAX_ORDERED_PALLETS,
+  ORDERED_PALLETS_MESSAGE,
+} from "@ori/shared/limits";
 import { isPalletQuantity, PALLET_QUANTITY_MESSAGE, roundPallets } from "@ori/shared/pallets";
 import { z } from "zod";
 
@@ -39,9 +45,12 @@ export const orderLineInputSchema = z.object({
   palletsOrdered: z
     .number()
     .nonnegative()
+    // The database's own limit on a line (migration 0109,
+    // packages/shared/src/limits.ts), told here first, in Hebrew.
+    .max(MAX_ORDERED_PALLETS, ORDERED_PALLETS_MESSAGE)
     .refine(isPalletQuantity, PALLET_QUANTITY_MESSAGE)
     .transform(roundPallets),
-  comment: z.string().nullable().optional(),
+  comment: z.string().max(MAX_COMMENT_LENGTH, COMMENT_LENGTH_MESSAGE).nullable().optional(),
 });
 export type OrderLineInput = z.infer<typeof orderLineInputSchema>;
 
@@ -57,7 +66,7 @@ export const submitOrderInputSchema = z.object({
   // an empty string is sent and clears the stored comment; left out
   // (undefined) it is not sent at all, and submit_order keeps what is stored
   // — which is what the order screen sends when it couldn't load the comment.
-  comment: z.string().trim().optional(),
+  comment: z.string().trim().max(MAX_COMMENT_LENGTH, COMMENT_LENGTH_MESSAGE).optional(),
 });
 export type SubmitOrderInput = z.infer<typeof submitOrderInputSchema>;
 

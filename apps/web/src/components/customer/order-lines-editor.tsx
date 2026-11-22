@@ -34,8 +34,10 @@ import {
   orderCommentChanged,
   orderCommentToSend,
   orderLimit,
+  rememberRows,
   toDraft,
   toSubmittedLines,
+  withVanishedTypedLines,
   type DraftLine,
 } from "./order-draft";
 import { OrderProductList, type OrderFamilyRow } from "./order-product-list";
@@ -135,6 +137,9 @@ function OrderLinesEditorBody({
   // The varieties this person has changed since the last send or discard —
   // see the re-seeding effect below.
   const editedIds = useRef<Set<string>>(new Set());
+  // The last row seen for every product this screen has shown — what keeps a
+  // typed line on screen after its product leaves the shop (orderRows below).
+  const [knownRows, setKnownRows] = useState<ReadonlyMap<string, CatalogRow>>(() => new Map());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [commentPopupVarietyId, setCommentPopupVarietyId] = useState<string | null>(null);
@@ -194,7 +199,18 @@ function OrderLinesEditorBody({
     if (!catalogQuery.data) return;
     const rows = catalogQuery.data;
     setDraft((current) => mergeServerRows(current, rows, editedIds.current));
+    setKnownRows((current) => rememberRows(current, rows));
   }, [catalogQuery.data]);
+
+  // What every part of this editor reads — the list, the count, the
+  // confirmation, the limit check and the send: the shop's rows plus any line
+  // typed here whose product has since left the shop (withVanishedTypedLines).
+  // All of them reading the same rows is what keeps such a line from being
+  // shown in one place and silently left out of another.
+  const orderRows = useMemo(
+    () => withVanishedTypedLines(catalogQuery.data ?? [], draft, knownRows),
+    [catalogQuery.data, draft, knownRows],
+  );
 
   // The reference design's shop screen: a collapsed row per product
   // family, expanding to that family's varieties — matches
@@ -216,7 +232,7 @@ function OrderLinesEditorBody({
 
   const families: OrderFamilyRow[] = useMemo(
     () =>
-      groupCatalogForBrowsing(catalogQuery.data ?? []).map((family) => ({
+      groupCatalogForBrowsing(orderRows).map((family) => ({
         familyId: family.familyId,
         familyName: family.familyName,
         imageUrl: family.imageUrl,
@@ -243,7 +259,7 @@ function OrderLinesEditorBody({
           };
         }),
       })),
-    [catalogQuery.data, draft, showsLimit, growersByVariety],
+    [orderRows, draft, showsLimit, growersByVariety],
   );
 
   // How many varieties this draft actually asks for. Shown in the pinned
@@ -258,14 +274,14 @@ function OrderLinesEditorBody({
   // across a mixed order would be a number in no unit at all.
   const filledProductCount = useMemo(() => {
     let count = 0;
-    for (const row of catalogQuery.data ?? []) {
+    for (const row of orderRows) {
       if (Number(draft[row.variety_id]?.pallets || 0) > 0) count += 1;
     }
     return count;
-  }, [catalogQuery.data, draft]);
+  }, [orderRows, draft]);
 
   const confirmFamilies = useMemo(() => {
-    const nonzeroRows = (catalogQuery.data ?? [])
+    const nonzeroRows = orderRows
       .map((row) => ({
         ...row,
         pallets_ordered: Number(draft[row.variety_id]?.pallets || 0),
@@ -273,7 +289,7 @@ function OrderLinesEditorBody({
       }))
       .filter((row) => row.pallets_ordered > 0);
     return groupCatalogByFamily(nonzeroRows);
-  }, [catalogQuery.data, draft]);
+  }, [orderRows, draft]);
 
   // As with PickLinesEditor: the visible quantities are already the draft,
   // live as the customer types, so submitting doesn't change what's on
@@ -322,7 +338,7 @@ function OrderLinesEditorBody({
           throw new ShopClosedError();
         }
       }
-      const lines = toSubmittedLines(catalogQuery.data ?? [], draft);
+      const lines = toSubmittedLines(orderRows, draft);
       const input = submitOrderInputSchema.parse({
         tradingDayId,
         lines,
@@ -430,10 +446,8 @@ function OrderLinesEditorBody({
   // of "שמור" tells the office an order changed when it did not.
   const baselineDraft = toDraft(catalogQuery.data ?? []);
   const dirty =
-    hasChanges(
-      toSubmittedLines(catalogQuery.data ?? [], draft),
-      toSubmittedLines(catalogQuery.data ?? [], baselineDraft),
-    ) || orderCommentChanged(commentQuery.data?.comment, commentDraft);
+    hasChanges(toSubmittedLines(orderRows, draft), toSubmittedLines(orderRows, baselineDraft)) ||
+    orderCommentChanged(commentQuery.data?.comment, commentDraft);
 
   function handleDiscard() {
     // Puts the fields back to the stored order, and nothing else — there is
@@ -451,7 +465,7 @@ function OrderLinesEditorBody({
   // lines to lower instead, and the confirmation does not open.
   function handleSave() {
     if (showsLimit) {
-      const over = linesOverLimit(catalogQuery.data ?? [], draft);
+      const over = linesOverLimit(orderRows, draft);
       if (over.length > 0) {
         const names = over.map((row) => formatVarietyName(row.variety_name, row.sizes)).join(", ");
         showToast(`הכמות גדולה מהמקסימום שאפשר להזמין כרגע: ${names}.`, "error");
@@ -496,7 +510,7 @@ function OrderLinesEditorBody({
   const activeComment = commentPopupVarietyId ? (draft[commentPopupVarietyId]?.comment ?? "") : "";
   // The row the "מגדל מועדף" chooser is open for, and what it offers.
   const chooserRow = growerChooserVarietyId
-    ? catalogQuery.data?.find((row) => row.variety_id === growerChooserVarietyId)
+    ? orderRows.find((row) => row.variety_id === growerChooserVarietyId)
     : undefined;
   const chooserGrowers = growerChooserVarietyId
     ? (growersByVariety?.get(growerChooserVarietyId) ?? [])

@@ -1,5 +1,12 @@
 import { updateArrangementRecordInputSchema } from "@ori/domain/arrangement";
+import { savePickLinesInputSchema } from "@ori/domain/grower";
 import { saveCustomerInputSchema, saveProductInputSchema } from "@ori/domain/reference-data";
+import {
+  COMMENT_LENGTH_MESSAGE,
+  LEFTOVER_PALLETS_MESSAGE,
+  ORDERED_PALLETS_MESSAGE,
+  PICKED_PALLETS_MESSAGE,
+} from "@ori/shared/limits";
 import { describe, expect, it } from "vitest";
 
 import { errorMessage } from "./error-message";
@@ -62,6 +69,10 @@ describe("errorMessage", () => {
     expect(
       errorMessage(thrownBy(() => saveProductInputSchema.parse({ ...validProduct, noOverbooking: 1.5 }))),
     ).toBe("יש להזין מספר שלם.");
+    // A negative overbooking allowance (found 2026-11-22: −2 was saved).
+    expect(
+      errorMessage(thrownBy(() => saveProductInputSchema.parse({ ...validProduct, noOverbooking: -2 }))),
+    ).toBe("המספר שהוזן קטן מדי.");
     expect(
       errorMessage(
         thrownBy(() => saveProductInputSchema.parse({ ...validProduct, numberOfOrdersPerCustomer: 0 })),
@@ -165,6 +176,26 @@ describe("errorMessage", () => {
     expect(errorMessage({ code: "P0008", message: other })).toBe(other);
   });
 
+  // submit_order's refusal of a line over what is left for this customer
+  // (migration 0042; 0107 today). The order screen checks the same limit
+  // first, so this is reached only when the stock changed after it did:
+  // another customer took the last pallets while the confirmation was open,
+  // or both pressed send at once. Found in a real browser on 2026-11-22: the
+  // toast showed this English, scrambled by the right-to-left page.
+  it("explains an order refused because the stock changed meanwhile", () => {
+    const overLimit = (limit: string) => ({
+      code: "P0008",
+      message: `INVALID_INPUT: 13 pallets requested exceeds the ${limit} pallet limit available for this product`,
+    });
+    expect(errorMessage(overLimit("12.00"))).toBe(
+      "המלאי השתנה בינתיים, ומאחד המוצרים אפשר להזמין עכשיו עד 12. תקנו את הכמות ושלחו שוב.",
+    );
+    expect(errorMessage(overLimit("2.50"))).toBe(
+      "המלאי השתנה בינתיים, ומאחד המוצרים אפשר להזמין עכשיו עד 2.5. תקנו את הכמות ושלחו שוב.",
+    );
+    expect(errorMessage(overLimit("0.00"))).toBe("המלאי השתנה בינתיים, ואחד המוצרים אזל. תקנו את הכמות ושלחו שוב.");
+  });
+
   it("maps the reminder refusal for an order the customer already sent, and only that one", () => {
     expect(
       errorMessage({
@@ -175,4 +206,58 @@ describe("errorMessage", () => {
     const other = "INVALID_STATE: cannot send a reminder about something else";
     expect(errorMessage({ code: "P0007", message: other })).toBe(other);
   });
+
+  // The limits (migration 0109, packages/shared/src/limits.ts): the schemas'
+  // own Hebrew messages pass through, and so does the database's refusal of
+  // the same rule, should a screen ever send what the schema missed.
+  it("shows a pick or order limit's own Hebrew message", () => {
+    const tooMany = savePickLines({ palletsPicked: 10000 });
+    expect(errorMessage(tooMany)).toBe(PICKED_PALLETS_MESSAGE);
+    const half = savePickLines({ palletsPicked: 4.5 });
+    expect(errorMessage(half)).toBe(PICKED_PALLETS_MESSAGE);
+    const longComment = savePickLines({ comment: "א".repeat(501) });
+    expect(errorMessage(longComment)).toBe(COMMENT_LENGTH_MESSAGE);
+  });
+
+  it("maps the database's refusal of each limit (23514) to the same Hebrew", () => {
+    const refusal = (constraint: string, table = "daily_pick_products") => ({
+      code: "23514",
+      message: `new row for relation "${table}" violates check constraint "${constraint}"`,
+    });
+    expect(errorMessage(refusal("daily_pick_products_pallets_picked_whole"))).toBe(PICKED_PALLETS_MESSAGE);
+    expect(errorMessage(refusal("daily_pick_products_pallets_picked_range"))).toBe(PICKED_PALLETS_MESSAGE);
+    // Not a CHECK but a trigger that words its refusal the same way (0109).
+    expect(errorMessage(refusal("daily_pick_products_leftover_range"))).toBe(LEFTOVER_PALLETS_MESSAGE);
+    expect(errorMessage(refusal("daily_order_products_pallets_ordered_range", "daily_order_products"))).toBe(
+      ORDERED_PALLETS_MESSAGE,
+    );
+    for (const [constraint, table] of [
+      ["daily_pick_products_comment_length", "daily_pick_products"],
+      ["daily_order_products_comment_length", "daily_order_products"],
+      ["daily_orders_comment_length", "daily_orders"],
+    ] as const) {
+      expect(errorMessage(refusal(constraint, table))).toBe(COMMENT_LENGTH_MESSAGE);
+    }
+    // Any other rule keeps its own words.
+    const other = refusal("some_other_rule");
+    expect(errorMessage(other)).toBe(other.message);
+  });
 });
+
+// A pick save's ZodError, as the editors meet it before sending.
+function savePickLines(line: Record<string, unknown>) {
+  const result = savePickLinesInputSchema.safeParse({
+    dailyPickId: "00000000-0000-4000-8000-000000000001",
+    lines: [
+      {
+        dailyPickProductId: "00000000-0000-4000-8000-000000000002",
+        palletsPicked: 1,
+        leftoverPallets: 0,
+        comment: null,
+        ...line,
+      },
+    ],
+  });
+  if (result.success) throw new Error("expected the schema to refuse this line");
+  return result.error;
+}

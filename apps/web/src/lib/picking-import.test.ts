@@ -351,8 +351,13 @@ describe("planPickImport", () => {
     expect(result.changes.map((change) => [change.lineId, change.to])).toEqual([["L5", 2]]);
   });
 
-  it("refuses a number too large to be stored", () => {
-    expect(plain(plan(["מלפפון", 100_000_000]).errors[0]?.message ?? "")).toMatch(/^100000000 גדול מדי\./);
+  // The database's own limit on a pick line (migration 0109): 9,999 pallets.
+  it("refuses more than 9,999 pallets on a line, as the database does, naming the limit", () => {
+    expect(plain(plan(["מלפפון", 10_000]).errors[0]?.message ?? "")).toBe(
+      "10000 גדול מדי — אפשר לכל היותר 9,999 משטחים בשורה.",
+    );
+    expect(plain(plan(["מלפפון", 100_000_000]).errors[0]?.message ?? "")).toMatch(/^100000000 גדול מדי/);
+    expect(plan(["מלפפון", 9_999]).errors).toEqual([]);
   });
 
   it("lists a product the grower has no line for, and still imports the rest", () => {

@@ -223,7 +223,7 @@ test.describe("Backoffice — arrangement workspace", () => {
       .eq("daily_pick_product_id", pickLine!.id);
     expect(written.data).toEqual([]); // nothing is written while typing
     await saveButton.click();
-    await expect(page.getByText("הסידור נשמר: 1 תאים.")).toBeVisible();
+    await expect(page.getByText("הסידור נשמר: תא אחד.")).toBeVisible();
     await expect(matrixCell).not.toHaveAttribute("title", "עדיין לא נשמר");
 
     // 2. A refused save saves nothing and keeps the number to correct;
@@ -267,7 +267,7 @@ test.describe("Backoffice — arrangement workspace", () => {
     // Step 1's toast says the same words and lives four seconds. Waiting for
     // it to clear first is what makes the toast check below prove THIS save:
     // otherwise it could pass on that stale toast before this save landed.
-    await expect(page.getByText("הסידור נשמר: 1 תאים.")).toHaveCount(0);
+    await expect(page.getByText("הסידור נשמר: תא אחד.")).toHaveCount(0);
     await matrixCell.fill("5");
     await matrixCell.press("Enter");
     await page.route("**/rest/v1/rpc/save_arrangement_changes", async (route) => {
@@ -276,7 +276,7 @@ test.describe("Backoffice — arrangement workspace", () => {
     });
     await saveButton.click();
     await page.getByRole("link", { name: "לסידור לפי מגדל" }).click();
-    await expect(page.getByText("הסידור נשמר: 1 תאים.")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText("הסידור נשמר: תא אחד.")).toBeVisible({ timeout: 10000 });
     await page.unroute("**/rest/v1/rpc/save_arrangement_changes");
     await page.getByRole("link", { name: "סידור לפי מוצרים" }).click();
     await search.fill(grower.varietyName);
@@ -376,8 +376,8 @@ test.describe("Backoffice — arrangement workspace", () => {
     await expect(page.getByLabel("כמות משטחים", { exact: true })).toHaveValue("4");
     await expect(recordPrice).toHaveValue("12.5");
 
-    // A refused quantity must not be left sitting in the box. לקוח בדיקה
-    // ordered 6, so 99 over-allocates and the RPC raises P0009; the row has
+    // A refused quantity must not be left sitting in the box. Only 10 were
+    // picked, so 99 over-allocates and the RPC raises P0009; the row has
     // to put the stored value back, because a rejected write leaves that
     // value unchanged and so the re-seed-on-server-change guard never fires.
     await page.getByRole("button", { name: "ערוך סידור עבור לקוח בדיקה" }).click();

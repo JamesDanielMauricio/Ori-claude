@@ -24,6 +24,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { StatusPill } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
+import { activeNameTaken } from "@/lib/company-name";
 import { errorMessage } from "@/lib/error-message";
 import { hasChanges } from "@/lib/has-changes";
 import { mergeOnError, optimisticUpdate } from "@/lib/optimistic-mutation";
@@ -139,6 +140,17 @@ export default function TransportersPage() {
 
   const saveMutation = useMutation({
     mutationFn: async (): Promise<TransporterCompany> => {
+      // Two active transporters with one name can't be told apart in any list
+      // (lib/company-name.ts). Checked before anything is written.
+      if (
+        activeNameTaken(transportersQuery.data ?? [], {
+          id: editingRowId,
+          name: form.name,
+          status: form.status,
+        })
+      ) {
+        throw new Error("כבר יש מוביל פעיל בשם הזה. בחרו שם אחר.");
+      }
       const input = saveTransporterInputSchema.parse({
         id: editingRowId,
         name: form.name,

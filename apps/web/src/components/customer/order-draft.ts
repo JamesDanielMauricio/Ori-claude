@@ -88,6 +88,58 @@ export function mergeServerRows(
   return next;
 }
 
+// The last catalog row this screen saw for every variety, kept after the
+// product leaves the shop — what withVanishedTypedLines below draws a row
+// from. Only ever adds or refreshes, so a product that disappeared is still
+// here.
+export function rememberRows(
+  known: ReadonlyMap<string, CatalogRow>,
+  rows: CatalogRow[],
+): Map<string, CatalogRow> {
+  const next = new Map(known);
+  for (const row of rows) next.set(row.variety_id, row);
+  return next;
+}
+
+// The rows the order editor works from: the shop's rows as fetched, plus one
+// for every line this person typed a quantity into whose product has since
+// left their shop. Another customer bought the rest of it, or its picking
+// fell to 0, and the live update dropped it from the catalog
+// (get_orderable_catalog_for_customer lists only what can still be ordered).
+//
+// The typed line used to vanish with it — off the screen, out of the
+// confirmation and out of the send — and "ההזמנה נשלחה." then reported the
+// rest of the order as sent, so the customer believed they had ordered it.
+// Now it stays where it was, marked sold out with nothing left to order
+// (is_orderable false, a limit of 0): on the customer's own screen the limit
+// check stops the send and names it, and the customer clears the box, which
+// lets the row go. On the backoffice on-behalf-of screens, which hold no
+// limit, it is sent as typed and the server decides.
+//
+// Returns `rows` itself when nothing typed has left the shop, so a memo that
+// depends on the result doesn't recompute for nothing.
+export function withVanishedTypedLines(
+  rows: CatalogRow[],
+  draft: Record<string, DraftLine>,
+  known: ReadonlyMap<string, CatalogRow>,
+): CatalogRow[] {
+  const inShop = new Set(rows.map((row) => row.variety_id));
+  const vanished: CatalogRow[] = [];
+  for (const [varietyId, line] of Object.entries(draft)) {
+    if (inShop.has(varietyId) || !(Number(line.pallets || 0) > 0)) continue;
+    const lastSeen = known.get(varietyId);
+    if (!lastSeen) continue;
+    vanished.push({
+      ...lastSeen,
+      is_orderable: false,
+      max_orderable_for_customer: 0,
+      pallets_ordered: 0,
+      comment: null,
+    });
+  }
+  return vanished.length === 0 ? rows : [...rows, ...vanished];
+}
+
 // The order comment ("הערה כללית", migration 0093) as submit_order should
 // receive it. submit_order keeps the stored comment when p_comment is not
 // sent at all, so a screen whose comment read never arrived sends nothing

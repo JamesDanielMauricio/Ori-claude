@@ -29,6 +29,7 @@ import { referenceDataQueries, type ProfileRow } from "@/lib/queries/reference-d
 import { createClient } from "@/lib/supabase/client";
 import { trpc } from "@/lib/trpc-client";
 import { useCatalogOptions } from "@/lib/use-catalog-options";
+import { companyFitsRole, type SavedPairing } from "@/lib/user-company";
 
 // One place for the role wording, so the table's badge and the <select>
 // below can never drift apart.
@@ -127,6 +128,12 @@ export default function UsersPage() {
   } = useCatalogOptions();
 
   const selected = usersQuery.data?.find((row) => row.user_id === editingId) ?? null;
+  // The role and company the edited user is saved with — the one pairing the
+  // company list keeps on offer even when it doesn't follow the rule
+  // (lib/user-company.ts).
+  const savedPairing: SavedPairing | null = selected
+    ? { role: selected.role, companyId: selected.company_id }
+    : null;
 
   // The other screens that read these same profiles under a key of their
   // own: the contact-person picker on the company screens and the
@@ -177,6 +184,10 @@ export default function UsersPage() {
     mutationFn: async ({ storedPhone }: SaveVariables): Promise<{ user_id: string }> => {
       if (!editingId || !form) throw new Error("No user selected");
       emailChangedRef.current = false;
+      // Changing the role empties a company that doesn't fit the new one (the
+      // role column below), so a user is never saved into a company of the
+      // wrong type. Checked before anything is written, like the email.
+      if (!form.companyId) throw new Error("יש לבחור חברה שמתאימה לתפקיד.");
       // Checked before anything is written, like the phone below — but only
       // when the user really changed the address (see planEmailChange).
       const emailPlan = planEmailChange(emailsQuery.data?.[editingId], form.email);
@@ -384,7 +395,22 @@ export default function UsersPage() {
             aria-label="תפקיד"
             className="w-32"
             value={form.role}
-            onChange={(next) => setForm((current) => current && { ...current, role: next })}
+            onChange={(next) =>
+              setForm((current) => {
+                if (!current) return current;
+                // A company that no longer fits the new role is emptied rather
+                // than kept (the import screen does the same), so "שמור" asks
+                // for one that does. Left as it is while the company list is
+                // still loading — there is nothing yet to check it against.
+                const company = companiesQuery.data?.find(
+                  (option) => option.id === current.companyId,
+                );
+                const keeps =
+                  companiesQuery.data === undefined ||
+                  (company !== undefined && companyFitsRole(company, next, savedPairing));
+                return { ...current, role: next, companyId: keeps ? current.companyId : "" };
+              })
+            }
             options={(Object.keys(ROLE_LABEL) as UserRole[]).map((role) => ({
               value: role,
               label: ROLE_LABEL[role],
@@ -407,9 +433,14 @@ export default function UsersPage() {
             onChange={(next) =>
               setForm((current) => current && { ...current, companyId: next })
             }
-            options={
-              companiesQuery.data?.map((company) => ({ value: company.id, label: company.name })) ?? []
-            }
+            // Only companies that fit the role (lib/user-company.ts), and a
+            // "בחר חברה" prompt once a role change has emptied the choice.
+            options={[
+              ...(form.companyId === "" ? [{ value: "", label: "בחר חברה", disabled: true }] : []),
+              ...(companiesQuery.data ?? [])
+                .filter((company) => companyFitsRole(company, form.role, savedPairing))
+                .map((company) => ({ value: company.id, label: company.name })),
+            ]}
           />
         );
       },

@@ -8,7 +8,11 @@ import {
   runCleanup,
   signInTestUser,
 } from "@ori/domain/auth/testing";
-import { createTestGrowerCompany, deleteTestCompany as deleteTestCompanyById } from "@ori/domain/reference-data/testing";
+import {
+  createTestCustomerCompany,
+  createTestGrowerCompany,
+  deleteTestCompany as deleteTestCompanyById,
+} from "@ori/domain/reference-data/testing";
 import { expect, test, type Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 
@@ -67,6 +71,10 @@ test.describe("Backoffice — Users", () => {
     test.setTimeout(60000);
     const targetCompany = await createTestGrowerCompany();
     cleanupFns.push(() => deleteTestCompanyById(targetCompany.id));
+    // Where the user moves when their role becomes לקוח: a customer belongs
+    // to a customer company (lib/user-company.ts).
+    const customerCompany = await createTestCustomerCompany();
+    cleanupFns.push(() => deleteTestCompanyById(customerCompany.id));
 
     const adminCompany = await createTestCompany();
     cleanupFns.push(() => deleteTestCompany(adminCompany.id));
@@ -111,6 +119,12 @@ test.describe("Backoffice — Users", () => {
       editingRow(page).getByRole("combobox", { name: "תפקיד", exact: true }),
       "לקוח",
     );
+    // The grower company no longer fits a customer, so the role change
+    // empties it (found 2026-11-13: a customer company's user could be saved
+    // as a grower); the save needs a customer company.
+    const companyBox = editingRow(page).getByRole("combobox", { name: "חברה", exact: true });
+    await expect(companyBox).toContainText("בחר חברה");
+    await chooseOption(companyBox, customerCompany.name);
     await editingRow(page).getByRole("button", { name: "שמור" }).click();
 
     const editedRow = page.locator("tr").filter({ hasText: `${newUserDisplayName} (edited)` });

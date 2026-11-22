@@ -4,9 +4,11 @@ import {
   formatPriceByType,
   parsePriceType,
   PRICE_MISSING_MESSAGE,
+  PRICE_NEGATIVE_MESSAGE,
   PRICE_RANGE_MISSING_MESSAGE,
   PRICE_RANGE_ORDER_MESSAGE,
   PRICE_TYPE_LABELS,
+  PRICE_TYPE_MESSAGES,
   PRICE_TYPES,
   priceTypeOf,
   priceTypeProblem,
@@ -128,5 +130,24 @@ describe("priceTypeProblem", () => {
   it("asks nothing of a תקליט type or of no type", () => {
     expect(priceTypeProblem("record", noPrices)).toBeNull();
     expect(priceTypeProblem(null, noPrices)).toBeNull();
+  });
+
+  // Found in testing (2026-11-20): a product saved with the price −5.
+  it("refuses a negative price in any number the type uses", () => {
+    expect(priceTypeProblem("fixed", { ...noPrices, price: -5 })).toBe(PRICE_NEGATIVE_MESSAGE);
+    expect(priceTypeProblem("range", { ...noPrices, priceRangeFrom: -1, priceRangeTo: 10 })).toBe(
+      PRICE_NEGATIVE_MESSAGE,
+    );
+    expect(priceTypeProblem("range", { ...noPrices, priceRangeFrom: -3, priceRangeTo: -1 })).toBe(
+      PRICE_NEGATIVE_MESSAGE,
+    );
+  });
+
+  it("ignores a negative number the type doesn't use, since it is never saved", () => {
+    expect(priceTypeProblem("range", { price: -5, priceRangeFrom: 1, priceRangeTo: 2 })).toBeNull();
+  });
+
+  it("puts the negative-price message among those a screen shows as it is", () => {
+    expect(PRICE_TYPE_MESSAGES).toContain(PRICE_NEGATIVE_MESSAGE);
   });
 });

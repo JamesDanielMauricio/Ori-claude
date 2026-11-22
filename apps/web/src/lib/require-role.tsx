@@ -148,7 +148,9 @@ export function RequireAuth({ role }: { role?: UserRole }) {
   useEffect(() => {
     if (!shouldSignOut) return;
     const supabase = createClient();
-    void supabase.auth.signOut().catch(() => undefined);
+    // This device only (see sign-out-button.tsx): opening a link meant for
+    // another role must not end the same account's sessions elsewhere.
+    void supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
   }, [shouldSignOut]);
 
   if (decision.kind === "pending") {
