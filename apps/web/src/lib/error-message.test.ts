@@ -69,6 +69,10 @@ describe("errorMessage", () => {
     expect(
       errorMessage(thrownBy(() => saveProductInputSchema.parse({ ...validProduct, noOverbooking: 1.5 }))),
     ).toBe("יש להזין מספר שלם.");
+    // A negative overbooking allowance (found 2026-11-22: −2 was saved).
+    expect(
+      errorMessage(thrownBy(() => saveProductInputSchema.parse({ ...validProduct, noOverbooking: -2 }))),
+    ).toBe("המספר שהוזן קטן מדי.");
     expect(
       errorMessage(
         thrownBy(() => saveProductInputSchema.parse({ ...validProduct, numberOfOrdersPerCustomer: 0 })),
