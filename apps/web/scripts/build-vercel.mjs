@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { build } from "vite";
+import { build, loadEnv } from "vite";
 
 import { bundleVercelFunction } from "../../api/scripts/bundle-vercel-function.mjs";
 
@@ -12,6 +12,27 @@ import { bundleVercelFunction } from "../../api/scripts/bundle-vercel-function.m
 // exactly as written.
 const webDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const outputDir = join(webDir, ".vercel", "output");
+
+// RELEASE GUARD: ALLOWS a release build only once every public setting the
+// website needs is set, read exactly as Vite will read it for this build (the
+// process environment first, then apps/web's .env files, production mode).
+// PROTECTS AGAINST publishing a site that cannot reach Supabase: public-env.ts
+// falls back to an empty value, so with either setting missing the build used
+// to succeed and Vercel would serve an app that cannot sign anyone in or load
+// anything (release workbook task 18). Checked before anything is deleted or
+// built, so a stopped build leaves the previous output as it was.
+const REQUIRED_PUBLIC_SETTINGS = ["VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY"];
+const publicEnv = loadEnv("production", webDir, "VITE_");
+const missing = REQUIRED_PUBLIC_SETTINGS.filter((name) => !publicEnv[name]?.trim());
+if (missing.length > 0) {
+  process.stderr.write(
+    `Release build stopped: ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} not set, ` +
+      "so the website could not reach Supabase.\n" +
+      "Set the missing value in Vercel (Project Settings → Environment Variables, for this environment), " +
+      "or in apps/web/.env.local for a build on your own machine, then build again.\n",
+  );
+  process.exit(1);
+}
 
 await rm(outputDir, { recursive: true, force: true });
 
