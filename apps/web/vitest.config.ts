@@ -11,7 +11,8 @@ export default mergeConfig(
   defineConfig({
     test: {
       environment: "node",
-      include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+      // scripts/: the build scripts' own tests (plain .mjs, like the scripts).
+      include: ["src/**/*.test.ts", "src/**/*.test.tsx", "scripts/**/*.test.mjs"],
       passWithNoTests: true,
     },
   }),
