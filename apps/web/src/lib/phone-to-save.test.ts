@@ -13,6 +13,8 @@ describe("phoneToSave", () => {
   it("stores a foreign number with its country code", () => {
     expect(phoneToSave("+970 59 123 4567", null)).toBe("+970591234567");
     expect(phoneToSave("001 212 555 1234", null)).toBe("+12125551234");
+    // Typed with the country code but no + (James, 2026-11-25).
+    expect(phoneToSave("63 917 123 4567", null)).toBe("+639171234567");
   });
 
   it("clears the number when the field is blank", () => {
@@ -23,8 +25,8 @@ describe("phoneToSave", () => {
   it("refuses what is not a phone number, with the Hebrew message", () => {
     expect(() => phoneToSave("12", "0501234567")).toThrow(INVALID_PHONE_MESSAGE);
     expect(() => phoneToSave("050-1234567 בבית", null)).toThrow(INVALID_PHONE_MESSAGE);
-    // A foreign number needs its + — without it, it is read as Israeli.
-    expect(() => phoneToSave("12125551234", null)).toThrow(INVALID_PHONE_MESSAGE);
+    // Neither Israeli nor a whole international number (fewer than 10 digits).
+    expect(() => phoneToSave("123456789", null)).toThrow(INVALID_PHONE_MESSAGE);
   });
 
   it("keeps an old number that predates the rule when it was not changed", () => {

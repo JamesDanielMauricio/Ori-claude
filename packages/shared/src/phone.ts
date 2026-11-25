@@ -4,10 +4,13 @@
 //     (mobile, 10 digits) or 031234567 (landline, 9 digits) — however it was
 //     typed: spaces, dashes, brackets, dots, +972 / 00972 / 972, or without
 //     its zero;
-//   - a foreign number as + and its country code — +12125551234 — which it
-//     must be written with (+ or 00 in front). A number written without one
-//     is read as Israeli: there is no telling which country a bare foreign
-//     number belongs to, so it is never guessed at.
+//   - a foreign number as + and its country code — +12125551234 — typed with
+//     + or 00 in front, or (James, 2026-11-25) with its country code alone:
+//     639171234567 is +63 917 123 4567. A number typed without + or 00 is
+//     Israeli whenever it is a whole Israeli number; only when it is not, and
+//     it is a whole international number (10 to 15 digits, not starting with
+//     0 or 972), is it read by its country code. The country is never guessed:
+//     it is the number's own first digits.
 // Anything else — too short, too long, letters, a + in the middle — is not a
 // phone number Ori can message.
 //
@@ -15,7 +18,7 @@
 // can import the others:
 //   - here (Node + browser: the profile and users screens, the importer, the
 //     admin password-reset sender);
-//   - SQL public.normalize_phone_number (migration 0077), which every save of
+//   - SQL public.normalize_phone_number (migration 0077; today's is 0112's), which every save of
 //     profiles.phone_number goes through, and which the queued WhatsApp
 //     dispatch uses to address a person;
 //   - supabase/functions/whatsapp-dispatch/phone.ts (Deno; the Edge bundle
@@ -37,6 +40,12 @@ const ISRAELI_LOCAL = /^0(?:[23489][0-9]{7}|[57][0-9]{8})$/;
 // A foreign number with its country code, as the international standard
 // (E.164) allows: 7 to 15 digits, never starting with 0.
 const FOREIGN = /^[1-9][0-9]{6,14}$/;
+
+// The same typed without + or 00 (James, 2026-11-25): at least 10 digits, so a
+// short mistyped Israeli number is refused rather than read as some other
+// country's — 10 is the shortest common international number (Singapore's
+// +65 8123 4567); an Israeli one typed without its zero has 8 or 9.
+const FOREIGN_WITHOUT_PLUS = /^[1-9][0-9]{9,14}$/;
 
 export function normalizePhoneNumber(input: string | null | undefined): string | null {
   if (!input || !ALLOWED.test(input)) return null;
@@ -63,7 +72,20 @@ export function normalizePhoneNumber(input: string | null | undefined): string |
   // "050…" keep their zero; "+972 50…" and "50…" get one.
   let local = full !== null ? full.slice(3) : digits;
   if (!local.startsWith("0")) local = `0${local}`;
-  return ISRAELI_LOCAL.test(local) ? local : null;
+  if (ISRAELI_LOCAL.test(local)) return local;
+
+  // Typed without + or 00, and not an Israeli number: a foreign number with
+  // its country code but no + (639171234567), when it is a whole one. Never
+  // one starting with 972 — that is Israel's code, and the number was just
+  // found not to be Israeli. "(0)" is the trunk zero here too.
+  if (full === null) {
+    const bare = input
+      .split("(0)")
+      .join("")
+      .replace(/[^0-9]/g, "");
+    if (!bare.startsWith("972") && FOREIGN_WITHOUT_PLUS.test(bare)) return `+${bare}`;
+  }
+  return null;
 }
 
 // The WhatsApp address of a person (Green API then appends "@c.us"): the
@@ -78,4 +100,4 @@ export function toWhatsAppPersonalNumber(input: string | null | undefined): stri
 
 // What the profile and users screens show when a number is refused.
 export const INVALID_PHONE_MESSAGE =
-  "מספר הטלפון אינו תקין. יש להזין מספר ישראלי (למשל 050-1234567) או מספר מחו״ל עם + וקידומת המדינה.";
+  "מספר הטלפון אינו תקין. יש להזין מספר ישראלי (למשל 050-1234567) או מספר מחו״ל עם קידומת המדינה.";
