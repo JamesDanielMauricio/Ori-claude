@@ -27,9 +27,20 @@ describe("normalizePhoneNumber", () => {
     expect(new Set(american)).toEqual(new Set(["+12125551234"]));
   });
 
-  it("reads a number written without + or 00 as Israeli, never as foreign", () => {
-    expect(normalizePhoneNumber("12125551234")).toBeNull();
-    expect(normalizePhoneNumber("+12125551234")).toBe("+12125551234");
+  // James, 2026-11-25: a foreign number may also be typed with its country
+  // code but no + — as 639171234567 for +63 917 123 4567.
+  it("reads a number written without + or 00 as Israeli when it is one, and otherwise by its country code", () => {
+    expect(normalizePhoneNumber("501234567")).toBe("0501234567");
+    expect(normalizePhoneNumber("12125551234")).toBe("+12125551234");
+    expect(normalizePhoneNumber("639171234567")).toBe("+639171234567");
+  });
+
+  it("reads a country code without + only for a whole international number", () => {
+    // Too short to be one (fewer than 10 digits), a leading 0, or 972 with no
+    // whole Israeli number after it: refused, as before.
+    expect(normalizePhoneNumber("123456789")).toBeNull();
+    expect(normalizePhoneNumber("0639171234567")).toBeNull();
+    expect(normalizePhoneNumber("9725012345")).toBeNull();
   });
 });
 

@@ -10,6 +10,8 @@
 const ALLOWED = /^[0-9 \u00a0\-\u2010-\u2015+()./\u200e\u200f\u202a-\u202e\u2066-\u2069]+$/;
 const ISRAELI_LOCAL = /^0(?:[23489][0-9]{7}|[57][0-9]{8})$/;
 const FOREIGN = /^[1-9][0-9]{6,14}$/;
+// Typed without + or 00 (2026-11-25): a whole international number only.
+const FOREIGN_WITHOUT_PLUS = /^[1-9][0-9]{9,14}$/;
 
 export function normalizePhoneNumber(input: string | null | undefined): string | null {
   if (!input || !ALLOWED.test(input)) return null;
@@ -25,7 +27,15 @@ export function normalizePhoneNumber(input: string | null | undefined): string |
   if (full !== null && !full.startsWith("972")) return FOREIGN.test(full) ? `+${full}` : null;
   let local = full !== null ? full.slice(3) : digits;
   if (!local.startsWith("0")) local = `0${local}`;
-  return ISRAELI_LOCAL.test(local) ? local : null;
+  if (ISRAELI_LOCAL.test(local)) return local;
+  if (full === null) {
+    const bare = input
+      .split("(0)")
+      .join("")
+      .replace(/[^0-9]/g, "");
+    if (!bare.startsWith("972") && FOREIGN_WITHOUT_PLUS.test(bare)) return `+${bare}`;
+  }
+  return null;
 }
 
 export function toWhatsAppPersonalNumber(input: string | null | undefined): string | null {

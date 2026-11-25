@@ -806,14 +806,14 @@ export function planReference(data: ExportData, report: Report, previousIds: Pre
 
     // One stored form per number (migration 0077 — whose check on profiles
     // would otherwise refuse the whole import for one bad number): an Israeli
-    // number as 0501234567, a foreign one written with + and its country code
-    // as +12125551234. A number that is neither — letters in it, too short, a
-    // foreign number without its + — can never be messaged, so it is left
-    // empty and reported, rather than carried over.
+    // number as 0501234567, a foreign one with its country code (typed with
+    // or without +, migration 0112) as +12125551234. A number that is neither
+    // — letters in it, too short — can never be messaged, so it is left empty
+    // and reported, rather than carried over.
     const typedPhone = text(user, "Phone Number");
     const phoneNumber = typedPhone ? normalizePhoneNumber(typedPhone) : null;
     if (typedPhone && !phoneNumber) {
-      report.note("warning", "user", user._id, "user.phone_not_a_number", `${who}'s phone number is not one WhatsApp can reach (an Israeli number, or + and a country code) — left empty.`);
+      report.note("warning", "user", user._id, "user.phone_not_a_number", `${who}'s phone number is not one WhatsApp can reach (an Israeli number, or a foreign number with its country code) — left empty.`);
     }
 
     // Bubble blocks whole product FAMILIES per user; this schema blocks
