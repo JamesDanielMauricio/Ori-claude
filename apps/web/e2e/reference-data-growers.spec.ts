@@ -6,7 +6,21 @@ import {
   deleteTestCompany,
   deleteTestUser,
   runCleanup,
+  signInTestUser,
 } from "@ori/domain/auth/testing";
+import {
+  initiateBusinessDayInputSchema,
+  toInitiateBusinessDayRpcArgs,
+  toUpdatePickProductPalletsRpcArgs,
+  updatePickProductPalletsInputSchema,
+} from "@ori/domain/lifecycle-engine";
+import {
+  createTestGrowerWithProduct,
+  deleteTestGrowerWithProduct,
+  deleteTestTradingDay,
+  getDailyPickForGrower,
+  getPickProductLine,
+} from "@ori/domain/lifecycle-engine/testing";
 import {
   createTestProductFamily,
   createTestProductVariety,
@@ -134,5 +148,76 @@ test.describe("Backoffice — Growers", () => {
     await expect(
       editingRow(page).getByRole("combobox", { name: "מוביל", exact: true }),
     ).toHaveText(transporter.name);
+  });
+
+  // Workbook Task 04: taking a variety off the in-season list keeps today's
+  // stock (sync_grower_picks never deletes a line that holds any), but the
+  // office is warned first — and cancelling saves nothing.
+  test("warns before a variety holding today's stock leaves the season, and cancelling saves nothing", async ({
+    page,
+  }) => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const company = await createTestCompany();
+    cleanupFns.push(() => deleteTestCompany(company.id));
+    const admin = await createTestProfile({ companyId: company.id, role: "backoffice" });
+    cleanupFns.push(() => deleteTestUser(admin.userId));
+    const adminClient = await signInTestUser(admin.email, admin.password);
+
+    const tradeDate = new Date().toISOString().slice(0, 10);
+    const initiate = await adminClient.rpc(
+      "initiate_business_day",
+      toInitiateBusinessDayRpcArgs(initiateBusinessDayInputSchema.parse({ tradeDate })),
+    );
+    if (initiate.error) throw initiate.error;
+    const dayId = initiate.data!.id;
+    cleanupFns.push(() => deleteTestTradingDay(dayId));
+    const pick = await getDailyPickForGrower(dayId, grower.companyId);
+    const pickLine = await getPickProductLine(pick!.id, grower.varietyId);
+    const picked = await adminClient.rpc(
+      "update_pick_product_pallets",
+      toUpdatePickProductPalletsRpcArgs(
+        updatePickProductPalletsInputSchema.parse({ dailyPickProductId: pickLine!.id, palletsPicked: 5 }),
+      ),
+    );
+    if (picked.error) throw picked.error;
+
+    await page.goto("/login");
+    await page.getByLabel("אימייל").fill(admin.email);
+    await page.getByLabel("סיסמה", { exact: true }).fill(admin.password);
+    await page.getByRole("button", { name: "התחברות" }).click();
+    await expect(page).toHaveURL(/\/backoffice\/shop$/);
+
+    await page.goto("/backoffice/growers");
+    await page
+      .locator("tr")
+      .filter({ hasText: grower.companyName })
+      .getByRole("button", { name: "ערוך" })
+      .click();
+    await editingRow(page).getByRole("button", { name: "מוצרים בעונה" }).click();
+    const picker = page.getByRole("dialog", { name: "מוצרים בעונה" });
+    await picker.getByLabel("סינון מוצרים בעונה").fill(grower.varietyName);
+    await picker
+      .getByRole("group", { name: grower.familyName })
+      .getByRole("checkbox", { name: grower.varietyName })
+      .uncheck();
+    await page.keyboard.press("Escape");
+    await editingRow(page).getByRole("button", { name: "שמור" }).click();
+
+    const warning = page.getByRole("dialog", { name: "יש מלאי בזנים שיוצאים מהעונה" });
+    await expect(warning).toContainText(grower.varietyName);
+    await expect(warning).toContainText("נקטפו 5");
+    await warning.getByRole("button", { name: "ביטול" }).click();
+    await expect(warning).toBeHidden();
+
+    // Nothing was saved: the row is still being edited, and the variety is
+    // still in the grower's season.
+    await expect(editingRow(page).getByRole("button", { name: "שמור" })).toBeVisible();
+    const { data: inSeason, error } = await adminClient
+      .from("grower_products")
+      .select("product_variety_id")
+      .eq("company_id", grower.companyId);
+    if (error) throw error;
+    expect(inSeason.map((row) => row.product_variety_id)).toContain(grower.varietyId);
   });
 });

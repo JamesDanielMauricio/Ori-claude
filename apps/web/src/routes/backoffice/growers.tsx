@@ -2,6 +2,7 @@ import { saveGrowerInputSchema, toSaveGrowerRpcArgs } from "@ori/domain/referenc
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
+import { formatPallets } from "@/components/arrangement/board-data";
 import { CellChipList } from "@/components/reference-data/cell-popover";
 import { buildCompanyDetailColumns } from "@/components/reference-data/company-detail-columns";
 import {
@@ -36,6 +37,7 @@ import {
   referenceDataQueries,
   type GrowerCompany,
 } from "@/lib/queries/reference-data";
+import { linesHoldingStock, readSeasonStock, type SeasonStockLine } from "@/lib/season-stock";
 import { createClient } from "@/lib/supabase/client";
 import { useCatalogOptions } from "@/lib/use-catalog-options";
 import { useContactPersonDirectory } from "@/lib/use-contact-person-directory";
@@ -127,6 +129,10 @@ export default function GrowersPage() {
   // cache while the dialog is still naming it.
   const [deleteTarget, setDeleteTarget] = useState<GrowerCompany | null>(null);
   const deleteTargetId = deleteTarget?.id ?? null;
+  // Workbook Task 04: the lines on today's pick that still hold stock for
+  // varieties this save takes out of season — shown before the save, which
+  // waits for "שמור בכל זאת". Null while there is nothing to warn about.
+  const [stockWarning, setStockWarning] = useState<SeasonStockLine[] | null>(null);
 
   const growersQueryKey = referenceDataQueries.growers().queryKey;
   const growerProductsQueryKey = referenceDataQueries.growerProducts().queryKey;
@@ -343,9 +349,46 @@ export default function GrowersPage() {
     });
   }
 
-  function handleSave() {
+  function save() {
     setSaving(true);
     saveMutation.mutate(undefined, { onSettled: () => setSaving(false) });
+  }
+
+  // Before a save that takes varieties out of an existing grower's season,
+  // the lines on today's pick still holding stock for them (workbook Task 04).
+  // The save keeps those lines either way, so nothing is lost; the warning is
+  // so a variety unticked by mistake is caught before the save. Read fresh at
+  // this moment, because stock changes all day; a failed read saves nothing.
+  async function handleSave() {
+    const before = selected ? (growerProductsQuery.data?.get(selected.id) ?? []) : [];
+    const removed = new Set(before.filter((id) => !form.productVarietyIds.has(id)));
+    if (selected && removed.size > 0) {
+      setSaving(true);
+      try {
+        const holding = linesHoldingStock(removed, await readSeasonStock(selected.id));
+        if (holding.length > 0) {
+          setStockWarning(holding);
+          setSaving(false);
+          return;
+        }
+      } catch (error) {
+        showToast(`השמירה נכשלה: ${errorMessage(error as { message?: string })}`, "error");
+        setSaving(false);
+        return;
+      }
+    }
+    save();
+  }
+
+  // "נקטפו 5 · עודף 2 · משובצים 1" — only what the line holds.
+  function stockSummary(line: SeasonStockLine): string {
+    return [
+      line.picked > 0 ? `נקטפו ${formatPallets(line.picked)}` : null,
+      line.leftover > 0 ? `עודף ${formatPallets(line.leftover)}` : null,
+      line.arranged > 0 ? `משובצים ${formatPallets(line.arranged)}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
   }
 
   // טלפון, כתובת, יישוב and הנה״ח (migration 0092) — the same columns on all
@@ -595,6 +638,39 @@ export default function GrowersPage() {
             disabled={deleteMutation.isPending}
           >
             {deleteMutation.isPending ? "מוחק…" : "מחק"}
+          </Button>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={stockWarning !== null}
+        onClose={() => setStockWarning(null)}
+        title="יש מלאי בזנים שיוצאים מהעונה"
+      >
+        <p className="mb-2 text-sm">לזנים האלה יש היום מלאי בליקוט של {form.name}:</p>
+        <ul className="mb-3 list-disc space-y-1 ps-5 text-sm">
+          {(stockWarning ?? []).map((line) => (
+            <li key={line.varietyId}>
+              <span className="font-medium">{varietyLabelById.get(line.varietyId) ?? line.varietyId}</span>
+              {" — "}
+              {stockSummary(line)}
+            </li>
+          ))}
+        </ul>
+        <p className="mb-4 text-sm text-ink-muted">
+          המלאי של היום לא יימחק: השורות האלה נשארות בליקוט של היום.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={() => setStockWarning(null)}>
+            ביטול
+          </Button>
+          <Button
+            onClick={() => {
+              setStockWarning(null);
+              save();
+            }}
+          >
+            שמור בכל זאת
           </Button>
         </div>
       </Dialog>
