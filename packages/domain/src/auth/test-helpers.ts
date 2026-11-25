@@ -35,6 +35,15 @@ export async function deleteTestCompany(companyId: string): Promise<void> {
   await db.delete(companies).where(eq(companies.id, companyId));
 }
 
+// Makes a test company active or inactive, as the office's "סטטוס" does — for
+// tests of what an inactive company's users meet (migration 0088).
+export async function setTestCompanyStatus(
+  companyId: string,
+  status: (typeof companies.$inferInsert)["status"],
+): Promise<void> {
+  await db.update(companies).set({ status }).where(eq(companies.id, companyId));
+}
+
 export interface CreateTestProfileOptions {
   companyId: string;
   role: UserRole;

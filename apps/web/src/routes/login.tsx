@@ -7,20 +7,36 @@ import { PasswordInput } from "@/components/auth/password-input";
 import { FormField, inputClassName } from "@/components/reference-data/form-field";
 import { Button } from "@/components/ui/button";
 import { INACTIVE_ACCOUNT_MESSAGE, readAccountActive } from "@/lib/auth-context";
+import { INACTIVE_ACCOUNT_LOGIN } from "@/lib/require-role";
 import { createClient } from "@/lib/supabase/client";
 import { retryOnClockSkew } from "@/lib/supabase/retry-clock-skew";
+
+const PROFILE_FAILED_MESSAGE = "ההתחברות הצליחה אך טעינת הפרופיל נכשלה. בדוק את החיבור ונסה שוב.";
+const NO_PROFILE_MESSAGE = "החשבון אינו מקושר לפרופיל במערכת. פנה למנהל המערכת.";
+
+// What the page says when it opens with a reason in the address: the route
+// guard sends a user of an inactive company here with ?inactive=1 after
+// signing them out (require-role.tsx), and a sign-in refused after a correct
+// password comes back here with its own reason (handleSubmit's `refuse`).
+function messageFromAddress(searchParams: URLSearchParams): string | null {
+  if (searchParams.get("inactive") === "1") return INACTIVE_ACCOUNT_MESSAGE;
+  switch (searchParams.get("reason")) {
+    case "profile-failed":
+      return PROFILE_FAILED_MESSAGE;
+    case "no-profile":
+      return NO_PROFILE_MESSAGE;
+    default:
+      return null;
+  }
+}
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  // The route guard sends a user of an inactive company here with
-  // ?inactive=1 after signing them out (require-role.tsx), so the page opens
-  // with the reason rather than an empty form.
-  const [error, setError] = useState<string | null>(() =>
-    searchParams.get("inactive") === "1" ? INACTIVE_ACCOUNT_MESSAGE : null,
-  );
+  // Opens with the reason rather than an empty form when there is one.
+  const [error, setError] = useState<string | null>(() => messageFromAddress(searchParams));
   // ...and ends the session here, not in the guard — see require-role.tsx.
   // Signing out when there is no session left does nothing.
   const arrivedInactive = searchParams.get("inactive") === "1";
@@ -42,6 +58,20 @@ export default function LoginPage() {
       email,
       password,
     });
+
+    // A correct password, then a refusal: the user is signed in for a moment
+    // and has to be signed straight back out. Signing out remounts every
+    // screen, this one included (a new account scope — lib/providers.tsx), so
+    // a message kept only in this page's state was lost with it: the form just
+    // went blank. The reason goes into the address FIRST — the router sits
+    // above that remount (main.tsx) — and the page that opens reads it from
+    // there (messageFromAddress). setError shows it at once if nothing remounts.
+    async function refuse(address: string, message: string) {
+      navigate(address, { replace: true });
+      await supabase.auth.signOut();
+      setError(message);
+      setIsSubmitting(false);
+    }
 
     if (signInError || !data.user) {
       setError("אימייל או סיסמה שגויים.");
@@ -84,9 +114,7 @@ export default function LoginPage() {
     // transport or server failure, where the credentials were fine and a
     // retry is the right advice.
     if (profileError && profileError.code !== "PGRST116") {
-      await supabase.auth.signOut();
-      setError("ההתחברות הצליחה אך טעינת הפרופיל נכשלה. בדוק את החיבור ונסה שוב.");
-      setIsSubmitting(false);
+      await refuse("/login?reason=profile-failed", PROFILE_FAILED_MESSAGE);
       return;
     }
 
@@ -96,18 +124,14 @@ export default function LoginPage() {
       // (reference/prd/role-based-routing.md). There is nowhere sensible to
       // route them, and the account needs an admin, not a retry — so say that
       // rather than leaving the form looking unresponsive.
-      await supabase.auth.signOut();
-      setError("החשבון אינו מקושר לפרופיל במערכת. פנה למנהל המערכת.");
-      setIsSubmitting(false);
+      await refuse("/login?reason=no-profile", NO_PROFILE_MESSAGE);
       return;
     }
 
     // A correct password, but the user's company is inactive: the database
     // refuses them everything, so say why instead of opening empty screens.
     if (!accountActive) {
-      await supabase.auth.signOut();
-      setError(INACTIVE_ACCOUNT_MESSAGE);
-      setIsSubmitting(false);
+      await refuse(INACTIVE_ACCOUNT_LOGIN, INACTIVE_ACCOUNT_MESSAGE);
       return;
     }
 
