@@ -196,6 +196,17 @@ describe("errorMessage", () => {
     expect(errorMessage(overLimit("0.00"))).toBe("המלאי השתנה בינתיים, ואחד המוצרים אזל. תקנו את הכמות ושלחו שוב.");
   });
 
+  // submit_order's refusal of a send whose screen missed a change (migration
+  // 0111, workbook Task 09): someone else changed the order after the screen
+  // read it. The order screen reads it again, keeping what was typed.
+  it("explains an order refused because it changed since the screen read it, and only that refusal", () => {
+    expect(errorMessage({ code: "P0006", message: "CONFLICT: the order changed since this screen read it" })).toBe(
+      "מישהו אחר עדכן את ההזמנה בינתיים, ולכן היא לא נשלחה. המסך עודכן, ומה שהקלדתם נשאר בו — בדקו ושלחו שוב.",
+    );
+    const other = "CONFLICT: something else changed";
+    expect(errorMessage({ code: "P0006", message: other })).toBe(other);
+  });
+
   it("maps the reminder refusal for an order the customer already sent, and only that one", () => {
     expect(
       errorMessage({

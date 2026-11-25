@@ -1544,6 +1544,10 @@ export type Database = {
           // The order comment (migration 0093): left out keeps the stored
           // comment, "" clears it, other text is saved trimmed.
           p_comment?: string | null;
+          // What the sending screen showed as saved (migration 0111): product
+          // id -> pallets. The send is refused (P0006) if any has changed
+          // since; left out, it is not checked.
+          p_based_on?: Json | null;
         };
         Returns: Database["public"]["Tables"]["daily_orders"]["Row"];
       };

@@ -145,6 +145,18 @@ function orderOverLimitRefusal(code: unknown, message: string): string | null {
     : "המלאי השתנה בינתיים, ואחד המוצרים אזל. תקנו את הכמות ושלחו שוב.";
 }
 
+// submit_order's refusal of a send whose screen missed a change (migration
+// 0111, workbook Task 09): someone else changed the order after this screen
+// read it. P0006 is shared (the pick floor above, a proposal cell — 0085), hence
+// the message check. The order screen reads the order again when it sees this,
+// keeping what its person typed — so the sentence says so.
+function orderChangedRefusal(code: unknown, message: string): string | null {
+  if (code === "P0006" && message.startsWith("CONFLICT: the order changed since this screen read it")) {
+    return "מישהו אחר עדכן את ההזמנה בינתיים, ולכן היא לא נשלחה. המסך עודכן, ומה שהקלדתם נשאר בו — בדקו ושלחו שוב.";
+  }
+  return null;
+}
+
 // send_order_reminder when the customer submitted while the window was open
 // (P0007). Matched on the message too: other P0007 refusals mean other things
 // and keep showing as they are.
@@ -178,6 +190,8 @@ export function errorMessage(error: unknown): string {
       if (submittedRefusal) return submittedRefusal;
       const overLimit = orderOverLimitRefusal(code, message);
       if (overLimit) return overLimit;
+      const orderChanged = orderChangedRefusal(code, message);
+      if (orderChanged) return orderChanged;
     }
     if (typeof message === "string" && message) return message;
   }

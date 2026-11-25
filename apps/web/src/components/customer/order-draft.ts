@@ -40,6 +40,15 @@ export function toSubmittedLines(rows: CatalogRow[], draft: Record<string, Draft
   }));
 }
 
+// What a send tells submit_order its screen was based on (migration 0111,
+// workbook Task 09): the saved number of every product the screen shows, as
+// last read from the server — the catalog rows, never the draft. The database
+// refuses the send when any of them has changed since, so a screen that missed
+// a live update cannot erase someone else's change by sending its old copy.
+export function savedQuantities(rows: readonly CatalogRow[]): Record<string, number> {
+  return Object.fromEntries(rows.map((row) => [row.variety_id, Number(row.pallets_ordered) || 0]));
+}
+
 // The most a customer can have on a line at the moment — the number shown
 // beside the box on their own order screen (workbook Task 35). What the stock
 // still allows them (max_orderable_for_customer: the product's per-customer

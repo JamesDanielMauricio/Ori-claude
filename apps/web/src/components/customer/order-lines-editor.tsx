@@ -35,6 +35,7 @@ import {
   orderCommentToSend,
   orderLimit,
   rememberRows,
+  savedQuantities,
   toDraft,
   toSubmittedLines,
   withVanishedTypedLines,
@@ -144,6 +145,11 @@ function OrderLinesEditorBody({
   const [submitting, setSubmitting] = useState(false);
   const [commentPopupVarietyId, setCommentPopupVarietyId] = useState<string | null>(null);
   const [growerChooserVarietyId, setGrowerChooserVarietyId] = useState<string | null>(null);
+  // What the send being made was based on: the order as saved, as this screen
+  // last read it (workbook Task 09, migration 0111). Taken when the person
+  // confirms — before the send's optimistic patch writes the draft over the
+  // cached rows, which would make the screen claim it saw its own changes.
+  const basedOnRef = useRef<Record<string, number> | undefined>(undefined);
 
   const catalogOptions = customerQueries.catalog(tradingDayId, customerCompanyId);
   const queryKey = catalogOptions.queryKey;
@@ -345,6 +351,10 @@ function OrderLinesEditorBody({
         customerCompanyId,
         // Left out when the stored comment never loaded, so the save keeps it.
         comment: orderCommentToSend(commentLoaded, commentDraft),
+        // The send is refused if the order changed since this screen read it
+        // (see onError below), so a screen that missed a live update cannot
+        // erase someone else's change.
+        basedOn: basedOnRef.current,
       });
       const { data, error } = await supabase.rpc("submit_order", toSubmitOrderRpcArgs(input));
       if (error) {
@@ -390,6 +400,14 @@ function OrderLinesEditorBody({
     ) => {
       submitOptimistic.onError(error, variables, context?.lines);
       commentOptimistic.onError(error, variables, context?.comment);
+      // Someone else changed the order after this screen read it (migration
+      // 0111): nothing was written. Read it again — after the rollback just
+      // above, so the fresh rows are what stays. Lines this person edited keep
+      // what they typed (mergeServerRows), so they can check and send again.
+      if ((error as { code?: string }).code === CUSTOMER_ERROR_CODES.CONFLICT) {
+        void queryClient.invalidateQueries({ queryKey });
+        void queryClient.invalidateQueries({ queryKey: commentQueryKey });
+      }
       showToast(`השליחה נכשלה: ${errorMessage(error)}`, "error");
       // Closed on every failure, as PickLinesEditor's confirmation is: toasts
       // render below the browser's top layer, where the modal lives, so the
@@ -476,6 +494,7 @@ function OrderLinesEditorBody({
   }
 
   function handleConfirmSubmit() {
+    basedOnRef.current = savedQuantities(catalogQuery.data ?? []);
     setSubmitting(true);
     submitMutation.mutate(undefined, { onSettled: () => setSubmitting(false) });
   }

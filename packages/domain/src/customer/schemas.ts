@@ -67,6 +67,11 @@ export const submitOrderInputSchema = z.object({
   // (undefined) it is not sent at all, and submit_order keeps what is stored
   // — which is what the order screen sends when it couldn't load the comment.
   comment: z.string().trim().max(MAX_COMMENT_LENGTH, COMMENT_LENGTH_MESSAGE).optional(),
+  // What the sending screen showed as saved — product id -> pallets, for every
+  // product it shows (0 = no line). submit_order refuses the send when any of
+  // those has changed since (migration 0111, workbook Task 09), so a screen that
+  // missed a change cannot erase it. Left out, the database does not check.
+  basedOn: z.record(z.string().uuid(), z.number().nonnegative()).optional(),
 });
 export type SubmitOrderInput = z.infer<typeof submitOrderInputSchema>;
 
@@ -80,6 +85,7 @@ export function toSubmitOrderRpcArgs(input: SubmitOrderInput) {
     })),
     p_customer_company_id: input.customerCompanyId ?? null,
     ...(input.comment === undefined ? {} : { p_comment: input.comment }),
+    ...(input.basedOn === undefined ? {} : { p_based_on: input.basedOn }),
   };
 }
 
@@ -125,4 +131,6 @@ export const CUSTOMER_ERROR_CODES = {
   INVALID_STATE: "P0007",
   /** A line's pallet count is negative, references a variety not in that day's shop, or (direct customer submissions only) exceeds max_orderable_for_customer(). */
   INVALID_INPUT: "P0008",
+  /** submit_order: the order changed since the sending screen read it — a number in p_based_on no longer matches (migration 0111). Nothing was written. */
+  CONFLICT: "P0006",
 } as const;

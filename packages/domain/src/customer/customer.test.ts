@@ -726,6 +726,76 @@ describe("customer ordering module", () => {
     expect(submitSpoof.error?.code).toBe(CUSTOMER_ERROR_CODES.FORBIDDEN);
   }, 30000);
 
+  // Workbook Task 09: a send replaces the whole order, so a screen that missed
+  // a change used to erase it — the live browser test of 2026-11-24 saw the
+  // office's added line deleted by a customer's next send. Each send now says
+  // what its screen showed as saved (basedOn, read the way the order screens
+  // read it), and is refused when that has changed since.
+  it("submit_order (migration 0111): a screen that missed a change is refused instead of erasing it — the line the office added survives, and a fresh screen saves", async () => {
+    const grower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(grower));
+    const otherGrower = await createTestGrowerWithProduct();
+    cleanupFns.push(() => deleteTestGrowerWithProduct(otherGrower));
+    const day = await createOpenTestDay(admin.userId);
+    await pickLine(day.id, grower.companyId, grower.varietyId, 10);
+    await pickLine(day.id, otherGrower.companyId, otherGrower.varietyId, 10);
+    const customer = await createTestCustomer(day.id);
+    const client = await signedInCustomer(customer.companyId);
+    cleanupFns.push(() => deleteTestTradingDay(day.id));
+
+    // What a screen shows as saved: variety -> pallets, from the order catalog.
+    async function screenBase(reader: SupabaseClient<Database>, customerCompanyId?: string) {
+      const { data, error } = await reader.rpc(
+        "get_orderable_catalog_for_customer",
+        toOrderableCatalogRpcArgs({ tradingDayId: day.id, customerCompanyId }),
+      );
+      if (error) throw error;
+      return Object.fromEntries(data!.map((row) => [row.variety_id, Number(row.pallets_ordered)]));
+    }
+    const line = (productVarietyId: string, palletsOrdered: number) => ({ productVarietyId, palletsOrdered, comment: null });
+
+    const first = await client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({ tradingDayId: day.id, lines: [line(grower.varietyId, 2)], basedOn: await screenBase(client) }),
+    );
+    expect(first.error).toBeNull();
+
+    // The customer's screen reads the order now ... the office adds a line ...
+    const staleScreen = await screenBase(client);
+    const officeAdds = await admin.client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({
+        tradingDayId: day.id,
+        customerCompanyId: customer.companyId,
+        lines: [line(grower.varietyId, 2), line(otherGrower.varietyId, 3)],
+        basedOn: await screenBase(admin.client, customer.companyId),
+      }),
+    );
+    expect(officeAdds.error).toBeNull();
+
+    // ... and the customer sends from the screen that never saw it.
+    const staleSend = await client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({ tradingDayId: day.id, lines: [line(grower.varietyId, 4)], basedOn: staleScreen }),
+    );
+    expect(staleSend.error?.code).toBe(CUSTOMER_ERROR_CODES.CONFLICT);
+    const order = await getDailyOrderForCustomer(day.id, customer.companyId);
+    expect((await getOrderProductLine(order!.id, grower.varietyId))?.palletsOrdered).toBe("2.00");
+    expect((await getOrderProductLine(order!.id, otherGrower.varietyId))?.palletsOrdered).toBe("3.00");
+
+    // A screen that read the order as it is now saves, as before.
+    const freshSend = await client.rpc(
+      "submit_order",
+      toSubmitOrderRpcArgs({
+        tradingDayId: day.id,
+        lines: [line(grower.varietyId, 4), line(otherGrower.varietyId, 3)],
+        basedOn: await screenBase(client),
+      }),
+    );
+    expect(freshSend.error).toBeNull();
+    expect((await getOrderProductLine(order!.id, grower.varietyId))?.palletsOrdered).toBe("4.00");
+  }, 30000);
+
   it("send_order_reminder stamps reminder_sent_at and dispatches one order_reminder outbox row, backoffice-only, and rejects an already-submitted order", async () => {
     const day = await createOpenTestDay(admin.userId);
     const customer = await createTestCustomer(day.id);

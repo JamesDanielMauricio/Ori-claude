@@ -8,6 +8,7 @@ import {
   orderCommentToSend,
   orderLimit,
   rememberRows,
+  savedQuantities,
   toDraft,
   toSubmittedLines,
   withVanishedTypedLines,
@@ -227,5 +228,23 @@ describe("orderCommentChanged", () => {
 
   it("sees a comment typed before the stored one loaded as a change", () => {
     expect(orderCommentChanged(undefined, "x")).toBe(true);
+  });
+});
+
+// What a send tells submit_order its screen was based on (migration 0111,
+// workbook Task 09): the saved number of every product the screen shows, as
+// last read from the server — never the draft. The database refuses the send
+// if any of them has changed since.
+describe("savedQuantities", () => {
+  it("is the saved number of every product the screen shows, 0 where there is no line", () => {
+    expect(savedQuantities([row("a", 2), row("b", 0), row("c", 0.4)])).toEqual({
+      a: 2,
+      b: 0,
+      c: 0.4,
+    });
+  });
+
+  it("is an empty object for a screen that shows nothing", () => {
+    expect(savedQuantities([])).toEqual({});
   });
 });
