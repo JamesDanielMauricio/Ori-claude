@@ -57,6 +57,31 @@ describe("submit_order args: the order comment (migration 0093)", () => {
   });
 });
 
+// What the sending screen showed as saved (migration 0111, workbook Task 09):
+// submit_order refuses the send when any of those numbers has changed since.
+// Left out, the call is an older screen's, which the database does not check.
+describe("submit_order args: what the screen was based on (migration 0111)", () => {
+  const varietyId = "00000000-0000-4000-8000-000000000002";
+  const otherId = "00000000-0000-4000-8000-000000000003";
+
+  it("sends the numbers the screen showed as saved, as p_based_on", () => {
+    const args = toSubmitOrderRpcArgs(
+      submitOrderInputSchema.parse({ tradingDayId, lines: [], basedOn: { [varietyId]: 2, [otherId]: 0 } }),
+    );
+    expect(args.p_based_on).toEqual({ [varietyId]: 2, [otherId]: 0 });
+  });
+
+  it("left out, does not send p_based_on at all", () => {
+    const args = toSubmitOrderRpcArgs(submitOrderInputSchema.parse({ tradingDayId, lines: [] }));
+    expect("p_based_on" in args).toBe(false);
+  });
+
+  it("refuses a key that is not a product id, and a negative number", () => {
+    expect(submitOrderInputSchema.safeParse({ tradingDayId, lines: [], basedOn: { "not-an-id": 1 } }).success).toBe(false);
+    expect(submitOrderInputSchema.safeParse({ tradingDayId, lines: [], basedOn: { [varietyId]: -1 } }).success).toBe(false);
+  });
+});
+
 // The reminder can name the people it goes to (migration 0104). Whether
 // p_recipient_user_ids is sent at all is the decision under test: left out,
 // the call is today's, and the database uses the company's usual routing.
